@@ -1,0 +1,34 @@
+{
+  "llm_decisions": [
+    {
+      "pipeline_id": "pipe_test_minimized_occupancy_count",
+      "matched_output_cap": "occupancy_count",
+      "hard_pass": true,
+      "llm_acceptability_label": "acceptable_with_mitigations",
+      "llm_confidence": 0.8,
+      "llm_required_mitigations": [
+        "Ensure that the data minimization principles are strictly adhered to, particularly regarding the retention of any visual or motion data."
+      ],
+      "llm_violated_expectations": [],
+      "llm_rationale": "The flow involves minimal and aggregated data regarding occupancy, which is appropriate for energy management in a home context. However, the presence of guests and the weak preference channel necessitate careful handling to ensure privacy.",
+      "ci_decision": "accept_llm_norm",
+      "ci_feasible": true
+    },
+    {
+      "pipeline_id": "pipe_test_raw_video_for_hvac",
+      "matched_output_cap": "raw_video",
+      "hard_pass": true,
+      "llm_acceptability_label": "inappropriate",
+      "llm_confidence": 0.9,
+      "llm_required_mitigations": [
+        "Replace raw video stream with data-minimized outputs such as occupancy count or aggregated presence data."
+      ],
+      "llm_violated_expectations": [
+        "The use of raw video content is unnecessary for the stated purpose of occupancy estimation and poses significant privacy risks, especially with guests and bystanders present."
+      ],
+      "llm_rationale": "The transmission of raw video content is excessive and inappropriate given the context of multiple guests and the potential for high privacy intrusion.",
+      "ci_decision": "uncertain_or_reject_llm_norm",
+      "ci_feasible": false
+    }
+  ]
+}

@@ -1,0 +1,185 @@
+{
+  "schema_version": "smartpriv_pipeline_candidate_output_v1",
+  "request_id": "req_test_llm_home_hvac_norms",
+  "scenario_id": "test_llm_norm_judgment_home_hvac",
+  "planner": {
+    "algorithm": "synthetic test fixture",
+    "candidate_count": 2,
+    "notes": [
+      "This fixture bypasses candidate generation to isolate LLM-assisted norm judgment."
+    ]
+  },
+  "decision": {
+    "decision": "synthetic_candidates",
+    "selected_pipeline_id": null,
+    "selected_output_cap": null
+  },
+  "candidates": [
+    {
+      "pipeline_id": "pipe_test_minimized_occupancy_count",
+      "decision": "candidate_pipeline",
+      "matched_output_cap": "occupancy_count",
+      "matched_output_schema": "occupancy_count",
+      "final_output_cap": {
+        "semantic_type": "application/x-occupancy-count",
+        "schema": "occupancy_count",
+        "affordance": "WoT.property"
+      },
+      "operators": [
+        {
+          "operator": "op.source",
+          "variant": "Source(video)",
+          "parameters": {}
+        },
+        {
+          "operator": "op.person_object_detector",
+          "variant": "Person / Object Detector",
+          "parameters": {
+            "classes": [
+              "person"
+            ]
+          }
+        },
+        {
+          "operator": "op.occupancy_deriver",
+          "variant": "Occupancy Deriver",
+          "parameters": {
+            "spatial_scope": "room"
+          }
+        },
+        {
+          "operator": "op.aggregate_generalize",
+          "variant": "Aggregate / Generalize",
+          "parameters": {
+            "temporal_granularity_ms": 300000
+          }
+        },
+        {
+          "operator": "op.drop_discard",
+          "variant": "Drop / Discard(raw_input_after_successor)",
+          "parameters": {
+            "drop_stage": "raw_input"
+          }
+        },
+        {
+          "operator": "op.route_publish",
+          "variant": "Route / Publish(output_to_application)",
+          "parameters": {
+            "recipient": [
+              "hvac_controller"
+            ]
+          }
+        }
+      ],
+      "utility_capabilities": [
+        "occupancy_estimation",
+        "energy_management_support"
+      ],
+      "quality_status": "requires_runtime_or_benchmark_validation",
+      "ci_terms": {
+        "pipelineStage": [
+          "output_to_application"
+        ],
+        "informationType.sensorPrimitive": [],
+        "informationType.interpretedObservation": [
+          "occupancy_count"
+        ],
+        "informationType.inferredInformationType": [],
+        "transmissionPrinciple": [
+          "local_processing",
+          "purpose_limited",
+          "aggregate_only",
+          "data_minimized",
+          "no_raw_data_retention",
+          "ephemeral_processing"
+        ]
+      },
+      "transforms": [
+        "aggregate_only",
+        "data_minimized",
+        "no_raw_data_retention"
+      ],
+      "residual_disclosure": {
+        "identity": "none",
+        "face": "none",
+        "body_shape": "none",
+        "clothing": "none",
+        "gait": "none",
+        "speech_content": "none",
+        "speaker_identity": "none",
+        "activity": "low",
+        "location": "medium",
+        "trajectory": "low",
+        "co_presence": "medium",
+        "visible_text": "none",
+        "aggregate_presence": "high"
+      },
+      "residual_score": 8
+    },
+    {
+      "pipeline_id": "pipe_test_raw_video_for_hvac",
+      "decision": "candidate_pipeline",
+      "matched_output_cap": "raw_video",
+      "matched_output_schema": "video_stream",
+      "final_output_cap": {
+        "media_type": "video/x-raw",
+        "schema": "raw_video_stream",
+        "affordance": "WebRTC.stream"
+      },
+      "operators": [
+        {
+          "operator": "op.source",
+          "variant": "Source(video)",
+          "parameters": {}
+        },
+        {
+          "operator": "op.route_publish",
+          "variant": "Route / Publish(output_to_application)",
+          "parameters": {
+            "recipient": [
+              "hvac_controller"
+            ]
+          }
+        }
+      ],
+      "utility_capabilities": [
+        "provide_raw_stream",
+        "occupancy_estimation"
+      ],
+      "quality_status": "requires_runtime_or_benchmark_validation",
+      "ci_terms": {
+        "pipelineStage": [
+          "output_to_application"
+        ],
+        "informationType.sensorPrimitive": [
+          "video_stream",
+          "image_frame"
+        ],
+        "informationType.interpretedObservation": [],
+        "informationType.inferredInformationType": [],
+        "transmissionPrinciple": [
+          "local_processing",
+          "purpose_limited"
+        ]
+      },
+      "transforms": [],
+      "residual_disclosure": {
+        "identity": "high",
+        "face": "high",
+        "body_shape": "high",
+        "clothing": "high",
+        "gait": "medium",
+        "speech_content": "none",
+        "speaker_identity": "none",
+        "activity": "high",
+        "location": "high",
+        "trajectory": "high",
+        "co_presence": "high",
+        "visible_text": "medium",
+        "aggregate_presence": "high"
+      },
+      "residual_score": 45
+    }
+  ],
+  "rejected_goal_examples": []
+}

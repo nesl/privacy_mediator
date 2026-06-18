@@ -1,0 +1,222 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "description": "Downstream-application compatibility request. This file specifies what the downstream inference program can consume; it is not one of the generated context/user-study cases.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_app_visitor_chokepoint_downstream_compatible",
+    "scenario_id": "app_visitor_chokepoint_downstream_compatible",
+    "application_name": "ChokePoint Visitor Presence Inference App",
+    "application_category": "visitor_presence_detection",
+    "natural_language_request": "Provide image frames or a frame/video manifest that the ChokePoint YOLO visitor/person monitoring pipeline can consume.",
+    "requester": "downstream_application",
+    "request_family": "downstream_compatibility_app_request",
+    "not_a_context_study_case": true
+  },
+  "ci_context": {
+    "context": [],
+    "space": [],
+    "sender": [],
+    "subject": [],
+    "recipient": [
+      "downstream_application"
+    ],
+    "purpose": [],
+    "transmissionPrinciple_assumed": [],
+    "social_context_tags": []
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "outdoor_camera",
+      "indoor_camera",
+      "cctv_camera"
+    ],
+    "allowed_content_types": [
+      "image_content",
+      "video_content"
+    ],
+    "allowed_modalities": [
+      "visual"
+    ],
+    "forbidden_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "forbidden_content_types": [
+      "audio_content"
+    ],
+    "notes": "The downstream program expects image/video/frame inputs. Semantic detections or event labels are not accepted as preprocessing outputs for this app request."
+  },
+  "utility_contract": {
+    "requested_capability": "visitor_presence_inference",
+    "task_description": "Run the downstream ChokePoint/YOLO person-presence program over image frames and emit person counts/boxes.",
+    "quality_requirements": {
+      "latency_ms_max": 5000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.85,
+      "minimum_precision": null,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": null
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "chokepoint_raw_or_redacted_image_frame",
+        "media_type": "image/x-raw",
+        "schema": "raw_image_frame",
+        "affordance": "manifest.image_path_or_frame_dir",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "image_frame"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited"
+        ],
+        "priority": 1,
+        "utility_notes": "Compatible with infer_chokepoint.py because the downstream YOLO model reads image paths/frame directories and performs person detection itself. Redaction/cropping may be encoded as image/x-raw with redacted/minimized properties if detector utility is validated.",
+        "downstream_expected_fields": [
+          "frame_dir",
+          "image_path",
+          "video_path"
+        ],
+        "payload_requirements": {
+          "image_array_or_path": true,
+          "preserve_person_visual_evidence": true
+        }
+      },
+      {
+        "cap_id": "chokepoint_raw_or_redacted_video_window",
+        "media_type": "video/x-raw",
+        "schema": "raw_video_stream",
+        "affordance": "manifest.video_path",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "video_stream"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited"
+        ],
+        "priority": 2,
+        "utility_notes": "Compatible when the manifest gives a video_path or frame_dir that infer_chokepoint.py can iterate into frames.",
+        "downstream_expected_fields": [
+          "video_path",
+          "frame_dir"
+        ],
+        "payload_requirements": {
+          "video_or_frame_sequence": true,
+          "preserve_person_visual_evidence": true
+        }
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "semantic_type": "application/x-detections",
+        "schema": "object_detections",
+        "reason": "The attached ChokePoint downstream program performs YOLO inference over images/frames; a detection record is the downstream output, not its input."
+      },
+      {
+        "semantic_type": "application/x-security-event",
+        "schema": "visitor_presence_event",
+        "reason": "An event label is not a frame/image input for infer_chokepoint.py."
+      },
+      {
+        "semantic_type": "application/x-activity-label",
+        "reason": "Activity labels are not a valid ChokePoint visitor-monitoring input."
+      },
+      {
+        "media_type": "audio/x-raw",
+        "reason": "Audio is not used by the ChokePoint visual visitor-monitoring pipeline."
+      }
+    ],
+    "downstream_program": {
+      "name": "infer_chokepoint.py",
+      "input_kind": "manifest_rows_with_frame_dir_or_image_path_or_video_path",
+      "model_role": "The downstream program runs YOLO/person detection itself.",
+      "incompatible_preprocessed_outputs": [
+        "application/x-detections",
+        "application/x-security-event",
+        "application/x-activity-label"
+      ]
+    },
+    "compatibility_notes": [
+      "The preprocessor may crop, blur, or sample only if the final payload remains an image/video/frame stream consumable by the ChokePoint inference code and benchmarked utility remains adequate."
+    ]
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability or a declared equivalent",
+    "adapter_allowed": true,
+    "adapter_rules": [
+      "Adapters may repackage data into the manifest/sample schema required by the downstream program only when the underlying payload type remains compatible.",
+      "A privacy-minimized semantic label is not utility-compatible unless the downstream program explicitly accepts that semantic label as input."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "purpose_limited"
+      ]
+    },
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "required_transformations_if_media_output": [],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "purpose_limited",
+        "limited_retention",
+        "data_minimized"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "unknown",
+      "face": "unknown",
+      "body_shape": "unknown",
+      "clothing": "unknown",
+      "gait": "unknown",
+      "speech_content": "unknown",
+      "speaker_identity": "unknown",
+      "activity": "unknown",
+      "location": "unknown",
+      "trajectory": "unknown",
+      "co_presence": "unknown",
+      "visible_text": "unknown",
+      "aggregate_presence": "unknown"
+    },
+    "hard_forbidden_attributes": [],
+    "allowed_high_attributes": [],
+    "comparison_rule": "candidate residual disclosure vector must be <= max_allowed for every attribute, except attributes listed in allowed_high_attributes"
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if the output cap/schema is accepted but no benchmark, calibration, or app-provided validation exists.",
+    "Do not select a semantic/privacy-minimized output solely because it is acceptable under CI if the downstream inference program cannot consume it."
+  ]
+}

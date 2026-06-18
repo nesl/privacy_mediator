@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Contextual Integrity Acceptability Survey</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="container">
+    <section id="start-card" class="card">
+      <h1>Contextual Integrity Acceptability Survey</h1>
+      <p>
+        You will review short smart-space context scenarios. These items are deduplicated context-only scenarios. They intentionally omit the data/output parameter; no output/data type is shown in this version.
+      </p>
+      <p class="muted">
+        Each question shows one value for each CI context parameter: sender, data subject, recipient, purpose, and transmission principle. Situation summarizes context and space. The output/data parameter is intentionally not included.
+      </p>
+      <div class="form-row">
+        <label for="participant-code">Participant code</label>
+        <input id="participant-code" type="text" placeholder="optional" />
+      </div>
+      <div class="form-row">
+        <label for="k-input">Number of questions</label>
+        <input id="k-input" type="number" min="1" max="32" value="{{ default_k }}" />
+      </div>
+      <button id="start-btn" class="primary">Start survey</button>
+      <div id="start-error" class="error hidden"></div>
+    </section>
+
+    <section id="survey-card" class="card hidden">
+      <div class="progress-row">
+        <div id="progress-text">Question 1 of K</div>
+        <div class="progress-bar"><div id="progress-fill"></div></div>
+      </div>
+
+      <h2 id="task-title">Task</h2>
+      <p id="vignette" class="vignette"></p>
+
+      <div class="grid-card">
+        <h3>Scenario details</h3>
+        <table id="ci-table"></table>
+      </div>
+
+      <div class="rating-card">
+        <h3>Acceptability rating</h3>
+        <p class="muted">Given only these CI context parameters, how acceptable does this scenario seem?</p>
+        <div id="rating-options" class="rating-options">
+          <label><input type="radio" name="rating" value="1"> 1<br><span>Clearly unacceptable</span></label>
+          <label><input type="radio" name="rating" value="2"> 2<br><span>Somewhat unacceptable</span></label>
+          <label><input type="radio" name="rating" value="3"> 3<br><span>Unsure / depends</span></label>
+          <label><input type="radio" name="rating" value="4"> 4<br><span>Somewhat acceptable</span></label>
+          <label><input type="radio" name="rating" value="5"> 5<br><span>Clearly acceptable</span></label>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="confidence">How confident are you in this rating?</label>
+        <select id="confidence">
+          <option value="">No answer</option>
+          <option value="1">1 - Not confident</option>
+          <option value="2">2</option>
+          <option value="3">3 - Moderately confident</option>
+          <option value="4">4</option>
+          <option value="5">5 - Very confident</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="free-text">Optional note</label>
+        <textarea id="free-text" rows="3" placeholder="What made this acceptable or unacceptable?"></textarea>
+      </div>
+
+      <div id="submit-error" class="error hidden"></div>
+      <div class="button-row">
+        <button id="back-btn" class="secondary">Back</button>
+        <button id="submit-btn" class="primary">Submit and continue</button>
+      </div>
+    </section>
+
+    <section id="done-card" class="card hidden">
+      <h1>Thank you</h1>
+      <p>You have completed the assigned survey questions.</p>
+      <p class="muted">Your responses have been saved on the survey server.</p>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

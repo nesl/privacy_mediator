@@ -1,0 +1,15 @@
+# Core ML stack. Install CUDA-specific torch wheels manually if needed.
+torch>=2.1
+torchvision>=0.16
+torchaudio>=2.1
+
+# Data + metrics
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.3
+tqdm>=4.66
+Pillow>=10.0
+
+# Video / vision utilities
+opencv-python>=4.8
+ultralytics>=8.3

@@ -1,0 +1,221 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "description": "Downstream-application compatibility request. This file specifies what the downstream inference program can consume; it is not one of the generated context/user-study cases.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_app_domestic_audio_chimehome_downstream_compatible",
+    "scenario_id": "app_domestic_audio_chimehome_downstream_compatible",
+    "application_name": "CHiME-Home Domestic Sound Event Inference App",
+    "application_category": "domestic_sound_monitoring",
+    "natural_language_request": "Provide audio waveform chunks that the CHiME-Home audio tagging pipeline can consume.",
+    "requester": "downstream_application",
+    "request_family": "downstream_compatibility_app_request",
+    "not_a_context_study_case": true
+  },
+  "ci_context": {
+    "context": [],
+    "space": [],
+    "sender": [],
+    "subject": [],
+    "recipient": [
+      "downstream_application"
+    ],
+    "purpose": [],
+    "transmissionPrinciple_assumed": [],
+    "social_context_tags": []
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "allowed_content_types": [
+      "audio_content"
+    ],
+    "allowed_modalities": [
+      "audio"
+    ],
+    "forbidden_sensing_devices": [
+      "indoor_camera",
+      "outdoor_camera"
+    ],
+    "forbidden_content_types": [
+      "image_content",
+      "video_content"
+    ],
+    "notes": "The downstream program expects audio waveform chunks. Semantic sound labels, decibel levels, transcripts, or command intents are not accepted as preprocessing outputs for this app request."
+  },
+  "utility_contract": {
+    "requested_capability": "domestic_sound_event_inference",
+    "task_description": "Run the downstream CHiME-Home audio tagging model over waveform chunks and emit sound-event labels.",
+    "quality_requirements": {
+      "latency_ms_max": 5000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.75,
+      "minimum_precision": 0.75,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": null
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "chime_home_raw_audio_chunk",
+        "media_type": "audio/x-raw",
+        "schema": "raw_audio_waveform",
+        "affordance": "manifest.audio_path_or_chunk_id",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "audio_waveform"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited"
+        ],
+        "priority": 1,
+        "utility_notes": "Compatible with infer_home_audio.py because ChimeHomeDataset loads audio chunks and the model computes waveform/logmel/AST features.",
+        "downstream_expected_fields": [
+          "manifest",
+          "chunk_id",
+          "audio path or chunk reference"
+        ],
+        "payload_requirements": {
+          "sample_rate": "from checkpoint/config or CLI, often 16000",
+          "duration": "from checkpoint/config or CLI, often 4.0"
+        }
+      },
+      {
+        "cap_id": "chime_home_speech_removed_audio_chunk",
+        "media_type": "audio/x-filtered",
+        "schema": "speech_removed_audio_waveform",
+        "affordance": "manifest.audio_path_or_chunk_id",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "audio_waveform"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "speech_content_removed",
+          "purpose_limited"
+        ],
+        "priority": 2,
+        "utility_notes": "Potentially compatible if the filtered waveform can still be loaded as audio and event-tagging utility is validated.",
+        "payload_requirements": {
+          "audio_waveform_after_filtering": true,
+          "sample_rate": "preserve or resample to downstream expected rate"
+        }
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "semantic_type": "application/x-sound-event-label",
+        "schema": "sound_event_label",
+        "reason": "The CHiME-Home inference program emits sound-event labels; it does not consume labels as input."
+      },
+      {
+        "semantic_type": "application/x-decibel-level",
+        "schema": "decibel_level_duration",
+        "reason": "Decibel level is insufficient for the attached audio tagging model."
+      },
+      {
+        "semantic_type": "application/x-transcript",
+        "schema": "speech_transcript",
+        "reason": "Transcripts are not waveform chunks for CHiME-Home audio tagging."
+      },
+      {
+        "semantic_type": "application/x-command-intent",
+        "schema": "keyword_or_intent",
+        "reason": "Command intents are not valid inputs for the audio-event tagging model."
+      }
+    ],
+    "downstream_program": {
+      "name": "infer_home_audio.py",
+      "input_kind": "manifest loaded by ChimeHomeDataset into waveform or AST features",
+      "model_role": "The downstream program classifies sound/event labels from audio chunks.",
+      "incompatible_preprocessed_outputs": [
+        "application/x-sound-event-label",
+        "application/x-decibel-level",
+        "application/x-transcript",
+        "application/x-command-intent"
+      ]
+    },
+    "compatibility_notes": [
+      "Speech-content removal is only compatible if the output remains a loadable audio waveform and the event-tagging accuracy is validated."
+    ]
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability or a declared equivalent",
+    "adapter_allowed": true,
+    "adapter_rules": [
+      "Adapters may repackage data into the manifest/sample schema required by the downstream program only when the underlying payload type remains compatible.",
+      "A privacy-minimized semantic label is not utility-compatible unless the downstream program explicitly accepts that semantic label as input."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "purpose_limited"
+      ]
+    },
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "required_transformations_if_media_output": [],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "purpose_limited",
+        "limited_retention",
+        "data_minimized"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "unknown",
+      "face": "none",
+      "body_shape": "none",
+      "clothing": "none",
+      "gait": "unknown",
+      "speech_content": "unknown",
+      "speaker_identity": "unknown",
+      "activity": "unknown",
+      "location": "unknown",
+      "trajectory": "unknown",
+      "co_presence": "unknown",
+      "visible_text": "none",
+      "aggregate_presence": "unknown"
+    },
+    "hard_forbidden_attributes": [],
+    "allowed_high_attributes": [],
+    "comparison_rule": "candidate residual disclosure vector must be <= max_allowed for every attribute, except attributes listed in allowed_high_attributes"
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if the output cap/schema is accepted but no benchmark, calibration, or app-provided validation exists.",
+    "Do not select a semantic/privacy-minimized output solely because it is acceptable under CI if the downstream inference program cannot consume it."
+  ]
+}

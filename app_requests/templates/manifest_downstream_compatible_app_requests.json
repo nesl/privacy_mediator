@@ -1,0 +1,16 @@
+{
+  "schema_version": "smartpriv_downstream_compatible_app_request_manifest_v1",
+  "description": "Four downstream-application compatibility requests. These are app contracts, not generated context/user-study cases.",
+  "files": [
+    "request_app_adl_youhome_av_downstream_compatible.json",
+    "request_app_domestic_audio_chimehome_downstream_compatible.json",
+    "request_app_fall_le2i_pose_downstream_compatible.json",
+    "request_app_visitor_chokepoint_downstream_compatible.json"
+  ],
+  "summary": {
+    "visitor_presence_detection": "ChokePoint/YOLO app consumes image/video/frame inputs; semantic detections/events are rejected as preprocessing outputs.",
+    "fall_detection": "LE2I fall app consumes pose keypoint sequences; raw video/event labels are rejected as downstream inputs.",
+    "adl_recognition": "YouHome ADL app consumes AV sample/manifest with image frames and audio waveform by default; activity labels/summaries are rejected.",
+    "domestic_sound_monitoring": "CHiME-Home app consumes audio waveform chunks; sound labels/decibel/transcripts are rejected as preprocessing outputs."
+  }
+}

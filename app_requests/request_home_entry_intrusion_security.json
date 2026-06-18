@@ -1,0 +1,300 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "description": "Application utility contract for a privacy-aware preprocessing hub. Candidate pipeline metadata is checked against this request for output compatibility, utility capability, CI constraints, and residual disclosure bounds.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_home_entry_intrusion_security",
+    "scenario_id": "home_entry_intrusion_security",
+    "application_name": "Doorway Intrusion and Visitor Security Service",
+    "application_category": "security_monitoring",
+    "natural_language_request": "Detect a possible intrusion or person at the entryway while minimizing unnecessary interior and identity exposure.",
+    "requester": "downstream_application"
+  },
+  "ci_context": {
+    "context": [
+      "home"
+    ],
+    "space": [
+      "entrance",
+      "outdoor",
+      "hallway"
+    ],
+    "sender": [
+      "owner_controlled_device"
+    ],
+    "subject": [
+      "resident",
+      "visitor",
+      "guest",
+      "bystander"
+    ],
+    "recipient": [
+      "homeowner",
+      "downstream_application"
+    ],
+    "purpose": [
+      "security_monitoring"
+    ],
+    "transmissionPrinciple_assumed": [
+      "event_triggered_collection",
+      "field_of_view_minimized",
+      "purpose_limited",
+      "limited_retention",
+      "data_minimized"
+    ],
+    "social_context_tags": [
+      "security_purpose",
+      "visitors_possible",
+      "context_dependent_privacy"
+    ]
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "outdoor_camera",
+      "indoor_camera",
+      "motion_sensor",
+      "smart_lock"
+    ],
+    "allowed_content_types": [
+      "image_content",
+      "video_content",
+      "input_data"
+    ],
+    "allowed_modalities": [
+      "visual",
+      "motion"
+    ],
+    "forbidden_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "forbidden_content_types": [
+      "audio_content"
+    ],
+    "notes": "Prefer entryway/doorway region only; avoid continuous indoor monitoring."
+  },
+  "utility_contract": {
+    "requested_capability": "intrusion_or_visitor_detection",
+    "task_description": "Detect a person or intrusion event at an entryway and notify the homeowner/security app.",
+    "quality_requirements": {
+      "latency_ms_max": 5000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.9,
+      "minimum_precision": 0.75,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": 0.7
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "security_event",
+        "semantic_type": "application/x-security-event",
+        "schema": "person_at_door_or_intrusion_event",
+        "affordance": "WoT.event",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "person_detected OR door_open_event"
+          ],
+          "inferredInformationType": [
+            "presence"
+          ]
+        },
+        "required_transmissionPrinciple": [
+          "event_triggered_collection",
+          "data_minimized",
+          "purpose_limited"
+        ],
+        "priority": 1,
+        "utility_notes": "Preferred event-only notification."
+      },
+      {
+        "cap_id": "cropped_blurred_event_image",
+        "semantic_type": "image/x-redacted",
+        "schema": "cropped_or_blurred_event_frame",
+        "affordance": "REST.response",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "image_frame"
+          ],
+          "interpretedObservation": [
+            "person_detected"
+          ],
+          "inferredInformationType": [
+            "presence"
+          ]
+        },
+        "required_transmissionPrinciple": [
+          "field_of_view_minimized",
+          "data_minimized",
+          "purpose_limited"
+        ],
+        "priority": 2,
+        "utility_notes": "Acceptable for human verification if event-triggered and minimized."
+      },
+      {
+        "cap_id": "low_resolution_event_clip",
+        "semantic_type": "video/x-redacted",
+        "schema": "short_event_clip",
+        "affordance": "WebRTC.stream",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "video_stream"
+          ],
+          "interpretedObservation": [
+            "person_detected"
+          ],
+          "inferredInformationType": [
+            "presence"
+          ]
+        },
+        "required_transmissionPrinciple": [
+          "event_triggered_collection",
+          "limited_retention",
+          "purpose_limited"
+        ],
+        "priority": 3,
+        "utility_notes": "Less preferred; allowed for higher-justification verification."
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "semantic_type": "video/x-raw",
+        "reason": "Continuous raw video is unnecessary for event-triggered security."
+      },
+      {
+        "semantic_type": "audio/x-raw",
+        "reason": "Audio is not needed for this security request."
+      },
+      {
+        "semantic_type": "application/x-face-identity",
+        "reason": "Face recognition is not required for generic intrusion detection."
+      }
+    ]
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability or a declared equivalent",
+    "adapter_allowed": true,
+    "adapter_rules": [
+      "An adapter is allowed only if it preserves the accepted schema and does not add forbidden residual attributes."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [
+        "person_detected OR door_open_event OR activity_label"
+      ],
+      "informationType.inferredInformationType": [
+        "presence"
+      ],
+      "transmissionPrinciple": [
+        "event_triggered_collection",
+        "purpose_limited",
+        "data_minimized"
+      ]
+    },
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [
+        "audio_waveform",
+        "speech_audio"
+      ],
+      "informationType.interpretedObservation": [
+        "speech_transcribed"
+      ],
+      "informationType.inferredInformationType": [
+        "identity",
+        "trajectory"
+      ],
+      "transmissionPrinciple": [
+        "continuous_collection",
+        "indefinite_retention"
+      ]
+    },
+    "required_transformations_if_media_output": [
+      "field_of_view_minimized",
+      "identity_removed"
+    ],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [
+        "person_detected",
+        "door_open_event"
+      ],
+      "informationType.inferredInformationType": [
+        "presence"
+      ],
+      "transmissionPrinciple": [
+        "event_triggered_collection",
+        "field_of_view_minimized",
+        "limited_retention"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "low",
+      "face": "low",
+      "body_shape": "medium",
+      "clothing": "medium",
+      "gait": "medium",
+      "speech_content": "none",
+      "speaker_identity": "none",
+      "activity": "medium",
+      "location": "high",
+      "trajectory": "low",
+      "co_presence": "medium",
+      "visible_text": "low",
+      "aggregate_presence": "high"
+    },
+    "hard_forbidden_attributes": [
+      "speech_content",
+      "speaker_identity"
+    ],
+    "allowed_high_attributes": [
+      "location",
+      "aggregate_presence"
+    ],
+    "comparison_rule": "candidate residual disclosure vector must be <= max_allowed for every attribute, except attributes listed in allowed_high_attributes"
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if output schema is accepted but no benchmark, calibration, or app-provided validation exists.",
+    "Return consent_or_review_required if the only utility-preserving candidates expose hard-forbidden attributes."
+  ],
+  "verification_spec": {
+    "inputs": {
+      "candidate_pipeline_metadata": "typed operator-effect output from pipeline analyzer",
+      "candidate_residual_disclosure": "D_meta or Combine(D_meta, D_probe)",
+      "candidate_ci_flow": "f_p = <sender, subject, recipient, attribute, purpose, transmission, context>"
+    },
+    "checks": [
+      "pipelineStage == output_to_application",
+      "output caps match accepted_output_caps",
+      "utility capability and quality requirements are met or marked for validation",
+      "required CI terms are present",
+      "forbidden CI terms are absent",
+      "residual disclosure vector satisfies max_allowed",
+      "candidate is ranked by least residual disclosure among feasible outputs"
+    ],
+    "expected_result_format": {
+      "decision": "<select_pipeline | no_compromise | consent_or_review_required | insufficient_utility_evidence>",
+      "selected_output_cap": "<cap_id>",
+      "selected_pipeline_id": "<optional>",
+      "failed_checks": [],
+      "explanation": "<short reason>"
+    }
+  }
+}

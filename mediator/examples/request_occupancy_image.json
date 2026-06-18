@@ -1,0 +1,50 @@
+{
+  "request_identity": {
+    "request_id": "example_occupancy_image",
+    "scenario_id": "home_party_hvac"
+  },
+  "source_requirements": {
+    "allowed_modalities": ["camera"],
+    "allowed_content_types": ["image_content"]
+  },
+  "utility_contract": {
+    "requested_capability": "occupancy_estimation",
+    "accepted_output_caps": [
+      {
+        "cap_id": "binary_room_occupied",
+        "semantic_type": "application/x-binary-occupancy",
+        "schema": "room_occupied",
+        "priority": 1
+      },
+      {
+        "cap_id": "room_count",
+        "semantic_type": "application/x-occupancy-count",
+        "schema": "occupancy_count",
+        "priority": 2
+      }
+    ],
+    "quality_requirements": {
+      "max_latency_ms": 1000
+    }
+  },
+  "ci_context": {
+    "recipient": ["local_hvac_controller"],
+    "purpose": ["energy_management"],
+    "transmissionPrinciple_assumed": ["local_processing"]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "transmissionPrinciple": ["local_processing"]
+    },
+    "forbidden_ci_terms": {}
+  },
+  "residual_disclosure_constraints": {
+    "max_allowed": {
+      "identity": "low",
+      "face": "low",
+      "speech_content": "none",
+      "speaker_identity": "none"
+    },
+    "hard_forbidden_attributes": []
+  }
+}

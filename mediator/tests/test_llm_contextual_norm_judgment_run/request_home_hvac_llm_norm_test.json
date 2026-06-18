@@ -1,0 +1,108 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "request_identity": {
+    "request_id": "req_test_llm_home_hvac_norms",
+    "scenario_id": "test_llm_norm_judgment_home_hvac",
+    "application_name": "Home HVAC Occupancy Controller",
+    "application_category": "energy_management",
+    "natural_language_request": "Adjust HVAC based on whether people are present in the living room during a casual evening gathering.",
+    "requester": "downstream_application"
+  },
+  "ci_context": {
+    "context": [
+      "home"
+    ],
+    "space": [
+      "living_room",
+      "common_area",
+      "interior_home_space"
+    ],
+    "sender": [
+      "owner_controlled_device"
+    ],
+    "subject": [
+      "resident",
+      "guest",
+      "bystander"
+    ],
+    "recipient": [
+      "downstream_application",
+      "hvac_controller"
+    ],
+    "purpose": [
+      "energy_management"
+    ],
+    "transmissionPrinciple_assumed": [
+      "local_processing",
+      "purpose_limited"
+    ],
+    "social_context_tags": [
+      "guests_present",
+      "routine_use",
+      "low_stakes_automation",
+      "weak_preference_channel"
+    ]
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "indoor_camera",
+      "motion_sensor"
+    ],
+    "allowed_content_types": [
+      "video_content",
+      "image_content",
+      "input_data"
+    ],
+    "allowed_modalities": [
+      "visual",
+      "motion"
+    ],
+    "forbidden_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "forbidden_content_types": [
+      "audio_content"
+    ]
+  },
+  "utility_contract": {
+    "requested_capability": "occupancy_estimation",
+    "task_description": "Provide room-level occupied/unoccupied state or approximate count for HVAC automation.",
+    "quality_requirements": {
+      "latency_ms_max": 300000,
+      "update_period_ms_max": 300000,
+      "minimum_recall": null,
+      "minimum_precision": null,
+      "minimum_accuracy": null,
+      "count_mae_max": 2,
+      "confidence_min": null
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "occupancy_count",
+        "semantic_type": "application/x-occupancy-count",
+        "schema": "occupancy_count",
+        "affordance": "WoT.property",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "occupancy_count"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "aggregate_only",
+          "data_minimized"
+        ],
+        "priority": 1,
+        "utility_notes": "Sufficient for HVAC automation."
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "semantic_type": "video/x-raw",
+        "reason": "Raw video is unnecessary for HVAC."
+      }
+    ]
+  }
+}

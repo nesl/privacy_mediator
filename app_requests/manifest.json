@@ -1,0 +1,17 @@
+{
+  "schema_version": "smartpriv_application_request_manifest_v1",
+  "created_at": "2026-06-12T21:06:06.029012+00:00",
+  "files": [
+    "application_request_template.json",
+    "request_home_party_hvac.json",
+    "request_shared_home_fall_detection.json",
+    "request_home_guest_audio_command_safety.json",
+    "request_home_entry_intrusion_security.json"
+  ],
+  "scenario_summary": {
+    "home_party_hvac": "Low-stakes automation with guests; prefers room_occupied/occupancy_count.",
+    "shared_home_fall_detection": "Safety monitoring; prefers fall_event or pose_keypoints.",
+    "home_guest_audio_command_safety": "Audio with guests; permits intent/event/decibel outputs, forbids raw audio/transcripts.",
+    "home_entry_intrusion_security": "Security monitoring; permits event-triggered person-at-door outputs and minimized verification media."
+  }
+}

@@ -1,0 +1,285 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "description": "Application utility contract for a privacy-aware preprocessing hub. Candidate pipeline metadata is checked against this request for output compatibility, utility capability, CI constraints, and residual disclosure bounds.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_shared_home_fall_detection",
+    "scenario_id": "shared_home_fall_detection",
+    "application_name": "Elder-care Fall Detection Service",
+    "application_category": "fall_detection",
+    "natural_language_request": "Detect falls in a shared home and notify a caregiver quickly without exposing unnecessary raw video.",
+    "requester": "downstream_application"
+  },
+  "ci_context": {
+    "context": [
+      "home",
+      "long_term_care"
+    ],
+    "space": [
+      "living_room",
+      "hallway",
+      "interior_home_space"
+    ],
+    "sender": [
+      "owner_controlled_device"
+    ],
+    "subject": [
+      "resident",
+      "caregiver",
+      "visitor",
+      "bystander"
+    ],
+    "recipient": [
+      "caregiver",
+      "downstream_application"
+    ],
+    "purpose": [
+      "fall_detection",
+      "safety_monitoring"
+    ],
+    "transmissionPrinciple_assumed": [
+      "local_processing",
+      "data_minimized",
+      "limited_retention",
+      "no_raw_data_retention"
+    ],
+    "social_context_tags": [
+      "safety_purpose",
+      "bystanders_possible",
+      "weak_preference_channel"
+    ]
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "indoor_camera",
+      "motion_sensor",
+      "wearable"
+    ],
+    "allowed_content_types": [
+      "image_content",
+      "video_content",
+      "input_data"
+    ],
+    "allowed_modalities": [
+      "visual",
+      "motion"
+    ],
+    "forbidden_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "forbidden_content_types": [
+      "audio_content"
+    ],
+    "notes": "Camera-derived outputs should be pose/event-level unless no acceptable utility-preserving alternative exists."
+  },
+  "utility_contract": {
+    "requested_capability": "fall_detection",
+    "task_description": "Emit a fall event with approximate room and confidence.",
+    "quality_requirements": {
+      "latency_ms_max": 10000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.9,
+      "minimum_precision": 0.7,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": 0.7
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "fall_event",
+        "semantic_type": "application/x-safety-event",
+        "schema": "fall_or_safety_event",
+        "affordance": "WoT.event",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [],
+          "inferredInformationType": [
+            "fall_event"
+          ]
+        },
+        "required_transmissionPrinciple": [
+          "data_minimized",
+          "local_processing"
+        ],
+        "priority": 1,
+        "utility_notes": "Preferred output: event-only fall alert."
+      },
+      {
+        "cap_id": "pose_keypoints",
+        "semantic_type": "application/x-pose-keypoints",
+        "schema": "pose_keypoints",
+        "affordance": "REST.response",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "pose_keypoints"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "data_minimized",
+          "local_processing"
+        ],
+        "priority": 2,
+        "utility_notes": "Accepted if downstream fall model consumes pose directly."
+      },
+      {
+        "cap_id": "activity_label",
+        "semantic_type": "application/x-activity-label",
+        "schema": "activity_label",
+        "affordance": "WoT.event",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "activity_label"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "data_minimized",
+          "local_processing"
+        ],
+        "priority": 3,
+        "utility_notes": "Accepted for posture/activity-based safety state."
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "semantic_type": "video/x-raw",
+        "reason": "Raw video exposes more than needed for routine fall detection."
+      },
+      {
+        "semantic_type": "audio/x-raw",
+        "reason": "Audio is not required for this fall-detection app."
+      }
+    ]
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability or a declared equivalent",
+    "adapter_allowed": true,
+    "adapter_rules": [
+      "An adapter is allowed only if it preserves the accepted schema and does not add forbidden residual attributes."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [
+        "pose_keypoints OR activity_label OR fall_event"
+      ],
+      "informationType.inferredInformationType": [
+        "fall_event OR none"
+      ],
+      "transmissionPrinciple": [
+        "local_processing",
+        "data_minimized"
+      ]
+    },
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [
+        "video_stream",
+        "audio_waveform",
+        "speech_audio"
+      ],
+      "informationType.interpretedObservation": [
+        "speech_transcribed"
+      ],
+      "informationType.inferredInformationType": [
+        "identity"
+      ],
+      "transmissionPrinciple": [
+        "indefinite_retention",
+        "cloud_processing"
+      ]
+    },
+    "required_transformations_if_media_output": [
+      "identity_removed",
+      "field_of_view_minimized"
+    ],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [
+        "pose_keypoints",
+        "activity_label"
+      ],
+      "informationType.inferredInformationType": [
+        "fall_event"
+      ],
+      "transmissionPrinciple": [
+        "local_processing",
+        "limited_retention",
+        "data_minimized"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "none",
+      "face": "none",
+      "body_shape": "medium",
+      "clothing": "none",
+      "gait": "medium",
+      "speech_content": "none",
+      "speaker_identity": "none",
+      "activity": "high",
+      "location": "medium",
+      "trajectory": "medium",
+      "co_presence": "medium",
+      "visible_text": "none",
+      "aggregate_presence": "medium"
+    },
+    "hard_forbidden_attributes": [
+      "identity",
+      "face",
+      "speech_content",
+      "speaker_identity",
+      "visible_text",
+      "clothing"
+    ],
+    "allowed_high_attributes": [
+      "activity"
+    ],
+    "comparison_rule": "candidate residual disclosure vector must be <= max_allowed for every attribute, except attributes listed in allowed_high_attributes"
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if output schema is accepted but no benchmark, calibration, or app-provided validation exists.",
+    "Return consent_or_review_required if the only utility-preserving candidates expose hard-forbidden attributes."
+  ],
+  "verification_spec": {
+    "inputs": {
+      "candidate_pipeline_metadata": "typed operator-effect output from pipeline analyzer",
+      "candidate_residual_disclosure": "D_meta or Combine(D_meta, D_probe)",
+      "candidate_ci_flow": "f_p = <sender, subject, recipient, attribute, purpose, transmission, context>"
+    },
+    "checks": [
+      "pipelineStage == output_to_application",
+      "output caps match accepted_output_caps",
+      "utility capability and quality requirements are met or marked for validation",
+      "required CI terms are present",
+      "forbidden CI terms are absent",
+      "residual disclosure vector satisfies max_allowed",
+      "candidate is ranked by least residual disclosure among feasible outputs"
+    ],
+    "expected_result_format": {
+      "decision": "<select_pipeline | no_compromise | consent_or_review_required | insufficient_utility_evidence>",
+      "selected_output_cap": "<cap_id>",
+      "selected_pipeline_id": "<optional>",
+      "failed_checks": [],
+      "explanation": "<short reason>"
+    }
+  }
+}

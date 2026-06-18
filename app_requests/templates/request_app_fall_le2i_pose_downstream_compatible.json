@@ -1,0 +1,202 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "description": "Downstream-application compatibility request. This file specifies what the downstream inference program can consume; it is not one of the generated context/user-study cases.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_app_fall_le2i_pose_downstream_compatible",
+    "scenario_id": "app_fall_le2i_pose_downstream_compatible",
+    "application_name": "LE2I Pose Fall Inference App",
+    "application_category": "fall_detection",
+    "natural_language_request": "Provide pose keypoint sequences that the LE2I pose-GRU fall detection pipeline can consume.",
+    "requester": "downstream_application",
+    "request_family": "downstream_compatibility_app_request",
+    "not_a_context_study_case": true
+  },
+  "ci_context": {
+    "context": [],
+    "space": [],
+    "sender": [],
+    "subject": [],
+    "recipient": [
+      "downstream_application"
+    ],
+    "purpose": [],
+    "transmissionPrinciple_assumed": [],
+    "social_context_tags": []
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "indoor_camera",
+      "motion_sensor"
+    ],
+    "allowed_content_types": [
+      "image_content",
+      "video_content",
+      "input_data"
+    ],
+    "allowed_modalities": [
+      "visual",
+      "motion"
+    ],
+    "forbidden_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "forbidden_content_types": [
+      "audio_content"
+    ],
+    "notes": "The downstream app is pose-model compatible. Raw video may be consumed internally by the preprocessor to extract pose, but it is not an accepted output to the downstream app."
+  },
+  "utility_contract": {
+    "requested_capability": "fall_detection",
+    "task_description": "Run the downstream pose-sequence fall classifier and emit fall/nonfall probabilities.",
+    "quality_requirements": {
+      "latency_ms_max": 10000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.9,
+      "minimum_precision": null,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": 0.7
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "le2i_pose_sequence_for_fall_model",
+        "semantic_type": "application/x-pose-keypoints",
+        "schema": "pose_keypoints",
+        "affordance": "manifest.pose_sequence",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "pose_keypoints"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "data_minimized",
+          "raw_pixels_removed"
+        ],
+        "priority": 1,
+        "utility_notes": "Compatible with infer_fall.py because the downstream model loads pose-window/pose-sequence datasets and feeds pose tensors into a GRU fall classifier.",
+        "downstream_expected_fields": [
+          "manifest",
+          "data_root",
+          "pose_sequence_or_pose_file"
+        ],
+        "payload_requirements": {
+          "sequence_len": "from checkpoint metadata, default 64",
+          "input_dim": "from checkpoint metadata, default 17*3",
+          "skeleton": "must match training/checkpoint format or be adapted before output"
+        }
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "media_type": "video/x-raw",
+        "schema": "raw_video_stream",
+        "reason": "Raw video is not the input consumed by the attached infer_fall.py entrypoint; pose extraction must occur before the downstream fall model."
+      },
+      {
+        "semantic_type": "application/x-safety-event",
+        "schema": "fall_or_safety_event",
+        "reason": "A fall event label is the downstream decision, not a valid input to the fall inference model."
+      },
+      {
+        "semantic_type": "application/x-activity-label",
+        "reason": "Activity labels are not pose-sequence inputs for the GRU fall classifier."
+      },
+      {
+        "media_type": "audio/x-raw",
+        "reason": "The attached fall inference path is pose-based, not audio-based."
+      }
+    ],
+    "downstream_program": {
+      "name": "infer_fall.py",
+      "input_kind": "pose sequence/window manifest plus pose tensor files",
+      "model_role": "The downstream program classifies fall/nonfall from pose sequences.",
+      "incompatible_preprocessed_outputs": [
+        "video/x-raw",
+        "application/x-safety-event",
+        "application/x-activity-label"
+      ]
+    },
+    "compatibility_notes": [
+      "The output must include the pose sequence format expected by the checkpoint/dataset, including sequence length and keypoint dimensionality.",
+      "A mediapipe-to-training-skeleton adapter is required if the extractor and fall model use different skeleton conventions."
+    ]
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability or a declared equivalent",
+    "adapter_allowed": true,
+    "adapter_rules": [
+      "Adapters may repackage data into the manifest/sample schema required by the downstream program only when the underlying payload type remains compatible.",
+      "A privacy-minimized semantic label is not utility-compatible unless the downstream program explicitly accepts that semantic label as input."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [
+        "pose_keypoints"
+      ],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "data_minimized"
+      ]
+    },
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "required_transformations_if_media_output": [],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "purpose_limited",
+        "limited_retention",
+        "data_minimized"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "low",
+      "face": "none",
+      "body_shape": "unknown",
+      "clothing": "unknown",
+      "gait": "unknown",
+      "speech_content": "none",
+      "speaker_identity": "none",
+      "activity": "unknown",
+      "location": "unknown",
+      "trajectory": "unknown",
+      "co_presence": "unknown",
+      "visible_text": "none",
+      "aggregate_presence": "unknown"
+    },
+    "hard_forbidden_attributes": [],
+    "allowed_high_attributes": [],
+    "comparison_rule": "candidate residual disclosure vector must be <= max_allowed for every attribute, except attributes listed in allowed_high_attributes"
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if the output cap/schema is accepted but no benchmark, calibration, or app-provided validation exists.",
+    "Do not select a semantic/privacy-minimized output solely because it is acceptable under CI if the downstream inference program cannot consume it."
+  ]
+}

@@ -1,0 +1,380 @@
+{
+  "schema_version": "smartpriv_ci_evaluation_output_v1",
+  "request_id": "req_test_llm_home_hvac_norms",
+  "scenario_id": "test_llm_norm_judgment_home_hvac",
+  "evaluator": {
+    "hard_constraints_file_schema": "ci_policy_rules_pipeline_v2",
+    "use_llm": true,
+    "llm_model": "gpt-4o-mini",
+    "llm_confidence_threshold": 0.6,
+    "templates_ignored": true
+  },
+  "decision": {
+    "decision": "select_pipeline",
+    "selected_pipeline_id": "pipe_test_minimized_occupancy_count",
+    "selected_output_cap": "occupancy_count",
+    "reason": "Hard constraints passed and LLM norm judgment met confidence threshold."
+  },
+  "evaluations": [
+    {
+      "pipeline_id": "pipe_test_minimized_occupancy_count",
+      "matched_output_cap": "occupancy_count",
+      "residual_score": 8,
+      "flow": {
+        "pipeline_id": "pipe_test_minimized_occupancy_count",
+        "pipelineStage": [
+          "output_to_application"
+        ],
+        "context": [
+          "home"
+        ],
+        "space": [
+          "common_area",
+          "interior_home_space",
+          "living_room"
+        ],
+        "sender": [
+          "owner_controlled_device"
+        ],
+        "subject": [
+          "bystander",
+          "guest",
+          "resident"
+        ],
+        "recipient": [
+          "downstream_application",
+          "hvac_controller"
+        ],
+        "purpose": [
+          "energy_management"
+        ],
+        "transmissionPrinciple": [
+          "aggregate_only",
+          "data_minimized",
+          "ephemeral_processing",
+          "local_processing",
+          "no_raw_data_retention",
+          "purpose_limited"
+        ],
+        "attribute": [
+          "activity_label",
+          "current_location",
+          "occupancy_count",
+          "presence",
+          "trajectory"
+        ],
+        "informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "activity_label",
+            "occupancy_count"
+          ],
+          "inferredInformationType": [
+            "current_location",
+            "presence",
+            "trajectory"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": [
+            "indoor_camera",
+            "motion_sensor"
+          ],
+          "contentType": [
+            "image_content",
+            "input_data",
+            "output_data",
+            "video_content"
+          ],
+          "sensingModality": [
+            "motion",
+            "visual"
+          ]
+        },
+        "metadata": {
+          "time_of_day": "evening",
+          "people_count_estimate": "multiple",
+          "event_inferred": "casual_social_gathering"
+        },
+        "social_context_tags": [
+          "casual_social_gathering",
+          "evening",
+          "guests_present",
+          "low_stakes_automation",
+          "multiple_people_present",
+          "not_emergency",
+          "routine_use",
+          "unfamiliar_guests_present",
+          "weak_preference_channel"
+        ],
+        "residual_disclosure": {
+          "identity": "none",
+          "face": "none",
+          "body_shape": "none",
+          "clothing": "none",
+          "gait": "none",
+          "speech_content": "none",
+          "speaker_identity": "none",
+          "activity": "low",
+          "location": "medium",
+          "trajectory": "low",
+          "co_presence": "medium",
+          "visible_text": "none",
+          "aggregate_presence": "high"
+        },
+        "final_output_cap": {
+          "semantic_type": "application/x-occupancy-count",
+          "schema": "occupancy_count",
+          "affordance": "WoT.property"
+        },
+        "transforms": [
+          "aggregate_only",
+          "data_minimized",
+          "no_raw_data_retention"
+        ],
+        "tags": []
+      },
+      "hard_constraint_result": {
+        "hard_pass": true,
+        "denied_by": [],
+        "missing_conditions": [],
+        "missing_transformations": [],
+        "allow_if_failures": [],
+        "obligations_satisfied": [],
+        "rule_evaluations": []
+      },
+      "llm_norm_judgment": {
+        "acceptability_label": "acceptable_with_mitigations",
+        "confidence": 0.8,
+        "relevant_ci_dimensions": {
+          "sender": [
+            "owner_controlled_device"
+          ],
+          "subject": [
+            "resident",
+            "guest",
+            "bystander"
+          ],
+          "recipient": [
+            "downstream_application",
+            "hvac_controller"
+          ],
+          "attribute": [
+            "occupancy_count"
+          ],
+          "purpose": [
+            "energy_management"
+          ],
+          "transmission": [
+            "aggregate_only",
+            "data_minimized"
+          ],
+          "context": [
+            "home"
+          ]
+        },
+        "satisfied_expectations": [],
+        "violated_expectations": [],
+        "required_mitigations": [
+          "Ensure that the data minimization principles are strictly adhered to, particularly regarding the retention of any visual or motion data."
+        ],
+        "rationale": "The flow involves minimal and aggregated data regarding occupancy, which is appropriate for energy management in a home context. However, the presence of guests and the weak preference channel necessitate careful handling to ensure privacy.",
+        "raw_response": "```json\n{\n  \"acceptability_label\": \"acceptable_with_mitigations\",\n  \"confidence\": 0.8,\n  \"relevant_ci_dimensions\": {\n    \"sender\": [\"owner_controlled_device\"],\n    \"subject\": [\"resident\", \"guest\", \"bystander\"],\n    \"recipient\": [\"downstream_application\", \"hvac_controller\"],\n    \"attribute\": [\"occupancy_count\"],\n    \"purpose\": [\"energy_management\"],\n    \"transmission\": [\"aggregate_only\", \"data_minimized\"],\n    \"context\": [\"home\"]\n  },\n  \"satisfied_expectations\": [],\n  \"violated_expectations\": [],\n  \"required_mitigations\": [\n    \"Ensure that the data minimization principles are strictly adhered to, particularly regarding the retention of any visual or motion data.\"\n  ],\n  \"rationale\": \"The flow involves minimal and aggregated data regarding occupancy, which is appropriate for energy management in a home context. However, the presence of guests and the weak preference channel necessitate careful handling to ensure privacy.\"\n}\n```"
+      },
+      "ci_decision": {
+        "decision": "accept_llm_norm",
+        "feasible": true,
+        "reason": "Hard constraints passed and LLM norm judgment met confidence threshold."
+      }
+    },
+    {
+      "pipeline_id": "pipe_test_raw_video_for_hvac",
+      "matched_output_cap": "raw_video",
+      "residual_score": 45,
+      "flow": {
+        "pipeline_id": "pipe_test_raw_video_for_hvac",
+        "pipelineStage": [
+          "output_to_application"
+        ],
+        "context": [
+          "home"
+        ],
+        "space": [
+          "common_area",
+          "interior_home_space",
+          "living_room"
+        ],
+        "sender": [
+          "owner_controlled_device"
+        ],
+        "subject": [
+          "bystander",
+          "guest",
+          "resident"
+        ],
+        "recipient": [
+          "downstream_application",
+          "hvac_controller"
+        ],
+        "purpose": [
+          "energy_management"
+        ],
+        "transmissionPrinciple": [
+          "local_processing",
+          "purpose_limited"
+        ],
+        "attribute": [
+          "activity_label",
+          "body_shape",
+          "clothing",
+          "current_location",
+          "face_detected",
+          "gait",
+          "identity",
+          "image_frame",
+          "occupancy_count",
+          "presence",
+          "screen_content_detected",
+          "trajectory",
+          "video_stream"
+        ],
+        "informationType": {
+          "sensorPrimitive": [
+            "image_frame",
+            "video_stream"
+          ],
+          "interpretedObservation": [
+            "activity_label",
+            "body_shape",
+            "clothing",
+            "face_detected",
+            "gait",
+            "occupancy_count",
+            "screen_content_detected"
+          ],
+          "inferredInformationType": [
+            "current_location",
+            "identity",
+            "presence",
+            "trajectory"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": [
+            "indoor_camera",
+            "motion_sensor"
+          ],
+          "contentType": [
+            "image_content",
+            "input_data",
+            "video_content"
+          ],
+          "sensingModality": [
+            "motion",
+            "visual"
+          ]
+        },
+        "metadata": {
+          "time_of_day": "evening",
+          "people_count_estimate": "multiple",
+          "event_inferred": "casual_social_gathering"
+        },
+        "social_context_tags": [
+          "casual_social_gathering",
+          "evening",
+          "guests_present",
+          "low_stakes_automation",
+          "multiple_people_present",
+          "not_emergency",
+          "routine_use",
+          "unfamiliar_guests_present",
+          "weak_preference_channel"
+        ],
+        "residual_disclosure": {
+          "identity": "high",
+          "face": "high",
+          "body_shape": "high",
+          "clothing": "high",
+          "gait": "medium",
+          "speech_content": "none",
+          "speaker_identity": "none",
+          "activity": "high",
+          "location": "high",
+          "trajectory": "high",
+          "co_presence": "high",
+          "visible_text": "medium",
+          "aggregate_presence": "high"
+        },
+        "final_output_cap": {
+          "media_type": "video/x-raw",
+          "schema": "raw_video_stream",
+          "affordance": "WebRTC.stream"
+        },
+        "transforms": [],
+        "tags": []
+      },
+      "hard_constraint_result": {
+        "hard_pass": true,
+        "denied_by": [],
+        "missing_conditions": [],
+        "missing_transformations": [],
+        "allow_if_failures": [],
+        "obligations_satisfied": [],
+        "rule_evaluations": []
+      },
+      "llm_norm_judgment": {
+        "acceptability_label": "inappropriate",
+        "confidence": 0.9,
+        "relevant_ci_dimensions": {
+          "sender": [
+            "owner_controlled_device"
+          ],
+          "subject": [
+            "bystander",
+            "guest",
+            "resident"
+          ],
+          "recipient": [
+            "downstream_application",
+            "hvac_controller"
+          ],
+          "attribute": [
+            "video_stream",
+            "identity",
+            "face_detected",
+            "body_shape",
+            "clothing",
+            "gait",
+            "activity_label",
+            "current_location",
+            "trajectory"
+          ],
+          "purpose": [
+            "energy_management"
+          ],
+          "transmission": [
+            "local_processing",
+            "purpose_limited"
+          ],
+          "context": [
+            "home"
+          ]
+        },
+        "satisfied_expectations": [],
+        "violated_expectations": [
+          "The use of raw video content is unnecessary for the stated purpose of occupancy estimation and poses significant privacy risks, especially with guests and bystanders present."
+        ],
+        "required_mitigations": [
+          "Replace raw video stream with data-minimized outputs such as occupancy count or aggregated presence data."
+        ],
+        "rationale": "The transmission of raw video content is excessive and inappropriate given the context of multiple guests and the potential for high privacy intrusion.",
+        "raw_response": "```json\n{\n  \"acceptability_label\": \"inappropriate\",\n  \"confidence\": 0.9,\n  \"relevant_ci_dimensions\": {\n    \"sender\": [\"owner_controlled_device\"],\n    \"subject\": [\"bystander\", \"guest\", \"resident\"],\n    \"recipient\": [\"downstream_application\", \"hvac_controller\"],\n    \"attribute\": [\"video_stream\", \"identity\", \"face_detected\", \"body_shape\", \"clothing\", \"gait\", \"activity_label\", \"current_location\", \"trajectory\"],\n    \"purpose\": [\"energy_management\"],\n    \"transmission\": [\"local_processing\", \"purpose_limited\"],\n    \"context\": [\"home\"]\n  },\n  \"satisfied_expectations\": [],\n  \"violated_expectations\": [\n    \"The use of raw video content is unnecessary for the stated purpose of occupancy estimation and poses significant privacy risks, especially with guests and bystanders present.\"\n  ],\n  \"required_mitigations\": [\n    \"Replace raw video stream with data-minimized outputs such as occupancy count or aggregated presence data.\"\n  ],\n  \"rationale\": \"The transmission of raw video content is excessive and inappropriate given the context of multiple guests and the potential for high privacy intrusion.\"\n}\n```"
+      },
+      "ci_decision": {
+        "decision": "uncertain_or_reject_llm_norm",
+        "feasible": false,
+        "reason": "Hard constraints passed, but LLM judgment was low-confidence, uncertain, or inappropriate."
+      }
+    }
+  ]
+}

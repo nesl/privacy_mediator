@@ -1,0 +1,267 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "description": "Application utility contract for a privacy-aware preprocessing hub. Candidate pipeline metadata is checked against this request for output compatibility, utility capability, CI constraints, and residual disclosure bounds.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_home_guest_audio_command_safety",
+    "scenario_id": "home_guest_audio_command_safety",
+    "application_name": "Voice Command and Audio Safety Service",
+    "application_category": "audio_safety_and_command",
+    "natural_language_request": "Support voice commands and basic safety sounds while guests are present, without exposing raw audio or conversations.",
+    "requester": "downstream_application"
+  },
+  "ci_context": {
+    "context": [
+      "home"
+    ],
+    "space": [
+      "living_room",
+      "kitchen",
+      "common_area",
+      "interior_home_space"
+    ],
+    "sender": [
+      "owner_controlled_device"
+    ],
+    "subject": [
+      "resident",
+      "guest",
+      "bystander"
+    ],
+    "recipient": [
+      "downstream_application",
+      "device_vendor"
+    ],
+    "purpose": [
+      "communication",
+      "safety_monitoring"
+    ],
+    "transmissionPrinciple_assumed": [
+      "local_processing",
+      "speech_content_removed",
+      "data_minimized",
+      "no_raw_data_retention"
+    ],
+    "social_context_tags": [
+      "guests_present",
+      "speech_sensitive",
+      "weak_preference_channel"
+    ]
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "microphone",
+      "smart_speaker",
+      "noise_decibel_monitor"
+    ],
+    "allowed_content_types": [
+      "audio_content",
+      "input_data"
+    ],
+    "allowed_modalities": [
+      "audio"
+    ],
+    "forbidden_sensing_devices": [],
+    "forbidden_content_types": [],
+    "notes": "Raw audio may be consumed internally only if converted to intent/event/level and discarded before output."
+  },
+  "utility_contract": {
+    "requested_capability": "voice_command_or_audio_event_detection",
+    "task_description": "Emit command intents and safety sound events; do not output raw audio or full transcripts.",
+    "quality_requirements": {
+      "latency_ms_max": 2000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.85,
+      "minimum_precision": 0.8,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": 0.7
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "command_intent",
+        "semantic_type": "application/x-command-intent",
+        "schema": "keyword_or_intent",
+        "affordance": "WoT.action",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "speech_content_removed",
+          "data_minimized"
+        ],
+        "priority": 1,
+        "utility_notes": "Command intent is sufficient for voice-control actions."
+      },
+      {
+        "cap_id": "sound_event_label",
+        "semantic_type": "application/x-sound-event-label",
+        "schema": "sound_event_label",
+        "affordance": "WoT.event",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "noise_event_label"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "speech_content_removed",
+          "data_minimized"
+        ],
+        "priority": 2,
+        "utility_notes": "Safety sounds can be represented as event labels."
+      },
+      {
+        "cap_id": "decibel_level",
+        "semantic_type": "application/x-decibel-level",
+        "schema": "decibel_level_duration",
+        "affordance": "WoT.property",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "decibel_level"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "speech_content_removed",
+          "data_minimized"
+        ],
+        "priority": 3,
+        "utility_notes": "Acceptable for noise-level monitoring but not voice command semantics."
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "semantic_type": "audio/x-raw",
+        "reason": "Raw audio reveals conversations and speaker identity."
+      },
+      {
+        "semantic_type": "application/x-transcript",
+        "reason": "Full transcripts reveal speech content beyond command/safety utility."
+      }
+    ]
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability or a declared equivalent",
+    "adapter_allowed": true,
+    "adapter_rules": [
+      "An adapter is allowed only if it preserves the accepted schema and does not add forbidden residual attributes."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [
+        "noise_event_label OR none"
+      ],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "speech_content_removed",
+        "data_minimized",
+        "local_processing"
+      ]
+    },
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [
+        "audio_waveform",
+        "speech_audio"
+      ],
+      "informationType.interpretedObservation": [
+        "speech_transcribed"
+      ],
+      "informationType.inferredInformationType": [
+        "identity"
+      ],
+      "transmissionPrinciple": [
+        "cloud_processing",
+        "indefinite_retention"
+      ]
+    },
+    "required_transformations_if_media_output": [
+      "speech_content_removed"
+    ],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [
+        "noise_event_label"
+      ],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "speech_content_removed",
+        "no_raw_data_retention",
+        "data_minimized"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "none",
+      "face": "none",
+      "body_shape": "none",
+      "clothing": "none",
+      "gait": "none",
+      "speech_content": "low",
+      "speaker_identity": "none",
+      "activity": "medium",
+      "location": "low",
+      "trajectory": "none",
+      "co_presence": "medium",
+      "visible_text": "none",
+      "aggregate_presence": "medium"
+    },
+    "hard_forbidden_attributes": [
+      "identity",
+      "face",
+      "speech_content",
+      "speaker_identity",
+      "visible_text",
+      "trajectory"
+    ],
+    "allowed_high_attributes": [],
+    "comparison_rule": "candidate residual disclosure vector must be <= max_allowed for every attribute, except attributes listed in allowed_high_attributes"
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if output schema is accepted but no benchmark, calibration, or app-provided validation exists.",
+    "Return consent_or_review_required if the only utility-preserving candidates expose hard-forbidden attributes."
+  ],
+  "verification_spec": {
+    "inputs": {
+      "candidate_pipeline_metadata": "typed operator-effect output from pipeline analyzer",
+      "candidate_residual_disclosure": "D_meta or Combine(D_meta, D_probe)",
+      "candidate_ci_flow": "f_p = <sender, subject, recipient, attribute, purpose, transmission, context>"
+    },
+    "checks": [
+      "pipelineStage == output_to_application",
+      "output caps match accepted_output_caps",
+      "utility capability and quality requirements are met or marked for validation",
+      "required CI terms are present",
+      "forbidden CI terms are absent",
+      "residual disclosure vector satisfies max_allowed",
+      "candidate is ranked by least residual disclosure among feasible outputs"
+    ],
+    "expected_result_format": {
+      "decision": "<select_pipeline | no_compromise | consent_or_review_required | insufficient_utility_evidence>",
+      "selected_output_cap": "<cap_id>",
+      "selected_pipeline_id": "<optional>",
+      "failed_checks": [],
+      "explanation": "<short reason>"
+    }
+  }
+}

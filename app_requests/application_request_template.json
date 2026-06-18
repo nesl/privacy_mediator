@@ -1,0 +1,134 @@
+{
+  "schema_version": "smartpriv_application_request_v1",
+  "description": "Application utility contract for a privacy-aware preprocessing hub. Candidate pipeline metadata is checked against this request for output compatibility, utility capability, CI constraints, and residual disclosure bounds.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "<unique id>",
+    "scenario_id": "<scenario id>",
+    "application_name": "<name>",
+    "application_category": "<energy_management | fall_detection | audio_safety | security_monitoring>",
+    "natural_language_request": "<plain language application request>",
+    "requester": "downstream_application"
+  },
+  "ci_context": {
+    "context": [],
+    "space": [],
+    "sender": [],
+    "subject": [],
+    "recipient": [],
+    "purpose": [],
+    "transmissionPrinciple_assumed": [],
+    "social_context_tags": []
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [],
+    "allowed_content_types": [],
+    "allowed_modalities": [],
+    "forbidden_sensing_devices": [],
+    "forbidden_content_types": [],
+    "notes": ""
+  },
+  "utility_contract": {
+    "requested_capability": "<semantic capability>",
+    "task_description": "<task-specific utility goal>",
+    "quality_requirements": {
+      "latency_ms_max": null,
+      "update_period_ms_max": null,
+      "minimum_recall": null,
+      "minimum_precision": null,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": null
+    },
+    "accepted_output_caps": [],
+    "explicitly_rejected_output_caps": []
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability or a declared equivalent",
+    "adapter_allowed": true,
+    "adapter_rules": [
+      "An adapter is allowed only if it preserves the accepted schema and does not add forbidden residual attributes."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "required_transformations_if_media_output": [],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "unknown",
+      "face": "unknown",
+      "body_shape": "unknown",
+      "clothing": "unknown",
+      "gait": "unknown",
+      "speech_content": "unknown",
+      "speaker_identity": "unknown",
+      "activity": "unknown",
+      "location": "unknown",
+      "trajectory": "unknown",
+      "co_presence": "unknown",
+      "visible_text": "unknown",
+      "aggregate_presence": "unknown"
+    },
+    "hard_forbidden_attributes": [],
+    "allowed_high_attributes": [],
+    "comparison_rule": "candidate residual disclosure vector must be <= max_allowed for every attribute, except attributes listed in allowed_high_attributes"
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if output schema is accepted but no benchmark, calibration, or app-provided validation exists.",
+    "Return consent_or_review_required if the only utility-preserving candidates expose hard-forbidden attributes."
+  ],
+  "verification_spec": {
+    "inputs": {
+      "candidate_pipeline_metadata": "typed operator-effect output from pipeline analyzer",
+      "candidate_residual_disclosure": "D_meta or Combine(D_meta, D_probe)",
+      "candidate_ci_flow": "f_p = <sender, subject, recipient, attribute, purpose, transmission, context>"
+    },
+    "checks": [
+      "pipelineStage == output_to_application",
+      "output caps match accepted_output_caps",
+      "utility capability and quality requirements are met or marked for validation",
+      "required CI terms are present",
+      "forbidden CI terms are absent",
+      "residual disclosure vector satisfies max_allowed",
+      "candidate is ranked by least residual disclosure among feasible outputs"
+    ],
+    "expected_result_format": {
+      "decision": "<select_pipeline | no_compromise | consent_or_review_required | insufficient_utility_evidence>",
+      "selected_output_cap": "<cap_id>",
+      "selected_pipeline_id": "<optional>",
+      "failed_checks": [],
+      "explanation": "<short reason>"
+    }
+  }
+}

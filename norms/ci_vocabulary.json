@@ -1,0 +1,1070 @@
+{
+  "schema_version": "ci_pipeline_vocab_v2",
+  "design_notes": [
+    "This vocabulary is specialized for a privacy preprocessor that sits before a downstream application.",
+    "It removes deny_scope/operationScope and instead uses pipelineStage to describe where a rule applies.",
+    "Sensors/devices are modeled in sensingDataMetadata, while data/meaning are modeled in informationType.",
+    "Rules should match candidate staged flows and produce effects such as DENY_FLOW, REQUIRE_CONDITION, CLASSIFY_AS, or REQUIRE_TRANSFORMATION."
+  ],
+  "sources": {
+    "ci": "Contextual Integrity theory / created CI schema terms",
+    "dpv": "Data Privacy Vocabulary",
+    "dpv-pd": "DPV Personal Data Categories extension",
+    "dpv-tech": "DPV Technology Concepts extension",
+    "sosa": "Sensor, Observation, Sample, and Actuator ontology",
+    "ssn": "Semantic Sensor Network ontology",
+    "smartpriv": "Created smart-space privacy vocabulary extension",
+    "policy": "Concrete policy source"
+  },
+  "coreCandidateFlowFields": {
+    "pipelineStage": {
+      "description": "Where the flow occurs relative to the privacy preprocessor.",
+      "terms": [
+        {
+          "term": "raw_input",
+          "source": "created",
+          "meaning": "Raw sensor stream/data consumed by the preprocessor."
+        },
+        {
+          "term": "intermediate_representation",
+          "source": "created",
+          "meaning": "Internal transformed representation, such as pose, detections, transcript, or blurred frame."
+        },
+        {
+          "term": "output_to_application",
+          "source": "created",
+          "meaning": "Data emitted from the preprocessor to the downstream app."
+        },
+        {
+          "term": "retained_artifact",
+          "source": "created",
+          "meaning": "Any stored data or log retained after processing."
+        }
+      ]
+    },
+    "context": {
+      "description": "Physical-social setting.",
+      "terms": [
+        {
+          "term": "short_term_rental",
+          "source": "created + policy"
+        },
+        {
+          "term": "home",
+          "source": "created"
+        },
+        {
+          "term": "university_campus",
+          "source": "created + policy"
+        },
+        {
+          "term": "university_housing",
+          "source": "created + policy"
+        },
+        {
+          "term": "hospital_or_clinic",
+          "source": "created + policy"
+        },
+        {
+          "term": "school_or_classroom",
+          "source": "created + policy"
+        },
+        {
+          "term": "special_education_classroom",
+          "source": "created + policy"
+        },
+        {
+          "term": "research_living_lab",
+          "source": "created + policy"
+        },
+        {
+          "term": "workplace",
+          "source": "created + policy"
+        },
+        {
+          "term": "long_term_care",
+          "source": "created + policy"
+        },
+        {
+          "term": "public_space",
+          "source": "created"
+        }
+      ]
+    },
+    "space": {
+      "description": "More specific spatial subcontext.",
+      "terms": [
+        {
+          "term": "indoor",
+          "source": "created"
+        },
+        {
+          "term": "outdoor",
+          "source": "created"
+        },
+        {
+          "term": "interior_home_space",
+          "source": "created + policy"
+        },
+        {
+          "term": "bedroom",
+          "source": "created + policy"
+        },
+        {
+          "term": "bathroom",
+          "source": "created + policy"
+        },
+        {
+          "term": "sleeping_area",
+          "source": "created + policy"
+        },
+        {
+          "term": "living_room",
+          "source": "created"
+        },
+        {
+          "term": "kitchen",
+          "source": "created"
+        },
+        {
+          "term": "hallway",
+          "source": "created + policy"
+        },
+        {
+          "term": "residential_room",
+          "source": "created + policy"
+        },
+        {
+          "term": "residential_hallway",
+          "source": "created + policy"
+        },
+        {
+          "term": "common_area",
+          "source": "created + policy"
+        },
+        {
+          "term": "locker_room",
+          "source": "created + policy"
+        },
+        {
+          "term": "changing_area",
+          "source": "created + policy"
+        },
+        {
+          "term": "shower_area",
+          "source": "created + policy"
+        },
+        {
+          "term": "lactation_space",
+          "source": "created + policy"
+        },
+        {
+          "term": "private_office",
+          "source": "created + policy"
+        },
+        {
+          "term": "clinical_space",
+          "source": "created + policy"
+        },
+        {
+          "term": "patient_room",
+          "source": "created + policy"
+        },
+        {
+          "term": "workspace",
+          "source": "created + policy"
+        },
+        {
+          "term": "pool_area",
+          "source": "created + policy"
+        },
+        {
+          "term": "hot_tub_area",
+          "source": "created + policy"
+        },
+        {
+          "term": "outdoor_shower_or_sauna",
+          "source": "created + policy"
+        }
+      ]
+    },
+    "subject": {
+      "description": "The person or group the information is about.",
+      "terms": [
+        {
+          "term": "data_subject",
+          "source": "dpv",
+          "iri": "dpv:DataSubject"
+        },
+        {
+          "term": "guest",
+          "source": "created + policy"
+        },
+        {
+          "term": "host",
+          "source": "created + policy"
+        },
+        {
+          "term": "homeowner",
+          "source": "created"
+        },
+        {
+          "term": "resident",
+          "source": "created + policy"
+        },
+        {
+          "term": "roommate",
+          "source": "created + policy"
+        },
+        {
+          "term": "student",
+          "source": "created + policy"
+        },
+        {
+          "term": "patient",
+          "source": "created + policy"
+        },
+        {
+          "term": "employee",
+          "source": "created + policy"
+        },
+        {
+          "term": "visitor",
+          "source": "created + policy"
+        },
+        {
+          "term": "bystander",
+          "source": "created"
+        },
+        {
+          "term": "child",
+          "source": "dpv",
+          "iri": "dpv:Child"
+        },
+        {
+          "term": "research_participant",
+          "source": "created + policy"
+        },
+        {
+          "term": "caregiver",
+          "source": "created"
+        }
+      ]
+    },
+    "sender": {
+      "description": "Actor/device/institution from which information flows.",
+      "terms": [
+        {
+          "term": "host_controlled_device",
+          "source": "created + policy"
+        },
+        {
+          "term": "owner_controlled_device",
+          "source": "created"
+        },
+        {
+          "term": "landlord_controlled_device",
+          "source": "created"
+        },
+        {
+          "term": "campus_security_system",
+          "source": "created + policy"
+        },
+        {
+          "term": "school_monitoring_system",
+          "source": "created + policy"
+        },
+        {
+          "term": "hospital_monitoring_system",
+          "source": "created + policy"
+        },
+        {
+          "term": "research_sensor_system",
+          "source": "created + policy"
+        },
+        {
+          "term": "patient_or_family_device",
+          "source": "created + policy"
+        },
+        {
+          "term": "device_vendor",
+          "source": "created"
+        },
+        {
+          "term": "cloud_service",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:CloudService"
+        },
+        {
+          "term": "data_controller",
+          "source": "dpv",
+          "iri": "dpv:DataController"
+        },
+        {
+          "term": "data_processor",
+          "source": "dpv",
+          "iri": "dpv:DataProcessor"
+        }
+      ]
+    },
+    "recipient": {
+      "description": "Actor/institution/application receiving data from the preprocessor.",
+      "terms": [
+        {
+          "term": "downstream_application",
+          "source": "created"
+        },
+        {
+          "term": "host",
+          "source": "created + policy"
+        },
+        {
+          "term": "guest",
+          "source": "created + policy"
+        },
+        {
+          "term": "homeowner",
+          "source": "created"
+        },
+        {
+          "term": "device_vendor",
+          "source": "created"
+        },
+        {
+          "term": "cloud_service",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:CloudService"
+        },
+        {
+          "term": "campus_police_or_security",
+          "source": "created + policy"
+        },
+        {
+          "term": "authorized_personnel",
+          "source": "created + policy"
+        },
+        {
+          "term": "teacher_or_school_official",
+          "source": "created + policy"
+        },
+        {
+          "term": "clinician",
+          "source": "created + policy"
+        },
+        {
+          "term": "caregiver",
+          "source": "created"
+        },
+        {
+          "term": "researcher",
+          "source": "created + policy"
+        },
+        {
+          "term": "law_enforcement",
+          "source": "created + policy"
+        },
+        {
+          "term": "media_or_film_crew",
+          "source": "created + policy"
+        },
+        {
+          "term": "third_party",
+          "source": "dpv",
+          "iri": "dpv:ThirdParty"
+        },
+        {
+          "term": "public_release",
+          "source": "created"
+        }
+      ]
+    },
+    "purpose": {
+      "description": "Purpose of downstream application or processing.",
+      "terms": [
+        {
+          "term": "safety_monitoring",
+          "source": "created"
+        },
+        {
+          "term": "fall_detection",
+          "source": "created"
+        },
+        {
+          "term": "security_monitoring",
+          "source": "created + dpv",
+          "maps_to": "dpv:Security"
+        },
+        {
+          "term": "energy_management",
+          "source": "created"
+        },
+        {
+          "term": "access_control",
+          "source": "created"
+        },
+        {
+          "term": "personalization",
+          "source": "created"
+        },
+        {
+          "term": "communication",
+          "source": "created"
+        },
+        {
+          "term": "clinical_care",
+          "source": "created + policy"
+        },
+        {
+          "term": "education",
+          "source": "created + policy"
+        },
+        {
+          "term": "research",
+          "source": "created + dpv",
+          "maps_to": "dpv:ResearchAndDevelopment"
+        },
+        {
+          "term": "training",
+          "source": "created + policy"
+        },
+        {
+          "term": "law_enforcement",
+          "source": "created + policy"
+        },
+        {
+          "term": "incident_investigation",
+          "source": "created + policy"
+        },
+        {
+          "term": "advertising",
+          "source": "created + dpv"
+        },
+        {
+          "term": "routine_monitoring",
+          "source": "created + policy"
+        },
+        {
+          "term": "work_performance_monitoring",
+          "source": "created + policy"
+        }
+      ]
+    },
+    "sensingDataMetadata": {
+      "description": "Technical sensing/device metadata outside the core CI information type.",
+      "sensingDevice": [
+        {
+          "term": "sensor",
+          "source": "sosa",
+          "iri": "sosa:Sensor"
+        },
+        {
+          "term": "iot_device",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:IoTDevice"
+        },
+        {
+          "term": "indoor_camera",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "outdoor_camera",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "cctv_camera",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "microphone",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "smart_speaker",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "noise_decibel_monitor",
+          "source": "smartpriv + policy"
+        },
+        {
+          "term": "motion_sensor",
+          "source": "smartpriv + sosa"
+        },
+        {
+          "term": "gps_receiver",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:GPS"
+        },
+        {
+          "term": "wifi_router_or_probe",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:WiFi"
+        },
+        {
+          "term": "bluetooth_beacon",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:Bluetooth"
+        },
+        {
+          "term": "smart_lock",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "thermostat",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "wearable",
+          "source": "smartpriv + dpv-tech"
+        },
+        {
+          "term": "mobile_phone",
+          "source": "smartpriv + dpv-tech"
+        }
+      ],
+      "sensingModality": [
+        {
+          "term": "visual",
+          "source": "created"
+        },
+        {
+          "term": "audio",
+          "source": "dpv-tech",
+          "maps_to": "dpv-tech:AudioContent"
+        },
+        {
+          "term": "location",
+          "source": "dpv-pd",
+          "maps_to": "dpv-pd:Location"
+        },
+        {
+          "term": "motion",
+          "source": "created"
+        },
+        {
+          "term": "environmental",
+          "source": "created"
+        },
+        {
+          "term": "network",
+          "source": "created + dpv-tech"
+        },
+        {
+          "term": "biometric",
+          "source": "dpv-pd",
+          "maps_to": "dpv-pd:Biometric"
+        }
+      ],
+      "contentType": [
+        {
+          "term": "image_content",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:ImageContent"
+        },
+        {
+          "term": "video_content",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:VideoContent"
+        },
+        {
+          "term": "audio_content",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:AudioContent"
+        },
+        {
+          "term": "textual_content",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:TextualContent"
+        },
+        {
+          "term": "input_data",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:InputData"
+        },
+        {
+          "term": "output_data",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:OutputData"
+        }
+      ],
+      "storageMode": [
+        {
+          "term": "no_storage",
+          "source": "created"
+        },
+        {
+          "term": "local_storage",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:LocalStorage"
+        },
+        {
+          "term": "cloud_storage",
+          "source": "dpv-tech",
+          "iri": "dpv-tech:CloudStorage"
+        },
+        {
+          "term": "secure_storage",
+          "source": "created + dpv-tech"
+        }
+      ]
+    },
+    "informationType": {
+      "description": "Data primitive, interpreted observation, or inferred information conveyed by the staged flow.",
+      "sensorPrimitive": [
+        {
+          "term": "image_frame",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:ImageContent"
+        },
+        {
+          "term": "video_stream",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:VideoContent"
+        },
+        {
+          "term": "audio_waveform",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:AudioContent"
+        },
+        {
+          "term": "speech_audio",
+          "source": "smartpriv + dpv-pd",
+          "maps_to": "dpv-pd:VoiceCommunicationRecording"
+        },
+        {
+          "term": "decibel_level",
+          "source": "smartpriv + policy"
+        },
+        {
+          "term": "gps_coordinate",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:GPSCoordinate"
+        },
+        {
+          "term": "wifi_probe_or_signal",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:WiFi"
+        },
+        {
+          "term": "bluetooth_signal",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:Bluetooth"
+        },
+        {
+          "term": "motion_event",
+          "source": "smartpriv"
+        },
+        {
+          "term": "accelerometer_trace",
+          "source": "smartpriv"
+        },
+        {
+          "term": "temperature_reading",
+          "source": "smartpriv"
+        },
+        {
+          "term": "humidity_reading",
+          "source": "smartpriv"
+        },
+        {
+          "term": "light_level",
+          "source": "smartpriv"
+        }
+      ],
+      "interpretedObservation": [
+        {
+          "term": "person_detected",
+          "source": "smartpriv"
+        },
+        {
+          "term": "face_detected",
+          "source": "smartpriv + dpv-pd",
+          "maps_to": "dpv-pd:FacialPrint"
+        },
+        {
+          "term": "speech_transcribed",
+          "source": "smartpriv + dpv-tech",
+          "maps_to": "dpv-tech:TextualContent"
+        },
+        {
+          "term": "room_occupied",
+          "source": "smartpriv"
+        },
+        {
+          "term": "occupancy_count",
+          "source": "smartpriv"
+        },
+        {
+          "term": "pose_keypoints",
+          "source": "smartpriv"
+        },
+        {
+          "term": "activity_label",
+          "source": "smartpriv + dpv-pd",
+          "maps_to": "dpv-pd:Behavioural"
+        },
+        {
+          "term": "object_detected",
+          "source": "smartpriv"
+        },
+        {
+          "term": "door_open_event",
+          "source": "smartpriv"
+        },
+        {
+          "term": "noise_event_label",
+          "source": "smartpriv"
+        },
+        {
+          "term": "screen_content_detected",
+          "source": "smartpriv"
+        }
+      ],
+      "inferredInformationType": [
+        {
+          "term": "identity",
+          "source": "smartpriv"
+        },
+        {
+          "term": "presence",
+          "source": "smartpriv"
+        },
+        {
+          "term": "trajectory",
+          "source": "smartpriv + dpv-pd",
+          "maps_to": "dpv-pd:Location"
+        },
+        {
+          "term": "household_routine",
+          "source": "smartpriv + dpv-pd",
+          "maps_to": "dpv-pd:Household"
+        },
+        {
+          "term": "behaviour",
+          "source": "dpv-pd",
+          "maps_to": "dpv-pd:Behavioural"
+        },
+        {
+          "term": "health_status",
+          "source": "smartpriv + dpv-pd"
+        },
+        {
+          "term": "fall_event",
+          "source": "smartpriv"
+        },
+        {
+          "term": "sleep_pattern",
+          "source": "smartpriv + dpv-pd"
+        },
+        {
+          "term": "guest_activity",
+          "source": "smartpriv + dpv-pd"
+        },
+        {
+          "term": "group_membership",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:GroupMembership"
+        },
+        {
+          "term": "work_pattern",
+          "source": "smartpriv + dpv-pd",
+          "maps_to": "dpv-pd:PerformanceAtWork"
+        },
+        {
+          "term": "vulnerability",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:Vulnerability"
+        },
+        {
+          "term": "biometric_template",
+          "source": "smartpriv + dpv-pd",
+          "maps_to": "dpv-pd:FacialPrint"
+        },
+        {
+          "term": "communications_metadata",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:CommunicationsMetadata"
+        }
+      ],
+      "personalDataCategory": [
+        {
+          "term": "picture",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:Picture"
+        },
+        {
+          "term": "facial_print",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:FacialPrint"
+        },
+        {
+          "term": "facial_expression",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:FacialExpression"
+        },
+        {
+          "term": "voice_communication_recording",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:VoiceCommunicationRecording"
+        },
+        {
+          "term": "current_location",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:CurrentLocation"
+        },
+        {
+          "term": "gps_coordinate",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:GPSCoordinate"
+        },
+        {
+          "term": "communications_metadata",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:CommunicationsMetadata"
+        },
+        {
+          "term": "device_based",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:DeviceBased"
+        },
+        {
+          "term": "household",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:Household"
+        },
+        {
+          "term": "behavioural",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:Behavioural"
+        },
+        {
+          "term": "group_membership",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:GroupMembership"
+        },
+        {
+          "term": "vulnerability",
+          "source": "dpv-pd",
+          "iri": "dpv-pd:Vulnerability"
+        }
+      ]
+    },
+    "transmissionPrinciple": {
+      "description": "Conditions governing the flow, including collection pattern, notice, consent, processing boundary, retention, and transformations.",
+      "terms": [
+        {
+          "term": "active_collection",
+          "source": "created"
+        },
+        {
+          "term": "passive_collection",
+          "source": "created"
+        },
+        {
+          "term": "continuous_collection",
+          "source": "created"
+        },
+        {
+          "term": "event_triggered_collection",
+          "source": "created"
+        },
+        {
+          "term": "disclosed",
+          "source": "created + policy"
+        },
+        {
+          "term": "undisclosed",
+          "source": "created + policy"
+        },
+        {
+          "term": "hidden",
+          "source": "created + policy"
+        },
+        {
+          "term": "signage_required",
+          "source": "created + policy"
+        },
+        {
+          "term": "listing_disclosure_required",
+          "source": "created + policy"
+        },
+        {
+          "term": "written_notice_required",
+          "source": "created + policy"
+        },
+        {
+          "term": "explicit_consent",
+          "source": "created + dpv"
+        },
+        {
+          "term": "written_authorization_required",
+          "source": "created + policy"
+        },
+        {
+          "term": "opt_in_required",
+          "source": "created"
+        },
+        {
+          "term": "opt_out_available",
+          "source": "created"
+        },
+        {
+          "term": "withdrawal_available",
+          "source": "created + dpv"
+        },
+        {
+          "term": "guest_disable_option",
+          "source": "created + policy"
+        },
+        {
+          "term": "local_processing",
+          "source": "created"
+        },
+        {
+          "term": "edge_processing",
+          "source": "created"
+        },
+        {
+          "term": "cloud_processing",
+          "source": "created + dpv-tech"
+        },
+        {
+          "term": "ephemeral_processing",
+          "source": "created"
+        },
+        {
+          "term": "no_raw_data_retention",
+          "source": "created + policy"
+        },
+        {
+          "term": "limited_retention",
+          "source": "created + policy"
+        },
+        {
+          "term": "indefinite_retention",
+          "source": "created"
+        },
+        {
+          "term": "purpose_limited",
+          "source": "created + dpv"
+        },
+        {
+          "term": "authorized_personnel_only",
+          "source": "created + policy"
+        },
+        {
+          "term": "recipient_limited",
+          "source": "created"
+        },
+        {
+          "term": "no_public_release",
+          "source": "created + policy"
+        },
+        {
+          "term": "no_secondary_use",
+          "source": "created + policy"
+        },
+        {
+          "term": "security_purpose_only",
+          "source": "created + policy"
+        },
+        {
+          "term": "care_purpose_only",
+          "source": "created + policy"
+        },
+        {
+          "term": "education_purpose_only",
+          "source": "created + policy"
+        },
+        {
+          "term": "data_minimized",
+          "source": "created + dpv"
+        },
+        {
+          "term": "field_of_view_minimized",
+          "source": "created + policy"
+        },
+        {
+          "term": "face_blurred",
+          "source": "created + dpv",
+          "maps_to": "dpv:DataRedaction"
+        },
+        {
+          "term": "body_blurred",
+          "source": "created + dpv",
+          "maps_to": "dpv:DataRedaction"
+        },
+        {
+          "term": "license_plate_redacted",
+          "source": "created + dpv",
+          "maps_to": "dpv:DataRedaction"
+        },
+        {
+          "term": "speech_content_removed",
+          "source": "created"
+        },
+        {
+          "term": "identity_removed",
+          "source": "created + dpv",
+          "maps_to": "dpv:Deidentification"
+        },
+        {
+          "term": "aggregate_only",
+          "source": "created + dpv",
+          "maps_to": "dpv:Aggregate"
+        }
+      ]
+    }
+  },
+  "ruleEffectVocabulary": {
+    "description": "Effects are pipeline-level actions, not CI fields.",
+    "actions": [
+      {
+        "term": "DENY_FLOW",
+        "meaning": "Reject the matching staged flow. If the app cannot be satisfied without it, reject the pipeline."
+      },
+      {
+        "term": "ALLOW_IF",
+        "meaning": "Allow the matching staged flow only if required conditions are present and forbidden conditions are absent."
+      },
+      {
+        "term": "REQUIRE_CONDITION",
+        "meaning": "Add/check an obligation such as disclosure, local processing, or retention limit."
+      },
+      {
+        "term": "REQUIRE_TRANSFORMATION",
+        "meaning": "Insert/check a privacy transformation before output to the downstream app."
+      },
+      {
+        "term": "CLASSIFY_AS",
+        "meaning": "Add a tag such as surveillance_device_flow or phi_like_flow for subsequent rules."
+      },
+      {
+        "term": "REQUIRE_REVIEW",
+        "meaning": "Escalate candidate flow or pipeline for human/deployment review."
+      },
+      {
+        "term": "PREFER",
+        "meaning": "Soft preference used for ranking among otherwise allowed pipelines."
+      }
+    ],
+    "removed_fields": [
+      {
+        "term": "deny_scope",
+        "replacement": "pipelineStage + effect.action"
+      },
+      {
+        "term": "operationScope",
+        "replacement": "pipelineStage + effect.action"
+      }
+    ]
+  },
+  "matchingSemantics": {
+    "across_fields": "AND",
+    "anyOf": "OR within a field",
+    "allOf": "AND within a field",
+    "noneOf": "Candidate must not contain these values",
+    "missing_field_in_rule": "Wildcard / do not care",
+    "missing_field_in_candidate": "Unknown. For hard constraints, treat unknown as REQUIRE_REVIEW unless configured otherwise."
+  }
+}

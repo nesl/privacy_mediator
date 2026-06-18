@@ -1,0 +1,59 @@
+{
+  "caps": {
+    "semantic_type": "external/application-output",
+    "schema": "output_to_application"
+  },
+  "data": {
+    "kind": "dict",
+    "keys": [
+      "count",
+      "occupied"
+    ]
+  },
+  "annotations": [
+    {
+      "label": "aggregate_summary",
+      "confidence": 1.0
+    }
+  ],
+  "metadata": {
+    "source_path": "/mnt/data/smartpriv_operator_runtime/examples/test_frame.png",
+    "process": [
+      {
+        "operator": "op.person_object_detector",
+        "params": {},
+        "at_ms": 1781300646558
+      },
+      {
+        "operator": "op.occupancy_deriver",
+        "params": {},
+        "at_ms": 1781300646558
+      },
+      {
+        "operator": "op.aggregate_generalize",
+        "params": {},
+        "at_ms": 1781300646558
+      },
+      {
+        "operator": "op.schema_adapter",
+        "params": {
+          "target_schema": "room_occupied",
+          "target_semantic_type": "application/x-binary-occupancy"
+        },
+        "at_ms": 1781300646558
+      },
+      {
+        "operator": "op.route_publish",
+        "params": {
+          "recipient": [
+            "local_hvac_controller"
+          ],
+          "purpose": [
+            "energy_management"
+          ]
+        },
+        "at_ms": 1781300646558
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+numpy>=1.24
+Pillow>=10.0
+opencv-python>=4.8
+scipy>=1.10
+soundfile>=0.12
+librosa>=0.10
+requests>=2.31
+jsonschema>=4.19
+pytest>=7.4
+mediapipe>=0.10          # pose extraction
+pytesseract>=0.3         # OCR wrapper; also install the tesseract system binary
+ultralytics>=8.0         # YOLO object/person detection if you extend op.person_object_detector
+dlib>=19.24              # optional face detector/landmarks; often requires cmake + build tools
+langchain-openai
+langchain-core
+
+# Optional audio probes
+openai-whisper>=20231117
+pyannote.audio>=3.1.0
+
+# Optional but useful for audio/video environments
+ffmpeg-python>=0.2.0

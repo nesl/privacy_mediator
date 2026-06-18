@@ -1,0 +1,1716 @@
+{
+  "schema_version": "smartpriv_operator_contracts_v1",
+  "created_at": "2026-06-12T18:41:57.965222Z",
+  "purpose": "Operator contracts for a privacy-aware preprocessing hub. Each operator declares input/output caps, utility capabilities, transformation effects, and residual disclosure effects so candidate pipelines can be analyzed compositionally before execution.",
+  "related_vocabularies": {
+    "ci_policy_vocabulary": "ci_pipeline_vocab_v2 / vocabulary.json",
+    "application_pipeline_vocabulary": "application_pipeline_vocabulary.json",
+    "external_inspirations": {
+      "gstreamer": "caps, pads, elements, caps negotiation, pipeline graph",
+      "wot": "Thing Description, properties, actions, events, forms",
+      "sosa_ssn": "Sensor, Observation, ObservableProperty, Result",
+      "dpv": "processing, data minimization, redaction, de-identification, aggregation",
+      "odrl": "permission, prohibition, duty / policy-like constraints",
+      "peekaboo": "hub-based chainable preprocessing operators and app manifests"
+    }
+  },
+  "abstract_domain": {
+    "risk_levels": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "residual_disclosure_attributes": [
+      "identity",
+      "face",
+      "body_shape",
+      "clothing",
+      "gait",
+      "speech_content",
+      "speaker_identity",
+      "activity",
+      "location",
+      "trajectory",
+      "co_presence",
+      "visible_text",
+      "aggregate_presence"
+    ],
+    "state_shape": {
+      "caps": "typed output description, inspired by GStreamer caps and WoT affordance schemas",
+      "informationType.sensorPrimitive": "raw or near-raw sensor primitive",
+      "informationType.interpretedObservation": "directly computed observation",
+      "informationType.inferredInformationType": "higher-level inference",
+      "transmissionPrinciple": "conditions such as local_processing, data_minimized, aggregate_only",
+      "residual_disclosure": "map from privacy-relevant attribute to risk level"
+    },
+    "composition_semantics": {
+      "sequential_composition": "Given pipeline p = op_n(...op_2(op_1(source))), the analyzer checks that output_caps(op_i) are compatible with input_caps(op_{i+1}), then applies each operator's residual_disclosure_effect to the abstract state.",
+      "compatibility_rule": "A connection is valid when the upstream output caps satisfy at least one downstream input caps pattern. Exact media/semantic type match is required unless a schema_adapter declares an explicit conversion.",
+      "unnamed_attribute_policy": "Operators that preserve media-like data default to preserve_unmentioned. Operators that replace raw data with semantic summaries default to drop_unmentioned.",
+      "branching_or_join": "Join/fuse combines residual disclosure conservatively using attribute-wise max, because combining streams can reveal more than either input alone.",
+      "metadata_probe_combination": "D_meta is produced by these contracts. D_probe can override upward. If metadata and probes disagree, use the higher-risk estimate unless deployment-specific validation justifies lowering it."
+    }
+  },
+  "operator_interface_schema": {
+    "required_fields": [
+      "id",
+      "label",
+      "category",
+      "operator_kind",
+      "input_caps",
+      "output_caps",
+      "utility_capabilities",
+      "transformation_effects",
+      "residual_disclosure_effect",
+      "ci_annotations",
+      "composition_notes"
+    ]
+  },
+  "operators": [
+    {
+      "id": "op.source",
+      "label": "Source",
+      "category": "dataflow_utility",
+      "operator_kind": "producer",
+      "vocabulary_sources": [
+        "SOSA/SSN:sosa:Sensor",
+        "GStreamer:source element",
+        "WoT:Thing"
+      ],
+      "input_caps": [],
+      "output_caps": [
+        {
+          "media_type": "video/x-raw",
+          "content_type": "video_content",
+          "schema": "raw_video_stream",
+          "properties": {
+            "sensorPrimitive": "video_stream"
+          }
+        },
+        {
+          "media_type": "image/x-raw",
+          "content_type": "image_content",
+          "schema": "raw_image_frame",
+          "properties": {
+            "sensorPrimitive": "image_frame"
+          }
+        },
+        {
+          "media_type": "audio/x-raw",
+          "content_type": "audio_content",
+          "schema": "raw_audio_waveform",
+          "properties": {
+            "sensorPrimitive": "audio_waveform"
+          }
+        },
+        {
+          "semantic_type": "application/x-sensor-reading",
+          "schema": "scalar_or_event_sensor_reading"
+        }
+      ],
+      "utility_capabilities": [
+        "provide_raw_stream",
+        "provide_sensor_event",
+        "provide_scalar_reading"
+      ],
+      "transformation_effects": [],
+      "residual_disclosure_effect": {
+        "initial_state_by_modality": {
+          "video_content": {
+            "identity": "high",
+            "face": "high",
+            "body_shape": "high",
+            "clothing": "high",
+            "gait": "medium",
+            "activity": "high",
+            "location": "high",
+            "trajectory": "high",
+            "co_presence": "high",
+            "visible_text": "medium",
+            "aggregate_presence": "high"
+          },
+          "image_content": {
+            "identity": "high",
+            "face": "high",
+            "body_shape": "high",
+            "clothing": "high",
+            "gait": "low",
+            "activity": "medium",
+            "location": "high",
+            "trajectory": "none",
+            "co_presence": "high",
+            "visible_text": "medium",
+            "aggregate_presence": "high"
+          },
+          "audio_content": {
+            "speech_content": "high",
+            "speaker_identity": "high",
+            "activity": "medium",
+            "location": "low",
+            "co_presence": "medium",
+            "aggregate_presence": "medium"
+          },
+          "noise_decibel_monitor": {
+            "speech_content": "none",
+            "speaker_identity": "none",
+            "activity": "low",
+            "location": "low",
+            "aggregate_presence": "medium"
+          }
+        },
+        "notes": "Initial disclosure depends on device/modality/space metadata."
+      },
+      "ci_annotations": {
+        "pipelineStage": "raw_input",
+        "sensingDataMetadata": [
+          "sensingDevice",
+          "sensingModality",
+          "contentType"
+        ],
+        "informationType.sensorPrimitive": [
+          "image_frame",
+          "video_stream",
+          "audio_waveform",
+          "decibel_level",
+          "motion_event"
+        ]
+      },
+      "composition_notes": "Starts an abstract pipeline state. Must pass policy checks before raw input is used."
+    },
+    {
+      "id": "op.sample",
+      "label": "Sample",
+      "category": "dataflow_utility",
+      "operator_kind": "transformer",
+      "vocabulary_sources": [
+        "SOSA/SSN:sosa:Sample",
+        "GStreamer:rate/framerate caps"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        },
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-sensor-reading"
+        }
+      ],
+      "output_caps": [
+        {
+          "media_type": "video/x-raw",
+          "properties": {
+            "sampled": true
+          }
+        },
+        {
+          "media_type": "image/x-raw",
+          "properties": {
+            "sampled": true
+          }
+        },
+        {
+          "media_type": "audio/x-raw",
+          "properties": {
+            "sampled": true
+          }
+        },
+        {
+          "semantic_type": "application/x-sensor-reading",
+          "properties": {
+            "sampled": true
+          }
+        }
+      ],
+      "parameters": {
+        "sample_period_ms": "integer",
+        "max_rate_hz": "number"
+      },
+      "utility_capabilities": [
+        "rate_limit_stream",
+        "periodic_monitoring"
+      ],
+      "transformation_effects": [
+        "active_collection",
+        "sampled_collection"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {},
+        "reduce": {
+          "trajectory": "by_temporal_downsampling",
+          "activity": "by_temporal_downsampling",
+          "gait": "by_temporal_downsampling"
+        },
+        "preserve": [],
+        "add": {},
+        "notes": "Reduction only applies when sampling period is coarse relative to source rate."
+      },
+      "ci_annotations": {
+        "transmissionPrinciple": [
+          "active_collection"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Preserves caps family but adds sampling metadata; useful before expensive operators."
+    },
+    {
+      "id": "op.window",
+      "label": "Window",
+      "category": "dataflow_utility",
+      "operator_kind": "transformer",
+      "vocabulary_sources": [
+        "GStreamer:buffer/segment",
+        "stream processing window"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-event"
+        },
+        {
+          "semantic_type": "application/x-sensor-reading"
+        }
+      ],
+      "output_caps": [
+        {
+          "media_type": "video/x-raw",
+          "properties": {
+            "windowed": true
+          }
+        },
+        {
+          "media_type": "audio/x-raw",
+          "properties": {
+            "windowed": true
+          }
+        },
+        {
+          "semantic_type": "application/x-windowed-events"
+        }
+      ],
+      "parameters": {
+        "window_ms": "integer",
+        "stride_ms": "integer"
+      },
+      "utility_capabilities": [
+        "temporal_context",
+        "audio_event_detection",
+        "activity_detection"
+      ],
+      "transformation_effects": [
+        "windowed_processing"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {},
+        "reduce": {},
+        "preserve": [],
+        "add": {},
+        "notes": "Windowing alone usually preserves the same information, but bounds the unit processed by downstream operators."
+      },
+      "ci_annotations": {
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Adds temporal extent metadata used by classifiers and aggregators."
+    },
+    {
+      "id": "op.trigger_gate",
+      "label": "Trigger / Gate",
+      "category": "dataflow_utility",
+      "operator_kind": "filter",
+      "vocabulary_sources": [
+        "GStreamer:valve/filter element",
+        "ODRL-like permission/prohibition"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-event"
+        },
+        {
+          "semantic_type": "application/x-sensor-reading"
+        }
+      ],
+      "output_caps": [
+        {
+          "media_type": "video/x-raw",
+          "properties": {
+            "event_triggered": true
+          }
+        },
+        {
+          "media_type": "audio/x-raw",
+          "properties": {
+            "event_triggered": true
+          }
+        },
+        {
+          "semantic_type": "application/x-event",
+          "properties": {
+            "gated": true
+          }
+        }
+      ],
+      "parameters": {
+        "condition": "predicate over event/context/policy state"
+      },
+      "utility_capabilities": [
+        "event_triggered_collection",
+        "context_conditioning",
+        "early_blocking"
+      ],
+      "transformation_effects": [
+        "event_triggered_collection"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {},
+        "reduce": {
+          "trajectory": "by_not_emitting_continuous_stream",
+          "activity": "by_not_emitting_continuous_stream",
+          "co_presence": "by_not_emitting_continuous_stream"
+        },
+        "preserve": [],
+        "add": {
+          "transmissionPrinciple": [
+            "event_triggered_collection"
+          ]
+        },
+        "notes": "Does not transform emitted items, but reduces disclosure over time by suppressing non-triggered periods."
+      },
+      "ci_annotations": {
+        "transmissionPrinciple": [
+          "event_triggered_collection"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "If gate predicate depends on policy, it must run before downstream export."
+    },
+    {
+      "id": "op.join_fuse",
+      "label": "Join / Fuse",
+      "category": "dataflow_utility",
+      "operator_kind": "multi_input_transformer",
+      "vocabulary_sources": [
+        "Peekaboo:join",
+        "stream processing join"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-event"
+        },
+        {
+          "semantic_type": "application/x-detections"
+        },
+        {
+          "semantic_type": "application/x-sensor-reading"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-fused-event",
+          "schema": "fused_event_record"
+        }
+      ],
+      "parameters": {
+        "join_type": [
+          "AND",
+          "OR",
+          "NOT",
+          "temporal_overlap"
+        ],
+        "time_tolerance_ms": "integer"
+      },
+      "utility_capabilities": [
+        "multi_sensor_confirmation",
+        "false_positive_reduction",
+        "complex_event_detection"
+      ],
+      "transformation_effects": [
+        "data_fusion"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "attribute_wise_max_over_inputs",
+        "add": {
+          "co_presence": "may_increase",
+          "trajectory": "may_increase_if_cross_sensor"
+        },
+        "notes": "Fusion can increase inference risk by correlating streams."
+      },
+      "ci_annotations": {
+        "informationType.inferredInformationType": [
+          "presence",
+          "trajectory"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Conservative composition: output risk is max of inputs plus risks from correlation."
+    },
+    {
+      "id": "op.route_publish",
+      "label": "Route / Publish",
+      "category": "dataflow_utility",
+      "operator_kind": "sink_or_exporter",
+      "vocabulary_sources": [
+        "WoT:forms/property/event/action endpoint",
+        "GStreamer:sink element",
+        "MQTT publish"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-event"
+        },
+        {
+          "semantic_type": "application/x-observation"
+        },
+        {
+          "semantic_type": "application/x-count"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "external/application-output",
+          "schema": "output_to_application"
+        }
+      ],
+      "parameters": {
+        "recipient": "recipient term",
+        "protocol": [
+          "WoT",
+          "Matter",
+          "MQTT",
+          "REST",
+          "WebRTC",
+          "file"
+        ]
+      },
+      "utility_capabilities": [
+        "deliver_to_application"
+      ],
+      "transformation_effects": [
+        "output_to_application"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {},
+        "reduce": {},
+        "preserve": [],
+        "add": {},
+        "notes": "No privacy transformation; marks the boundary where CI output checks apply."
+      },
+      "ci_annotations": {
+        "pipelineStage": "output_to_application",
+        "recipient": "required",
+        "transmissionPrinciple": [
+          "recipient_limited"
+        ]
+      },
+      "composition_notes": "Final output caps must satisfy the application utility contract."
+    },
+    {
+      "id": "op.schema_adapter",
+      "label": "Schema Adapter",
+      "category": "dataflow_utility",
+      "operator_kind": "adapter",
+      "vocabulary_sources": [
+        "GStreamer:caps negotiation/converter",
+        "WoT:Thing affordance schema",
+        "OpenAPI:response schema"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "*"
+        },
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "audio/x-raw"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application-defined",
+          "schema": "app_accepted_schema"
+        }
+      ],
+      "parameters": {
+        "target_schema": "application contract output schema",
+        "lossy": "boolean"
+      },
+      "utility_capabilities": [
+        "output_compatibility",
+        "format_conversion"
+      ],
+      "transformation_effects": [
+        "schema_normalization"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {},
+        "reduce": {},
+        "preserve": [],
+        "add": {},
+        "notes": "Usually preserves semantics. If lossy=true, must declare additional reduce/remove effects in the instance."
+      },
+      "ci_annotations": {
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Only valid if the adapter declares an explicit conversion from upstream caps to target caps."
+    },
+    {
+      "id": "op.person_object_detector",
+      "label": "Person / Object Detector",
+      "category": "vision_inference",
+      "operator_kind": "semantic_extractor",
+      "vocabulary_sources": [
+        "GStreamer:video analytics metadata",
+        "ONVIF analytics metadata",
+        "smartpriv"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-detections",
+          "schema": "object_detections",
+          "properties": {
+            "interpretedObservation": [
+              "person_detected",
+              "object_detected",
+              "face_detected"
+            ]
+          }
+        }
+      ],
+      "parameters": {
+        "classes": "list of detectable classes",
+        "include_boxes": "boolean",
+        "include_confidence": "boolean",
+        "track_ids": "boolean"
+      },
+      "utility_capabilities": [
+        "person_detection",
+        "object_detection",
+        "face_region_detection",
+        "occupancy_support",
+        "security_support"
+      ],
+      "transformation_effects": [
+        "semantic_extraction",
+        "raw_pixels_removed_if_output_only"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "identity": "low",
+          "face": "low",
+          "body_shape": "low",
+          "clothing": "none",
+          "gait": "low",
+          "activity": "medium",
+          "location": "high",
+          "trajectory": "medium",
+          "co_presence": "high",
+          "visible_text": "none",
+          "aggregate_presence": "high"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "informationType.interpretedObservation": [
+            "person_detected",
+            "object_detected"
+          ]
+        },
+        "notes": "If face boxes or persistent track IDs are output, identity/linkability risk may increase."
+      },
+      "ci_annotations": {
+        "informationType.interpretedObservation": [
+          "person_detected",
+          "object_detected",
+          "face_detected"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Can feed blur, crop, count, activity classifier, or event classifier."
+    },
+    {
+      "id": "op.pose_extractor",
+      "label": "Pose Extractor",
+      "category": "vision_inference",
+      "operator_kind": "semantic_extractor",
+      "vocabulary_sources": [
+        "GStreamer:custom application/x caps",
+        "smartpriv:pose_keypoints"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-pose-keypoints",
+          "schema": "pose_keypoints",
+          "properties": {
+            "interpretedObservation": "pose_keypoints"
+          }
+        }
+      ],
+      "parameters": {
+        "skeleton": [
+          "coco17",
+          "mediapipe33"
+        ],
+        "include_track_ids": "boolean"
+      },
+      "utility_capabilities": [
+        "fall_detection_support",
+        "motion_analysis",
+        "activity_detection_support"
+      ],
+      "transformation_effects": [
+        "semantic_extraction",
+        "raw_pixels_removed"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "identity": "low",
+          "face": "none",
+          "body_shape": "medium",
+          "clothing": "none",
+          "gait": "medium",
+          "activity": "high",
+          "location": "high",
+          "trajectory": "medium",
+          "co_presence": "high",
+          "visible_text": "none",
+          "aggregate_presence": "high"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "informationType.interpretedObservation": [
+            "pose_keypoints"
+          ]
+        },
+        "notes": "Pose removes visual texture but can preserve gait, posture, activity, and trajectories."
+      },
+      "ci_annotations": {
+        "informationType.interpretedObservation": [
+          "pose_keypoints"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Compatible with fall/activity classifiers; incompatible with legacy RGB apps unless adapted."
+    },
+    {
+      "id": "op.ocr_screen_detector",
+      "label": "OCR / Screen-Content Detector",
+      "category": "vision_inference",
+      "operator_kind": "semantic_extractor_or_annotation",
+      "vocabulary_sources": [
+        "smartpriv:screen_content_detected",
+        "DPV-tech:TextualContent"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-text-regions",
+          "schema": "ocr_or_screen_regions",
+          "properties": {
+            "interpretedObservation": "screen_content_detected"
+          }
+        }
+      ],
+      "parameters": {
+        "emit_text": "boolean",
+        "emit_regions_only": "boolean"
+      },
+      "utility_capabilities": [
+        "screen_redaction_support",
+        "visible_text_detection"
+      ],
+      "transformation_effects": [
+        "annotation_for_redaction"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "visible_text": "high",
+          "location": "medium"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "informationType.interpretedObservation": [
+            "screen_content_detected"
+          ]
+        },
+        "notes": "If recognized text is emitted, visible_text risk is high. If only regions are emitted internally, risk should not reach output_to_application."
+      },
+      "ci_annotations": {
+        "informationType.interpretedObservation": [
+          "screen_content_detected"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Usually feeds region_mask_blur rather than output directly."
+    },
+    {
+      "id": "op.audio_level_extractor",
+      "label": "Audio Level Extractor",
+      "category": "audio_inference",
+      "operator_kind": "semantic_extractor",
+      "vocabulary_sources": [
+        "smartpriv:decibel_level",
+        "policy:noise monitor decibel-only"
+      ],
+      "input_caps": [
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-noise-sensor"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-decibel-level",
+          "schema": "decibel_level_duration",
+          "properties": {
+            "sensorPrimitive": "decibel_level"
+          }
+        }
+      ],
+      "parameters": {
+        "window_ms": "integer",
+        "emit_duration": "boolean"
+      },
+      "utility_capabilities": [
+        "noise_monitoring",
+        "sound_level_estimation"
+      ],
+      "transformation_effects": [
+        "audio_waveform_removed",
+        "speech_content_removed"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "speech_content": "none",
+          "speaker_identity": "none",
+          "activity": "low",
+          "location": "low",
+          "co_presence": "low",
+          "aggregate_presence": "medium"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "informationType.sensorPrimitive": [
+            "decibel_level"
+          ],
+          "transmissionPrinciple": [
+            "speech_content_removed",
+            "data_minimized"
+          ]
+        },
+        "notes": "Supports decibel-only policies; does not preserve intelligible audio."
+      },
+      "ci_annotations": {
+        "informationType.sensorPrimitive": [
+          "decibel_level"
+        ],
+        "transmissionPrinciple": [
+          "speech_content_removed"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Can feed aggregate/generalize before publication."
+    },
+    {
+      "id": "op.speech_sound_classifier",
+      "label": "Speech / Sound Classifier",
+      "category": "audio_inference",
+      "operator_kind": "semantic_extractor",
+      "vocabulary_sources": [
+        "smartpriv:noise_event_label",
+        "AudioSet/YAMNet-like labels"
+      ],
+      "input_caps": [
+        {
+          "media_type": "audio/x-raw"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-sound-event-label",
+          "schema": "sound_event_label",
+          "properties": {
+            "interpretedObservation": "noise_event_label"
+          }
+        }
+      ],
+      "parameters": {
+        "labels": "allowed sound labels",
+        "speech_flag_only": "boolean"
+      },
+      "utility_capabilities": [
+        "sound_event_detection",
+        "speech_presence_detection",
+        "safety_audio_event_support"
+      ],
+      "transformation_effects": [
+        "raw_audio_removed",
+        "speech_content_removed_if_label_only"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "speech_content": "none",
+          "speaker_identity": "none",
+          "activity": "medium",
+          "location": "low",
+          "co_presence": "medium",
+          "aggregate_presence": "medium"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "informationType.interpretedObservation": [
+            "noise_event_label"
+          ],
+          "transmissionPrinciple": [
+            "speech_content_removed"
+          ]
+        },
+        "notes": "Sound labels can still reveal activities or presence even when speech content is removed."
+      },
+      "ci_annotations": {
+        "informationType.interpretedObservation": [
+          "noise_event_label"
+        ],
+        "transmissionPrinciple": [
+          "speech_content_removed"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Can feed event classifier, trigger gate, or route/publish as event label."
+    },
+    {
+      "id": "op.keyword_intent_extractor",
+      "label": "Keyword / Intent Extractor",
+      "category": "audio_inference",
+      "operator_kind": "semantic_extractor",
+      "vocabulary_sources": [
+        "WoT:action invocation intent",
+        "smartpriv"
+      ],
+      "input_caps": [
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-transcript"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-command-intent",
+          "schema": "keyword_or_intent"
+        }
+      ],
+      "parameters": {
+        "allowed_intents": "list",
+        "emit_confidence": "boolean"
+      },
+      "utility_capabilities": [
+        "voice_command",
+        "keyword_detection"
+      ],
+      "transformation_effects": [
+        "speech_content_minimized",
+        "raw_audio_removed"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "speech_content": "low",
+          "speaker_identity": "none",
+          "activity": "medium",
+          "location": "low",
+          "co_presence": "low",
+          "aggregate_presence": "low"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "transmissionPrinciple": [
+            "speech_content_removed",
+            "data_minimized"
+          ]
+        },
+        "notes": "Intents reveal narrow semantic content, but not full conversation."
+      },
+      "ci_annotations": {
+        "informationType.interpretedObservation": [
+          "speech_transcribed"
+        ],
+        "transmissionPrinciple": [
+          "speech_content_removed"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Should not emit full transcript unless app contract and CI rules allow it."
+    },
+    {
+      "id": "op.region_select_crop",
+      "label": "Region Select / Crop",
+      "category": "privacy_transformation",
+      "operator_kind": "media_transformer",
+      "vocabulary_sources": [
+        "Peekaboo:select",
+        "GStreamer:videocrop",
+        "DPV:data minimization"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        }
+      ],
+      "output_caps": [
+        {
+          "media_type": "video/x-raw",
+          "properties": {
+            "field_of_view_minimized": true
+          }
+        },
+        {
+          "media_type": "image/x-raw",
+          "properties": {
+            "field_of_view_minimized": true
+          }
+        }
+      ],
+      "parameters": {
+        "region_source": [
+          "static_roi",
+          "detector_regions",
+          "policy_zone"
+        ],
+        "region_label": "string"
+      },
+      "utility_capabilities": [
+        "field_of_view_minimization",
+        "region_specific_monitoring"
+      ],
+      "transformation_effects": [
+        "field_of_view_minimized",
+        "data_minimized"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned_within_selected_region",
+        "remove": [],
+        "set": {},
+        "reduce": {
+          "location": "by_spatial_minimization",
+          "co_presence": "by_excluding_unselected_regions",
+          "visible_text": "if_text_regions_excluded"
+        },
+        "preserve": [],
+        "add": {
+          "transmissionPrinciple": [
+            "field_of_view_minimized",
+            "data_minimized"
+          ]
+        },
+        "notes": "Cropping reduces off-region disclosure but preserves sensitive attributes inside the crop."
+      },
+      "ci_annotations": {
+        "transmissionPrinciple": [
+          "field_of_view_minimized",
+          "data_minimized"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Often placed before detection for efficiency or after detection for privacy-targeted crops."
+    },
+    {
+      "id": "op.region_mask_blur",
+      "label": "Region Mask / Blur",
+      "category": "privacy_transformation",
+      "operator_kind": "media_transformer",
+      "vocabulary_sources": [
+        "DPV:DataRedaction",
+        "GStreamer:video filter",
+        "Peekaboo:noisify"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        }
+      ],
+      "output_caps": [
+        {
+          "media_type": "video/x-raw",
+          "properties": {
+            "redacted": true
+          }
+        },
+        {
+          "media_type": "image/x-raw",
+          "properties": {
+            "redacted": true
+          }
+        }
+      ],
+      "parameters": {
+        "targets": [
+          "face",
+          "body",
+          "screen",
+          "document",
+          "license_plate",
+          "background"
+        ],
+        "method": [
+          "blur",
+          "pixelate",
+          "mask"
+        ],
+        "strength": "number"
+      },
+      "utility_capabilities": [
+        "identity_reduction",
+        "screen_content_removal",
+        "format_preserving_video"
+      ],
+      "transformation_effects": [
+        "face_blurred",
+        "body_blurred",
+        "screen_content_removed",
+        "identity_removed"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "conditional_effects": {
+          "target=face": {
+            "reduce": {
+              "face": "to_low_or_none",
+              "identity": "by_1_or_2_levels"
+            },
+            "preserve": [
+              "body_shape",
+              "clothing",
+              "activity",
+              "location",
+              "trajectory",
+              "co_presence"
+            ]
+          },
+          "target=body": {
+            "reduce": {
+              "body_shape": "by_1_or_2_levels",
+              "clothing": "by_1_or_2_levels",
+              "gait": "by_1_level"
+            }
+          },
+          "target=screen|document": {
+            "reduce": {
+              "visible_text": "to_low_or_none"
+            }
+          },
+          "target=background": {
+            "reduce": {
+              "location": "by_1_level",
+              "visible_text": "by_1_level",
+              "co_presence": "by_1_level"
+            }
+          }
+        },
+        "add": {
+          "transmissionPrinciple": [
+            "face_blurred",
+            "body_blurred",
+            "identity_removed",
+            "data_minimized"
+          ]
+        },
+        "notes": "Effect depends on detected target coverage and blur strength; probes should verify."
+      },
+      "ci_annotations": {
+        "transmissionPrinciple": [
+          "face_blurred",
+          "body_blurred",
+          "identity_removed",
+          "data_minimized"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Format-preserving: downstream apps expecting video may still consume output."
+    },
+    {
+      "id": "op.speech_content_removal",
+      "label": "Speech Content Removal",
+      "category": "privacy_transformation",
+      "operator_kind": "audio_or_text_transformer",
+      "vocabulary_sources": [
+        "DPV:DataRedaction",
+        "smartpriv:speech_content_removed"
+      ],
+      "input_caps": [
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-transcript"
+        }
+      ],
+      "output_caps": [
+        {
+          "media_type": "audio/x-filtered",
+          "properties": {
+            "speech_content_removed": true
+          }
+        },
+        {
+          "semantic_type": "application/x-redacted-transcript"
+        },
+        {
+          "semantic_type": "application/x-command-intent"
+        }
+      ],
+      "parameters": {
+        "mode": [
+          "remove_speech_segments",
+          "redact_transcript",
+          "intent_only",
+          "voice_anonymize"
+        ],
+        "redaction_policy": "string"
+      },
+      "utility_capabilities": [
+        "voice_privacy",
+        "audio_safety_without_speech",
+        "command_intent_minimization"
+      ],
+      "transformation_effects": [
+        "speech_content_removed",
+        "data_minimized"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {},
+        "reduce": {
+          "speech_content": "to_none_or_low",
+          "speaker_identity": "to_low_if_voice_anonymize",
+          "co_presence": "by_removing_dialogue"
+        },
+        "preserve": [],
+        "add": {
+          "transmissionPrinciple": [
+            "speech_content_removed",
+            "data_minimized"
+          ]
+        },
+        "notes": "Filtered audio may still reveal sound events, room acoustics, or presence."
+      },
+      "ci_annotations": {
+        "transmissionPrinciple": [
+          "speech_content_removed",
+          "data_minimized"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Can convert audio into event labels or intents depending on mode."
+    },
+    {
+      "id": "op.occupancy_deriver",
+      "label": "Occupancy Deriver",
+      "category": "derived_representation",
+      "operator_kind": "semantic_summarizer",
+      "vocabulary_sources": [
+        "WoT:property",
+        "Matter:occupancy-like capability",
+        "smartpriv:occupancy_count"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-detections"
+        },
+        {
+          "semantic_type": "application/x-motion-events"
+        },
+        {
+          "semantic_type": "application/x-sensor-reading"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-occupancy-count",
+          "schema": "occupancy_count",
+          "properties": {
+            "interpretedObservation": "occupancy_count"
+          }
+        },
+        {
+          "semantic_type": "application/x-binary-occupancy",
+          "schema": "room_occupied",
+          "properties": {
+            "interpretedObservation": "room_occupied"
+          }
+        }
+      ],
+      "parameters": {
+        "spatial_scope": [
+          "room",
+          "zone",
+          "home"
+        ],
+        "binary": "boolean",
+        "update_period_ms": "integer"
+      },
+      "utility_capabilities": [
+        "occupancy_estimation",
+        "energy_management_support"
+      ],
+      "transformation_effects": [
+        "aggregate_only",
+        "data_minimized",
+        "raw_media_removed"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "identity": "none",
+          "face": "none",
+          "body_shape": "none",
+          "clothing": "none",
+          "gait": "none",
+          "speech_content": "none",
+          "speaker_identity": "none",
+          "activity": "low",
+          "location": "medium",
+          "trajectory": "low",
+          "co_presence": "medium",
+          "visible_text": "none",
+          "aggregate_presence": "high"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "informationType.interpretedObservation": [
+            "room_occupied",
+            "occupancy_count"
+          ],
+          "transmissionPrinciple": [
+            "aggregate_only",
+            "data_minimized"
+          ]
+        },
+        "notes": "Continuous fine-grained counts can still reveal routines; pair with aggregate/generalize if needed."
+      },
+      "ci_annotations": {
+        "informationType.interpretedObservation": [
+          "room_occupied",
+          "occupancy_count"
+        ],
+        "transmissionPrinciple": [
+          "aggregate_only",
+          "data_minimized"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Strong candidate output for low-stakes automation."
+    },
+    {
+      "id": "op.activity_event_classifier",
+      "label": "Activity / Event Classifier",
+      "category": "derived_representation",
+      "operator_kind": "semantic_summarizer",
+      "vocabulary_sources": [
+        "smartpriv:activity_label/fall_event",
+        "WoT:event affordance"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "application/x-pose-keypoints"
+        },
+        {
+          "semantic_type": "application/x-detections"
+        },
+        {
+          "semantic_type": "application/x-sound-event-label"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-activity-label",
+          "schema": "activity_label",
+          "properties": {
+            "interpretedObservation": "activity_label"
+          }
+        },
+        {
+          "semantic_type": "application/x-safety-event",
+          "schema": "fall_or_safety_event",
+          "properties": {
+            "inferredInformationType": "fall_event"
+          }
+        }
+      ],
+      "parameters": {
+        "labels": "allowed activity/event labels",
+        "emit_confidence": "boolean"
+      },
+      "utility_capabilities": [
+        "fall_detection",
+        "safety_monitoring",
+        "intrusion_detection",
+        "activity_detection"
+      ],
+      "transformation_effects": [
+        "event_label_only",
+        "data_minimized"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "drop_unmentioned",
+        "remove": [],
+        "set": {
+          "identity": "none",
+          "face": "none",
+          "body_shape": "none",
+          "clothing": "none",
+          "gait": "low",
+          "speech_content": "none",
+          "speaker_identity": "none",
+          "activity": "high",
+          "location": "medium",
+          "trajectory": "low",
+          "co_presence": "low",
+          "visible_text": "none",
+          "aggregate_presence": "medium"
+        },
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "informationType.interpretedObservation": [
+            "activity_label"
+          ],
+          "informationType.inferredInformationType": [
+            "fall_event"
+          ],
+          "transmissionPrinciple": [
+            "data_minimized"
+          ]
+        },
+        "notes": "Event labels remove raw media but intentionally preserve task-relevant activity information."
+      },
+      "ci_annotations": {
+        "informationType.interpretedObservation": [
+          "activity_label"
+        ],
+        "informationType.inferredInformationType": [
+          "fall_event"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Can publish as WoT event; may be CI-acceptable for safety but not routine monitoring."
+    },
+    {
+      "id": "op.aggregate_generalize",
+      "label": "Aggregate / Generalize",
+      "category": "minimization",
+      "operator_kind": "semantic_summarizer",
+      "vocabulary_sources": [
+        "DPV:Aggregate",
+        "Peekaboo:aggregate",
+        "stream processing aggregation"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-detections"
+        },
+        {
+          "semantic_type": "application/x-event"
+        },
+        {
+          "semantic_type": "application/x-count"
+        },
+        {
+          "semantic_type": "application/x-activity-label"
+        },
+        {
+          "semantic_type": "application/x-decibel-level"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-aggregate",
+          "schema": "aggregate_summary"
+        }
+      ],
+      "parameters": {
+        "spatial_granularity": [
+          "person",
+          "room",
+          "zone",
+          "building"
+        ],
+        "temporal_granularity_ms": "integer",
+        "category_granularity": [
+          "fine",
+          "coarse"
+        ],
+        "thresholds": "optional thresholds"
+      },
+      "utility_capabilities": [
+        "data_minimization",
+        "analytics_summary",
+        "routine_leakage_reduction"
+      ],
+      "transformation_effects": [
+        "aggregate_only",
+        "data_minimized"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned_but_reduce_granularity",
+        "remove": [],
+        "set": {},
+        "reduce": {
+          "identity": "to_none_if_group_size_sufficient",
+          "trajectory": "by_spatiotemporal_aggregation",
+          "location": "by_spatial_generalization",
+          "activity": "by_category_generalization",
+          "co_presence": "depends_on_group_size",
+          "aggregate_presence": "preserved_or_increased"
+        },
+        "preserve": [],
+        "add": {
+          "transmissionPrinciple": [
+            "aggregate_only",
+            "data_minimized"
+          ]
+        },
+        "notes": "Aggregation can still reveal small-group presence or routines if groups/time windows are too small."
+      },
+      "ci_annotations": {
+        "transmissionPrinciple": [
+          "aggregate_only",
+          "data_minimized"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Use after semantic extraction; analyzer should account for k/group size when available."
+    },
+    {
+      "id": "op.drop_discard",
+      "label": "Drop / Discard",
+      "category": "minimization",
+      "operator_kind": "sink",
+      "vocabulary_sources": [
+        "DPV:DataErasure-like",
+        "stream sink/drop"
+      ],
+      "input_caps": [
+        {
+          "media_type": "video/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        },
+        {
+          "media_type": "audio/x-raw"
+        },
+        {
+          "semantic_type": "*"
+        }
+      ],
+      "output_caps": [],
+      "parameters": {
+        "drop_stage": [
+          "raw_input",
+          "intermediate_representation",
+          "output_to_application"
+        ],
+        "after_successor": "optional downstream operator id"
+      },
+      "utility_capabilities": [
+        "no_raw_data_retention",
+        "ephemeral_processing"
+      ],
+      "transformation_effects": [
+        "discard",
+        "no_raw_data_retention",
+        "ephemeral_processing"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "remove_all_for_this_branch",
+        "remove": [
+          "identity",
+          "face",
+          "body_shape",
+          "clothing",
+          "gait",
+          "speech_content",
+          "speaker_identity",
+          "activity",
+          "location",
+          "trajectory",
+          "co_presence",
+          "visible_text",
+          "aggregate_presence"
+        ],
+        "set": {},
+        "reduce": {},
+        "preserve": [],
+        "add": {
+          "transmissionPrinciple": [
+            "no_raw_data_retention",
+            "ephemeral_processing"
+          ]
+        },
+        "notes": "For the discarded branch, no data reaches downstream stages; does not erase copies outside the hub."
+      },
+      "ci_annotations": {
+        "transmissionPrinciple": [
+          "no_raw_data_retention",
+          "ephemeral_processing"
+        ],
+        "pipelineStage": "intermediate_representation"
+      },
+      "composition_notes": "Important for implementation: ensure raw/intermediate artifacts are not retained after derived output is produced."
+    }
+  ],
+  "control_primitives_not_dataflow_operators": [
+    {
+      "id": "ctrl.policy_gate",
+      "label": "Policy Gate",
+      "role": "checks candidate staged flows against CI/policy rules before execution/export",
+      "why_separate": "It does not transform data; it permits, blocks, or requires review of a staged flow."
+    },
+    {
+      "id": "ctrl.obligation_annotator",
+      "label": "Obligation Annotator",
+      "role": "attaches obligations such as disclosed, local_processing, authorized_personnel_only, limited_retention",
+      "why_separate": "These conditions govern the flow but are not transformations of sensor data."
+    },
+    {
+      "id": "ctrl.no_compromise_resolver",
+      "label": "No-Compromise Resolver",
+      "role": "returns deny/degrade/consent-required/insufficient-evidence when no feasible pipeline exists",
+      "why_separate": "This is a decision outcome over a candidate set, not a transformation operator."
+    }
+  ],
+  "example_pipeline_abstract_evaluation": {
+    "pipeline": [
+      "op.source(video_content)",
+      "op.sample(sample_period_ms=1000)",
+      "op.person_object_detector(classes=['person'])",
+      "op.occupancy_deriver(binary=false, spatial_scope='room')",
+      "op.aggregate_generalize(temporal_granularity_ms=300000)",
+      "op.schema_adapter(target_schema='WoT.property.occupancyCount')",
+      "op.route_publish(recipient='hvac_controller')",
+      "op.drop_discard(drop_stage='raw_input')"
+    ],
+    "expected_output_caps": {
+      "semantic_type": "application/x-aggregate",
+      "schema": "occupancy_count",
+      "affordance": "WoT.property",
+      "property_name": "occupancyCount"
+    },
+    "expected_ci_terms": {
+      "informationType.interpretedObservation": [
+        "occupancy_count"
+      ],
+      "transmissionPrinciple": [
+        "aggregate_only",
+        "data_minimized",
+        "no_raw_data_retention"
+      ],
+      "pipelineStage": "output_to_application"
+    },
+    "expected_residual_disclosure": {
+      "identity": "none",
+      "face": "none",
+      "body_shape": "none",
+      "clothing": "none",
+      "gait": "none",
+      "speech_content": "none",
+      "speaker_identity": "none",
+      "activity": "low",
+      "location": "low_to_medium",
+      "trajectory": "low",
+      "co_presence": "medium",
+      "visible_text": "none",
+      "aggregate_presence": "high"
+    }
+  }
+}

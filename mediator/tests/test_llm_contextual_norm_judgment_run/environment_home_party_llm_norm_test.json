@@ -1,0 +1,35 @@
+{
+  "context": [
+    "home"
+  ],
+  "space": [
+    "living_room",
+    "common_area",
+    "interior_home_space"
+  ],
+  "subject": [
+    "resident",
+    "guest",
+    "bystander"
+  ],
+  "recipient": [
+    "downstream_application",
+    "hvac_controller"
+  ],
+  "purpose": [
+    "energy_management"
+  ],
+  "social_context_tags": [
+    "evening",
+    "multiple_people_present",
+    "unfamiliar_guests_present",
+    "casual_social_gathering",
+    "weak_preference_channel",
+    "not_emergency"
+  ],
+  "metadata": {
+    "time_of_day": "evening",
+    "people_count_estimate": "multiple",
+    "event_inferred": "casual_social_gathering"
+  }
+}
