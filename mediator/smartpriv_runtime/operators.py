@@ -49,6 +49,19 @@ def _replace_image_data(original: Any, image: np.ndarray) -> Any:
     return image
 
 
+def _redacted_media_caps(caps: Dict[str, Any]) -> Dict[str, Any]:
+    """Mark media output as redacted rather than raw while preserving properties."""
+    update: Dict[str, Any] = {"properties": {"redacted": True}}
+    t = cap_type(caps)
+    if t.startswith("image/"):
+        update["media_type"] = "image/x-redacted"
+        update["schema"] = "redacted_image_frame"
+    elif t.startswith("video/"):
+        update["media_type"] = "video/x-redacted"
+        update["schema"] = "redacted_video_stream"
+    return merge_caps(caps, update)
+
+
 def _box_xyxy(box: Dict[str, Any], width: int, height: int) -> Tuple[int, int, int, int]:
     if "bbox" in box:
         b = box["bbox"]
@@ -803,7 +816,7 @@ class RegionMaskBlurOperator(Operator):
     def apply(self, item: DataItem) -> Optional[DataItem]:
         image = _as_image(item.data)
         if image is None:
-            return item.clone(caps=merge_caps(item.caps, {"properties": {"redacted": True}}))
+            return item.clone(caps=_redacted_media_caps(item.caps))
         out = image.copy()
         h, w = out.shape[:2]
         targets = ensure_list(self.params.get("targets") or self.params.get("target") or "face")
@@ -819,7 +832,7 @@ class RegionMaskBlurOperator(Operator):
         for ann in anns:
             x1, y1, x2, y2 = _box_xyxy(ann, w, h)
             out[y1:y2, x1:x2] = self._redact_patch(out[y1:y2, x1:x2])
-        caps = merge_caps(item.caps, {"properties": {"redacted": True}})
+        caps = _redacted_media_caps(item.caps)
         return item.clone(caps=caps, data=_replace_image_data(item.data, out), metadata={"redacted_targets": targets, "redacted_regions": len(anns)})
 
     def _redact_patch(self, patch: np.ndarray) -> np.ndarray:

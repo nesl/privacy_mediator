@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Standard-library web survey server for rating contextual-integrity scenarios
-instantiated with concrete preprocessing outputs.
+Standard-library web survey server for rating smart-space data-sharing scenarios
+instantiated with concrete preprocessing outputs. Participant-facing text avoids
+contextual-integrity jargon; internal exports still keep method/output metadata.
 
 Default rating unit:
   one (context scenario, unique shared output / information type) survey case.
 
-If multiple baselines produce the same shared output for the same context, they
-are deduplicated into one survey item and the item records all contributing
-baseline IDs/pipeline IDs.
+If multiple baselines or ablations produce the same shared output for the same
+context, they are deduplicated into one survey item and the item records all
+contributing method IDs/pipeline IDs.
 
 Run from the survey directory or project root, for example:
 
@@ -210,28 +211,65 @@ def load_pipeline_rows(pipeline_dir: Optional[Path]) -> Tuple[List[Dict[str, Any
     index_path = pipeline_dir / "index.json"
     summary_path = pipeline_dir / "summary.json"
     source = None
+    method_registry: Dict[str, Dict[str, Any]] = {}
 
     if index_path.exists():
         index = load_json(index_path)
+        for m in index.get("methods") or []:
+            if isinstance(m, dict) and m.get("method_id"):
+                method_registry[str(m["method_id"])] = dict(m)
+
         for sid, meta in (index.get("contexts") or {}).items():
-            for baseline, row in (meta.get("baselines") or {}).items():
-                if isinstance(row, dict):
-                    r = dict(row)
-                    r.setdefault("scenario_id", sid)
-                    r.setdefault("baseline", baseline)
-                    rows.append(r)
+            method_rows = meta.get("methods") or {}
+
+            # Backward compatibility: older generators only stored baselines;
+            # some intermediate versions stored baselines and ablations separately.
+            if not method_rows:
+                method_rows = {}
+                for baseline, row in (meta.get("baselines") or {}).items():
+                    if isinstance(row, dict):
+                        method_rows[str(row.get("method_id") or baseline)] = row
+                for ablation, row in (meta.get("ablations") or {}).items():
+                    if isinstance(row, dict):
+                        method_rows[str(row.get("method_id") or f"ablation:{ablation}")] = row
+
+            for method_id, row in method_rows.items():
+                if not isinstance(row, dict):
+                    continue
+                r = dict(row)
+                registry = method_registry.get(str(method_id), {})
+                r.setdefault("scenario_id", sid)
+                r.setdefault("method_id", str(method_id))
+                r.setdefault("method_kind", registry.get("method_kind") or ("ablation" if str(method_id).startswith("ablation:") else "baseline"))
+                r.setdefault("baseline", r.get("method_id"))
+                r.setdefault("baseline_id", registry.get("baseline_id"))
+                r.setdefault("ablation_mode", registry.get("ablation_mode"))
+                r.setdefault("parent_method", registry.get("parent_method"))
+                r.setdefault("method_label", registry.get("method_label") or r.get("method_id"))
+                rows.append(r)
         source = str(index_path)
     elif summary_path.exists():
         data = load_json(summary_path)
         if isinstance(data, list):
             rows = [dict(r) for r in data if isinstance(r, dict)]
+            for r in rows:
+                r.setdefault("method_id", r.get("baseline"))
+                r.setdefault("method_kind", "ablation" if str(r.get("method_id") or "").startswith("ablation:") else "baseline")
+                r.setdefault("method_label", r.get("method_id"))
         source = str(summary_path)
 
+    baseline_methods = sorted({str(r.get("method_id")) for r in rows if r.get("method_kind") == "baseline" and r.get("method_id")})
+    ablation_methods = sorted({str(r.get("method_id")) for r in rows if r.get("method_kind") == "ablation" and r.get("method_id")})
     return rows, {
         "status": "ok" if rows else "empty",
         "pipeline_output_dir": str(pipeline_dir),
         "source": source,
-        "baseline_pipeline_row_count": len(rows),
+        "method_pipeline_row_count": len(rows),
+        "baseline_pipeline_row_count": len([r for r in rows if r.get("method_kind") == "baseline"]),
+        "ablation_pipeline_row_count": len([r for r in rows if r.get("method_kind") == "ablation"]),
+        "method_ids": sorted({str(r.get("method_id")) for r in rows if r.get("method_id")}),
+        "baseline_method_ids": baseline_methods,
+        "ablation_method_ids": ablation_methods,
     }
 
 
@@ -280,34 +318,75 @@ def information_types_from_candidate(candidate: Optional[Dict[str, Any]], row: D
 
 
 def human_output_label(final_cap: Dict[str, Any], info_types: Dict[str, List[str]], row: Dict[str, Any]) -> str:
+    """Plain-language description of the shared output for participants."""
     t = cap_type(final_cap) or str(row.get("final_output_type") or "")
     schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
     props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
-    redacted = bool(props.get("redacted") or props.get("speech_content_removed") or props.get("field_of_view_minimized"))
+    redacted = bool(props.get("redacted"))
+    speech_removed = bool(props.get("speech_content_removed")) or t == "audio/x-filtered"
+    fov_minimized = bool(props.get("field_of_view_minimized"))
 
     if t == "application/x-pose-keypoints" or "pose" in schema:
-        if "yolo" in schema or props.get("skeleton") == "coco17":
-            return "YOLO COCO-17 pose keypoint sequence"
-        return "Pose keypoint sequence"
+        return "Body pose points (a stick-figure skeleton, not a photo or video)"
     if t.startswith("image/"):
-        return "Redacted image frames" if redacted else "Raw image frames"
+        if redacted:
+            return "Camera image with identifying details blurred or hidden"
+        if fov_minimized:
+            return "Cropped camera image showing only the relevant area"
+        return "Camera image"
     if t.startswith("video/"):
-        return "Redacted video stream" if redacted else "Raw video stream"
-    if t == "audio/x-filtered" or props.get("speech_content_removed"):
-        return "Speech-removed audio waveform"
+        if redacted:
+            return "Camera video with identifying details blurred or hidden"
+        if fov_minimized:
+            return "Cropped camera video showing only the relevant area"
+        return "Camera video"
+    if speech_removed:
+        return "Audio with spoken words removed"
     if t.startswith("audio/"):
-        return "Raw audio waveform"
+        return "Audio recording"
     if t == "application/x-youhome-av-sample" or "youhome" in schema:
-        return "Synchronized audio-video sample/manifest"
-    if "occupancy" in t or "occupancy" in schema:
-        return "Occupancy estimate/count"
-    if "sound" in t or "sound" in schema:
-        return "Sound event label"
+        return "Combined audio and video sample"
+    if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
+        return "Whether someone is present, or how many people are present"
+    if "decibel" in t or "decibel" in schema:
+        return "Sound level only, without recorded speech"
+    if "sound" in t or "sound" in schema or "noise_event" in schema:
+        return "Sound category, such as alarm, glass breaking, or other noise"
     if "activity" in t or "activity" in schema:
-        return "Activity label"
+        return "Activity category, such as walking, cooking, or lying down"
     if "event" in t or "event" in schema:
-        return "Event label or alert"
-    return first_present(schema, t, row.get("matched_output_cap"), "Application output") or "Application output"
+        return "Event alert or label"
+    return first_present(row.get("matched_output_cap"), schema, t, "Data from the smart-space system") or "Data from the smart-space system"
+
+
+def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
+    """Short lay explanation shown below the output label."""
+    t = cap_type(final_cap) or str(row.get("final_output_type") or "")
+    schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
+    props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
+    if t == "application/x-pose-keypoints" or "pose" in schema:
+        return "The app would receive body joint locations, like a stick-figure skeleton. It would not receive the original image or video."
+    if t.startswith(("image/", "video/")) and props.get("redacted"):
+        return "The app would receive camera media after parts such as faces, bodies, screens, or background details are blurred or hidden."
+    if t.startswith(("image/", "video/")) and props.get("field_of_view_minimized"):
+        return "The app would receive only a cropped part of the camera view, rather than the full scene."
+    if t.startswith(("image/", "video/")):
+        return "The app would receive camera media from the space."
+    if t == "audio/x-filtered" or props.get("speech_content_removed"):
+        return "The app would receive audio after spoken words are removed; other sounds may remain."
+    if t.startswith("audio/"):
+        return "The app would receive audio from the space."
+    if "decibel" in t or "decibel" in schema:
+        return "The app would receive a sound-level measurement, not an audio recording."
+    if "sound" in t or "sound" in schema:
+        return "The app would receive a label describing the type of sound, not the original audio."
+    if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
+        return "The app would receive a presence or count estimate, not the original sensor recording."
+    if "activity" in t or "activity" in schema:
+        return "The app would receive an activity label, not the original sensor recording."
+    if "event" in t or "event" in schema:
+        return "The app would receive an event label or alert, not the original sensor recording."
+    return "This is the data that would be sent out of the smart-space system for the stated purpose."
 
 
 def privacy_class_from_output(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
@@ -350,7 +429,16 @@ def compact_final_cap(cap: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in out.items() if v not in (None, {}, [])}
 
 
+def row_represents_shared_output(row: Dict[str, Any]) -> bool:
+    decision = str(row.get("decision") or "").strip().lower()
+    return decision in {"select_pipeline", "selected", "accept", "accepted"}
+
+
 def build_output_variant_from_row(row: Dict[str, Any], pipeline_dir: Optional[Path]) -> Optional[Dict[str, Any]]:
+    # no_compromise / review / no_candidates rows may contain diagnostics or closest
+    # rejected pipeline paths; those must not be treated as shared outputs.
+    if not row_represents_shared_output(row):
+        return None
     candidate = selected_pipeline_from_row(row, pipeline_dir)
     final_cap = (candidate or {}).get("final_output_cap") or {}
     if not final_cap:
@@ -375,6 +463,7 @@ def build_output_variant_from_row(row: Dict[str, Any], pipeline_dir: Optional[Pa
     return {
         "output_signature": stable_hash_obj(signature_obj),
         "output_variant_label": label,
+        "output_variant_description": output_description(final_cap, row),
         "variant_privacy_class": privacy_class_from_output(final_cap, row),
         "final_output_cap": final_cap,
         "information_types": info_types,
@@ -390,7 +479,8 @@ def no_output_variant_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
     signature_obj = {"decision": decision, "kind": "no_output"}
     return {
         "output_signature": stable_hash_obj(signature_obj),
-        "output_variant_label": f"No data shared ({decision})",
+        "output_variant_label": "No data would be shared",
+        "output_variant_description": f"The system would not send data for this request ({decision}).",
         "variant_privacy_class": "no_output",
         "final_output_cap": {},
         "information_types": {"sensorPrimitive": [], "interpretedObservation": [], "inferredInformationType": []},
@@ -423,8 +513,11 @@ def build_survey_items(
                 "flow_id": sid,
                 "flow": f,
                 "output_variant": None,
+                "method_ids": [],
+                "method_details": [],
                 "baseline_ids": [],
                 "baseline_details": [],
+                "ablation_modes": [],
             })
         return items, {
             "output_augmented": False,
@@ -467,6 +560,7 @@ def build_survey_items(
                 "output_variant": {
                     "output_variant_id": f"out_{variant['output_signature']}",
                     "output_variant_label": variant["output_variant_label"],
+                    "output_variant_description": variant.get("output_variant_description"),
                     "variant_privacy_class": variant["variant_privacy_class"],
                     "final_output_cap": variant["final_output_cap"],
                     "information_types": variant["information_types"],
@@ -474,14 +568,24 @@ def build_survey_items(
                     "matched_output_schema": variant.get("matched_output_schema"),
                     "signature_object": variant.get("signature_object"),
                 },
+                "method_ids": [],
+                "method_details": [],
                 "baseline_ids": [],
                 "baseline_details": [],
+                "ablation_modes": [],
             }
-        baseline = str(row.get("baseline") or "unknown_baseline")
-        if baseline not in grouped[key]["baseline_ids"]:
-            grouped[key]["baseline_ids"].append(baseline)
-        grouped[key]["baseline_details"].append({
+        method_id = str(row.get("method_id") or row.get("baseline") or "unknown_method")
+        method_kind = str(row.get("method_kind") or ("ablation" if method_id.startswith("ablation:") else "baseline"))
+        baseline = str(row.get("baseline") or method_id)
+        ablation_mode = row.get("ablation_mode")
+        method_detail = {
+            "method_id": method_id,
+            "method_kind": method_kind,
+            "method_label": row.get("method_label") or method_id,
             "baseline": baseline,
+            "baseline_id": row.get("baseline_id"),
+            "ablation_mode": ablation_mode,
+            "parent_method": row.get("parent_method"),
             "decision": row.get("decision"),
             "selected_pipeline_id": row.get("selected_pipeline_id"),
             "matched_output_cap": row.get("matched_output_cap"),
@@ -490,11 +594,24 @@ def build_survey_items(
             "final_output_schema": row.get("final_output_schema"),
             "operators": row.get("operators"),
             "baseline_output_dir": row.get("baseline_output_dir"),
+            "method_output_dir": row.get("method_output_dir") or row.get("baseline_output_dir"),
             "result_json": row.get("result_json"),
             "selected_pipeline_json": row.get("selected_pipeline_json"),
             "pipeline_spec_json": row.get("pipeline_spec_json"),
             "error": row.get("error"),
-        })
+        }
+        if method_id not in grouped[key]["method_ids"]:
+            grouped[key]["method_ids"].append(method_id)
+        grouped[key]["method_details"].append(method_detail)
+
+        # Backward-compatible aliases: baseline_ids now contain method IDs too,
+        # so older export code still links one survey response to every producing
+        # baseline/ablation. baseline_details mirrors method_details.
+        if method_id not in grouped[key]["baseline_ids"]:
+            grouped[key]["baseline_ids"].append(method_id)
+        grouped[key]["baseline_details"].append(method_detail)
+        if method_kind == "ablation" and ablation_mode and str(ablation_mode) not in grouped[key]["ablation_modes"]:
+            grouped[key]["ablation_modes"].append(str(ablation_mode))
 
     items = list(grouped.values())
     # Stable, readable order.
@@ -504,8 +621,12 @@ def build_survey_items(
         "output_augmented": True,
         "context_scenario_count": len(flows),
         "survey_item_pool_count": len(items),
-        "baseline_pipeline_row_count": len(pipeline_rows),
-        "baseline_pipeline_rows_for_known_contexts": rows_for_known_context,
+        "method_pipeline_row_count": len(pipeline_rows),
+        "method_pipeline_rows_for_known_contexts": rows_for_known_context,
+        "method_pipeline_rows_with_output": rows_with_output,
+        "method_pipeline_rows_without_output": rows_without_output,
+        "baseline_pipeline_row_count": len([r for r in pipeline_rows if r.get("method_kind") == "baseline"]),
+        "ablation_pipeline_row_count": len([r for r in pipeline_rows if r.get("method_kind") == "ablation"]),
         "baseline_pipeline_rows_with_output": rows_with_output,
         "baseline_pipeline_rows_without_output": rows_without_output,
         "deduplicated_output_variant_count": len(items),
@@ -586,7 +707,13 @@ def init_db(db_path: Path) -> None:
         ensure_column(conn, "responses", "baseline_ids_json", "TEXT")
         ensure_column(conn, "responses", "baseline_count", "INTEGER")
         ensure_column(conn, "responses", "baseline_details_json", "TEXT")
+        ensure_column(conn, "responses", "method_ids_json", "TEXT")
+        ensure_column(conn, "responses", "method_count", "INTEGER")
+        ensure_column(conn, "responses", "method_details_json", "TEXT")
+        ensure_column(conn, "responses", "ablation_modes_json", "TEXT")
+        ensure_column(conn, "responses", "baseline_method_ids_json", "TEXT")
         ensure_column(conn, "responses", "output_variant_label", "TEXT")
+        ensure_column(conn, "responses", "output_variant_description", "TEXT")
         ensure_column(conn, "responses", "variant_privacy_class", "TEXT")
         ensure_column(conn, "responses", "final_output_type", "TEXT")
         ensure_column(conn, "responses", "final_output_schema", "TEXT")
@@ -634,8 +761,15 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
         elapsed_int = int(elapsed_ms) if elapsed_ms not in (None, "") else None
     except Exception:
         elapsed_int = None
-    baseline_ids = flow.get("baseline_ids") or []
-    baseline_details = flow.get("baseline_details") or []
+    method_ids = flow.get("method_ids") or flow.get("baseline_ids") or []
+    method_details = flow.get("method_details") or flow.get("baseline_details") or []
+    baseline_ids = flow.get("baseline_ids") or method_ids
+    baseline_details = flow.get("baseline_details") or method_details
+    ablation_modes = flow.get("ablation_modes") or []
+    baseline_method_ids = [
+        d.get("method_id") for d in method_details
+        if isinstance(d, dict) and d.get("method_kind") == "baseline" and d.get("method_id")
+    ]
     with sqlite3.connect(db_path) as conn:
         conn.execute("""
             INSERT OR REPLACE INTO responses(
@@ -643,9 +777,11 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
                 context_family, output_variant_id, rating, confidence, free_text,
                 elapsed_ms, created_at_ms, item_json, raw_payload_json,
                 item_id, baseline_ids_json, baseline_count, baseline_details_json,
-                output_variant_label, variant_privacy_class, final_output_type,
+                method_ids_json, method_count, method_details_json,
+                ablation_modes_json, baseline_method_ids_json,
+                output_variant_label, output_variant_description, variant_privacy_class, final_output_type,
                 final_output_schema, information_types_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             participant_id,
@@ -666,7 +802,13 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
             json.dumps(baseline_ids, sort_keys=True),
             len(baseline_ids),
             json.dumps(baseline_details, sort_keys=True),
+            json.dumps(method_ids, sort_keys=True),
+            len(method_ids),
+            json.dumps(method_details, sort_keys=True),
+            json.dumps(ablation_modes, sort_keys=True),
+            json.dumps(baseline_method_ids, sort_keys=True),
             flow.get("output_variant_label"),
+            flow.get("output_variant_description"),
             flow.get("variant_privacy_class"),
             cap_type(final_cap),
             cap_schema(final_cap),
@@ -737,35 +879,83 @@ def assign_items(items: List[Dict[str, Any]], k: int, seed: int, participant_id:
     return chosen[:target_n]
 
 
+def _field_value_by_label(flow: Dict[str, Any], label: str) -> Optional[str]:
+    for row in flow.get("participant_display_fields", []) or []:
+        if row.get("label") == label:
+            val = row.get("value")
+            return str(val) if val is not None else None
+    return None
+
+
+def _task_label(flow: Dict[str, Any]) -> str:
+    return str(flow.get("task_label") or flow.get("task") or "smart-space task").replace("_", " ")
+
+
+def _plain_field(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Rename technical CI labels into lay survey labels."""
+    label = str(row.get("label") or "")
+    mapping = {
+        "Situation": ("Where this happens", "The physical setting for the scenario."),
+        "Sender": ("Who collects or sends the data", "The device, system, or organization that would send the data."),
+        "Data subject": ("Person the data is about", "The person whose activity, presence, or surroundings are represented by the data."),
+        "Recipient": ("Who receives the data", "The person, organization, or app that would receive the data."),
+        "Purpose": ("Why the data is used", "The stated reason for sharing the data."),
+        "Transmission principle": ("How the data is shared or handled", "A condition on sharing, such as only sharing during an event, processing locally, or giving notice."),
+    }
+    new_label, default_desc = mapping.get(label, (label, str(row.get("description") or row.get("help") or "")))
+    return {
+        "label": new_label,
+        "value": row.get("value"),
+        "description": row.get("description") or row.get("help") or default_desc,
+        "example": row.get("example"),
+    }
+
+
 def participant_display_fields(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    fields = [
-        r for r in flow.get("participant_display_fields", [])
-        if r.get("label") in {"Situation", "Sender", "Data subject", "Recipient", "Purpose", "Transmission principle"}
-    ]
+    keep = {"Situation", "Sender", "Data subject", "Recipient", "Purpose", "Transmission principle"}
+    fields = [_plain_field(r) for r in flow.get("participant_display_fields", []) if r.get("label") in keep]
     if output_variant:
-        output = {
-            "label": "Data shared",
+        fields.append({
+            "label": "What would be shared",
             "value": output_variant.get("output_variant_label"),
-            "description": "The data/output that would be shared with the application after preprocessing.",
-        }
-        info_vals: List[str] = []
-        for vals in (output_variant.get("information_types") or {}).values():
-            info_vals.extend(vals or [])
-        info = {
-            "label": "Information type",
-            "value": ", ".join(sorted(set(info_vals))) if info_vals else output_variant.get("matched_output_schema"),
-            "description": "The CI information type represented by the shared output.",
-        }
-        fields.append(output)
-        fields.append(info)
+            "description": output_variant.get("output_variant_description") or "The data that would be sent to the app or recipient in this scenario.",
+        })
     return fields
+
+
+def plain_vignette(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> str:
+    task = _task_label(flow)
+    situation = _field_value_by_label(flow, "Situation") or "the described smart-space setting"
+    sender = _field_value_by_label(flow, "Sender") or "the system"
+    subject = _field_value_by_label(flow, "Data subject") or "a person in the space"
+    recipient = _field_value_by_label(flow, "Recipient") or "the app or recipient"
+    purpose = _field_value_by_label(flow, "Purpose") or "the stated purpose"
+    handling = _field_value_by_label(flow, "Transmission principle") or "the stated sharing condition"
+    output = (output_variant or {}).get("output_variant_label") or "no data"
+
+    if output_variant and (output_variant.get("variant_privacy_class") == "no_output"):
+        output_sentence = "In this case, the system would not share data for the request."
+    else:
+        output_sentence = f"The data shared would be: {output}."
+
+    return (
+        "Please imagine this situation involves you, your space, or someone you are responsible for "
+        "in the role of the person the data is about. "
+        f"A smart-space system is being considered for {task}. The setting is {situation}. "
+        f"The data is about {subject}. {sender} would share information with {recipient} "
+        f"for {purpose}. The data would be handled as follows: {handling}. "
+        f"{output_sentence}"
+    )
 
 
 def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, Any], index: int, total: int) -> Dict[str, Any]:
     base = items[int(assignment["item_index"])]
     flow = base["flow"]
     output_variant = base.get("output_variant")
-    baseline_ids = list(base.get("baseline_ids") or [])
+    method_ids = list(base.get("method_ids") or base.get("baseline_ids") or [])
+    method_details = list(base.get("method_details") or base.get("baseline_details") or [])
+    baseline_ids = list(base.get("baseline_ids") or method_ids)
+    ablation_modes = list(base.get("ablation_modes") or [])
     return {
         "index": index,
         "total": total,
@@ -782,29 +972,37 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
             "expected_acceptability_prior_for_stratification": flow.get("expected_acceptability_prior_for_stratification"),
             "output_variant_id": (output_variant or {}).get("output_variant_id"),
             "output_variant_label": (output_variant or {}).get("output_variant_label"),
+            "output_variant_description": (output_variant or {}).get("output_variant_description"),
             "variant_privacy_class": (output_variant or {}).get("variant_privacy_class"),
+            "method_ids": method_ids,
+            "method_count": len(method_ids),
+            "method_details": method_details,
             "baseline_ids": baseline_ids,
             "baseline_count": len(baseline_ids),
-            "baseline_details": list(base.get("baseline_details") or []),
+            "baseline_details": list(base.get("baseline_details") or method_details),
+            "ablation_modes": ablation_modes,
         },
-        "vignette": flow.get("participant_vignette"),
+        "vignette": plain_vignette(flow, output_variant),
         "display_fields": participant_display_fields(flow, output_variant),
         "output_data_slot": {
             "status": "included_from_generated_pipeline_outputs" if output_variant else "not_included_in_context_only_survey",
             "output_data": (output_variant or {}).get("output_variant_label"),
             "output_variant_id": (output_variant or {}).get("output_variant_id"),
             "output_variant_label": (output_variant or {}).get("output_variant_label"),
+            "output_variant_description": (output_variant or {}).get("output_variant_description"),
             "variant_privacy_class": (output_variant or {}).get("variant_privacy_class"),
             "final_output_cap": (output_variant or {}).get("final_output_cap"),
             "information_types": (output_variant or {}).get("information_types"),
             "matched_output_cap": (output_variant or {}).get("matched_output_cap"),
             "matched_output_schema": (output_variant or {}).get("matched_output_schema"),
+            "method_ids": method_ids,
+            "method_details": method_details,
             "baseline_ids": baseline_ids,
-            "baseline_details": list(base.get("baseline_details") or []),
+            "baseline_details": list(base.get("baseline_details") or method_details),
+            "ablation_modes": ablation_modes,
         },
         "ci_constraint_evaluation_hidden_from_participant": flow.get("ci_constraint_evaluation", {}),
     }
-
 
 def export_rows(db_path: Path) -> List[Dict[str, Any]]:
     with sqlite3.connect(db_path) as conn:
@@ -823,7 +1021,9 @@ def summary(db_path: Path, state: SurveyState) -> Dict[str, Any]:
     out = {
         **state.item_pool_summary,
         "pipeline_load_info": state.pipeline_load_info,
-        "offline_methods": OFFLINE_METHODS,
+        "offline_methods": state.pipeline_load_info.get("method_ids") or OFFLINE_METHODS,
+        "baseline_method_ids": state.pipeline_load_info.get("baseline_method_ids", []),
+        "ablation_method_ids": state.pipeline_load_info.get("ablation_method_ids", []),
         "session_count": session_count,
         "response_count": response_count,
         "by_task": by_task,
@@ -888,11 +1088,15 @@ def make_handler(state: SurveyState):
                     "scenario_count": len(state.flows),
                     "survey_item_pool_count": len(state.items),
                     "output_augmented": state.item_pool_summary.get("output_augmented"),
+                    "method_pipeline_row_count": state.item_pool_summary.get("method_pipeline_row_count"),
                     "baseline_pipeline_row_count": state.item_pool_summary.get("baseline_pipeline_row_count"),
+                    "ablation_pipeline_row_count": state.item_pool_summary.get("ablation_pipeline_row_count"),
                     "baseline_pipeline_rows_with_output": state.item_pool_summary.get("baseline_pipeline_rows_with_output"),
                     "deduplicated_output_variant_count": state.item_pool_summary.get("deduplicated_output_variant_count"),
                     "mean_output_variants_per_context": state.item_pool_summary.get("mean_output_variants_per_context"),
-                    "offline_methods": OFFLINE_METHODS,
+                    "offline_methods": state.pipeline_load_info.get("method_ids") or OFFLINE_METHODS,
+                    "baseline_method_ids": state.pipeline_load_info.get("baseline_method_ids", []),
+                    "ablation_method_ids": state.pipeline_load_info.get("ablation_method_ids", []),
                     "pipeline_load_info": state.pipeline_load_info,
                     "counts": state.flow_data.get("counts", {}),
                 })
@@ -988,8 +1192,11 @@ def make_handler(state: SurveyState):
             header = [
                 "session_id", "participant_id", "item_index", "item_id", "flow_id", "method_id",
                 "task", "context_family", "output_variant_id", "output_variant_label",
-                "variant_privacy_class", "final_output_type", "final_output_schema",
-                "baseline_ids_json", "baseline_count", "rating", "confidence", "free_text",
+                "output_variant_description", "variant_privacy_class", "final_output_type", "final_output_schema",
+                "baseline_ids_json", "baseline_count", "baseline_details_json",
+                "method_ids_json", "method_count", "method_details_json",
+                "ablation_modes_json", "baseline_method_ids_json",
+                "rating", "confidence", "free_text",
                 "elapsed_ms", "created_at_ms", "information_types_json",
             ]
             writer = csv.DictWriter(buf, fieldnames=header, extrasaction="ignore")

@@ -261,6 +261,33 @@ def cap_schema(cap: Dict[str, Any]) -> str:
     return str(cap.get("schema") or "")
 
 
+def media_family(media_or_semantic_type: str) -> str:
+    """Return coarse media family for compatibility-preserving transforms."""
+    t = str(media_or_semantic_type or "")
+    if t.startswith("image/"):
+        return "image"
+    if t.startswith("video/"):
+        return "video"
+    if t.startswith("audio/"):
+        return "audio"
+    return ""
+
+
+def same_media_family(a: str, b: str) -> bool:
+    fa = media_family(a)
+    fb = media_family(b)
+    return bool(fa and fb and fa == fb)
+
+
+def redacted_media_type_for(upstream_type: str) -> str:
+    family = media_family(upstream_type)
+    if family == "image":
+        return "image/x-redacted"
+    if family == "video":
+        return "video/x-redacted"
+    return upstream_type
+
+
 def cap_signature(cap: Dict[str, Any]) -> Tuple[str, str]:
     return (cap_type(cap), cap_schema(cap))
 
@@ -288,6 +315,11 @@ def type_matches(upstream: str, downstream: str) -> bool:
     if downstream == "image/x-raw" and upstream in {"image/x-redacted", "image/x-raw"}:
         return True
     if downstream == "audio/x-raw" and upstream in {"audio/x-filtered", "audio/x-raw"}:
+        return True
+
+    # Redacted media remains media-compatible with same-family media consumers,
+    # but the cap records that the output is transformed rather than raw.
+    if downstream in {"image/x-redacted", "video/x-redacted"} and same_media_family(upstream, downstream):
         return True
 
     return False
@@ -413,8 +445,14 @@ def ci_add_from_operator(op: Dict[str, Any]) -> Dict[str, List[str]]:
 
     ann = op.get("ci_annotations", {}) or {}
     for k, v in ann.items():
-        if k == "pipelineStage":
+        # Source contracts often list the vocabulary of possible primitives
+        # (image_frame, video_stream, audio_waveform, ...). Do not add all of
+        # them to every source variant; initial_state_from_source adds only the
+        # primitive that corresponds to the selected source cap.
+        if op.get("id") == "op.source" and k in {"informationType.sensorPrimitive", "sensingDataMetadata"}:
             continue
+        # Preserve stage annotations for the full system. The no_staged_flows
+        # ablation intentionally collapses these later in the CI evaluator.
         additions.setdefault(k, [])
         additions[k].extend(flatten_terms(v))
 
@@ -683,12 +721,26 @@ def apply_residual_effect(state: State, v: OperatorVariant) -> State:
     new = state.copy()
     new.depth += 1
     new.cap = copy.deepcopy(v.output_cap)
+    upstream_type = cap_type(state.cap)
+    upstream_props = state.cap.get("properties", {}) or {}
+    # Defensive normalization for media-preserving transforms. If the upstream
+    # branch is already redacted, later crop/sample/gate/window operators should
+    # not relabel it as raw. A blur/mask transform also produces redacted media.
+    if v.raw_operator_id == "op.region_mask_blur" or (upstream_props.get("redacted") and v.raw_operator_id in {"op.sample", "op.window", "op.trigger_gate", "op.region_select_crop"}):
+        redacted_type = redacted_media_type_for(upstream_type)
+        if redacted_type in {"image/x-redacted", "video/x-redacted"}:
+            new.cap["media_type"] = redacted_type
+            new.cap["schema"] = "redacted_image_frame" if redacted_type.startswith("image/") else "redacted_video_stream"
+            new.cap.setdefault("properties", {})["redacted"] = True
+    if upstream_type == "audio/x-filtered" and v.raw_operator_id in {"op.sample", "op.window", "op.trigger_gate"}:
+        new.cap["media_type"] = "audio/x-filtered"
+        new.cap.setdefault("properties", {})["speech_content_removed"] = True
     new.utility_caps.update(v.utility_capabilities)
     new.transforms.update(v.transform_effects)
     new.pipeline.append({
         "operator": v.raw_operator_id,
         "variant": v.label,
-        "output_cap": copy.deepcopy(v.output_cap),
+        "output_cap": copy.deepcopy(new.cap),
         "parameters": copy.deepcopy(v.parameters),
     })
 
@@ -791,27 +843,36 @@ def adapter_allowed(input_cap: Dict[str, Any], target_cap: Dict[str, Any]) -> bo
 
 
 def passthrough_output_plausible(state_cap: Dict[str, Any], v: OperatorVariant) -> bool:
-    """For utility operators with several output caps, keep the output family aligned
-    with the input family. This avoids impossible symbolic transitions like
-    sound-event label -> window -> video/x-raw.
+    """For operators with several output caps, keep output media aligned with input.
+
+    Contract catalogs often list parallel input/output caps (image->image,
+    video->video, audio->audio).  The symbolic planner materializes each output
+    cap as a variant, so we need this guard to prevent impossible transitions
+    such as image/x-raw -> video/x-redacted or audio/x-raw -> video/x-raw.
     """
     in_t = cap_type(state_cap)
     out_t = cap_type(v.output_cap)
     op = v.raw_operator_id
-    if op == "op.sample":
-        return type_matches(in_t, out_t) or type_matches(out_t, in_t)
-    if op == "op.window":
-        if in_t.startswith("video/"):
-            return out_t.startswith("video/")
+
+    # Format-preserving media transforms should not change image/video/audio family.
+    if op in {"op.sample", "op.window", "op.trigger_gate", "op.region_select_crop", "op.region_mask_blur"}:
+        if media_family(in_t):
+            if not same_media_family(in_t, out_t):
+                return False
+            # Backward-compatible operator catalogs may still say image/x-raw;
+            # apply_residual_effect normalizes blur/mask outputs to x-redacted.
+            return True
+        # Non-media event/sensor gates should stay semantic.
+        if op == "op.trigger_gate":
+            return out_t in {"application/x-event", "application/x-fused-event", "application/x-windowed-events"} or out_t == in_t
+        if op == "op.window":
+            return out_t == "application/x-windowed-events"
+
+    if op == "op.speech_content_removal":
         if in_t.startswith("audio/"):
-            return out_t.startswith("audio/")
-        return out_t == "application/x-windowed-events"
-    if op == "op.trigger_gate":
-        if in_t.startswith("video/"):
-            return out_t.startswith("video/")
-        if in_t.startswith("audio/"):
-            return out_t.startswith("audio/")
-        return out_t in {"application/x-event", "application/x-fused-event", "application/x-windowed-events"} or out_t == in_t
+            return out_t in {"audio/x-filtered", "application/x-command-intent"}
+        return out_t in {"application/x-redacted-transcript", "application/x-command-intent"}
+
     return True
 
 
@@ -1015,10 +1076,22 @@ def add_matched_cap_required_terms(state: State, matched_cap: Dict[str, Any]) ->
     return new
 
 
-def pipeline_to_record(state: State, request: Dict[str, Any], matched_cap: Dict[str, Any]) -> Dict[str, Any]:
-    # Mark final output stage as output_to_application.
+def pipeline_to_record(
+    state: State,
+    request: Dict[str, Any],
+    matched_cap: Dict[str, Any],
+    preserve_staged_flows: bool = True,
+) -> Dict[str, Any]:
+    # Always include the app-facing output stage. In the full system we also
+    # preserve raw/intermediate/retained stages declared by operator contracts;
+    # the no_staged_flows ablation collapses this to output_to_application only.
     ci_serialized = {k: sorted(v) for k, v in state.ci_terms.items()}
-    ci_serialized["pipelineStage"] = ["output_to_application"]
+    if preserve_staged_flows:
+        stages = set(ci_serialized.get("pipelineStage", []))
+        stages.add("output_to_application")
+        ci_serialized["pipelineStage"] = sorted(stages)
+    else:
+        ci_serialized["pipelineStage"] = ["output_to_application"]
 
     return {
         "pipeline_id": "pipe_" + stable_hash({
@@ -1053,6 +1126,9 @@ def enumerate_candidates(
     request: Dict[str, Any],
     max_depth: int = 7,
     max_states: int = 25000,
+    apply_request_ci_constraints: bool = True,
+    apply_request_residual_constraints: bool = True,
+    preserve_staged_flows: bool = True,
 ) -> Dict[str, Any]:
     operators = operator_catalog.get("operators", []) or []
     source_variants, transform_variants = materialize_variants(operators, request)
@@ -1083,8 +1159,20 @@ def enumerate_candidates(
         if matched and utility_capability_satisfied(state, request):
             final_state = maybe_add_ephemeral_drop_side_effect(state, request)
             final_state = add_matched_cap_required_terms(final_state, matched)
-            ci_ok, ci_fail = ci_constraints_satisfied(final_state, request)
-            res_ok, res_fail = residual_constraints_satisfied(final_state, request)
+            if apply_request_ci_constraints:
+                ci_ok, ci_fail = ci_constraints_satisfied(final_state, request)
+            else:
+                ci_ok, ci_fail = True, []
+            if apply_request_residual_constraints:
+                res_ok, res_fail = residual_constraints_satisfied(final_state, request)
+            else:
+                res_ok, res_fail = True, []
+
+            # In ablation modes we may intentionally keep candidates that would
+            # otherwise be removed by request-level CI/residual prefilters. The
+            # later CI evaluator and selector still record whether they violate
+            # hard constraints or residual bounds unless those stages are also
+            # ablated.
             if ci_ok and res_ok:
                 raw_candidates.append((final_state, matched))
             else:
@@ -1119,7 +1207,7 @@ def enumerate_candidates(
     }
 
     for st, cap in raw_candidates:
-        rec = pipeline_to_record(st, request, cap)
+        rec = pipeline_to_record(st, request, cap, preserve_staged_flows=preserve_staged_flows)
         records_by_id[rec["pipeline_id"]] = rec
 
     candidates = list(records_by_id.values())
@@ -1160,6 +1248,9 @@ def enumerate_candidates(
             "start_states": len(start_states),
             "operator_variants": len(transform_variants),
             "candidate_count": len(candidates),
+            "apply_request_ci_constraints": apply_request_ci_constraints,
+            "apply_request_residual_constraints": apply_request_residual_constraints,
+            "preserve_staged_flows": preserve_staged_flows,
             "rejected_goal_count": len(rejected_goals),
             "notes": [
                 "This planner is symbolic; use --emit-executable-specs or --emit-program-dir to assemble runtime pipelines from smartpriv_runtime.",
@@ -1184,12 +1275,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--emit-executable-specs", action="store_true", help="Attach runtime executable_pipeline_spec to each candidate.")
     parser.add_argument("--emit-program-dir", default=None, help="Optional directory where runnable Python programs for top candidates are written.")
     parser.add_argument("--emit-program-top-k", type=int, default=5, help="Number of runnable candidate programs to emit.")
+    parser.add_argument("--skip-request-ci-constraints", action="store_true", help="Ablation: do not prefilter candidates using request-level CI output constraints.")
+    parser.add_argument("--skip-request-residual-constraints", action="store_true", help="Ablation: do not prefilter candidates using request-level residual bounds.")
+    parser.add_argument("--collapse-pipeline-stages", action="store_true", help="Ablation: emit only output_to_application instead of staged flow annotations.")
     args = parser.parse_args(argv)
 
     operators = load_json(args.operators)
     request = load_json(args.request)
 
-    result = enumerate_candidates(operators, request, max_depth=args.max_depth, max_states=args.max_states)
+    result = enumerate_candidates(
+        operators,
+        request,
+        max_depth=args.max_depth,
+        max_states=args.max_states,
+        apply_request_ci_constraints=not args.skip_request_ci_constraints,
+        apply_request_residual_constraints=not args.skip_request_residual_constraints,
+        preserve_staged_flows=not args.collapse_pipeline_stages,
+    )
 
     if args.emit_executable_specs or args.emit_program_dir:
         if attach_executable_specs is None:

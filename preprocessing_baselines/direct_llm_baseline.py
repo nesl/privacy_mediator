@@ -10,12 +10,16 @@ interface.
 Important: this baseline intentionally does NOT enumerate all symbolic pipeline
 candidates. It performs only lightweight post-hoc checks:
   1. Did the LLM return parseable JSON?
-  2. Did it use only operator ids from the catalog?
-  3. Did it declare a final output cap that appears compatible with one accepted
-     output cap in the application request?
+  2. Did it select a pipeline, no-compromise, or review outcome?
+  3. If it selected a pipeline, did it use only operator ids from the catalog?
+  4. If it selected a pipeline, did it declare a final output cap that appears
+     compatible with one accepted output cap in the application request?
 
 If the chosen chain would fail at runtime or is not actually type-valid when
-implemented, that is recorded as baseline weakness rather than repaired.
+implemented, that is recorded as baseline weakness rather than repaired. If the
+LLM decides that no pipeline can both preserve utility and be contextually
+appropriate, the baseline now returns a first-class no_compromise/needs_review
+result rather than treating that as an invalid pipeline.
 """
 from __future__ import annotations
 
@@ -201,7 +205,7 @@ You are a direct-LLM privacy mediator baseline. Your job is to choose exactly ON
 This is a direct-LLM baseline, not the full mediator:
 - Do NOT enumerate alternatives.
 - Do NOT ask for another planner, verifier, CI evaluator, or selector to repair your answer.
-- Choose exactly one operator sequence from the catalog.
+- Choose exactly one operator sequence from the catalog, OR explicitly choose no_compromise / needs_review.
 - You may make a mistake; if your proposed chain is not actually executable, that is still the baseline result.
 
 The request contains TWO different kinds of constraints that you must consider together:
@@ -228,13 +232,15 @@ When several pipelines could satisfy the downstream format, prefer the one that 
 - Respect the sender/recipient relationship. A host, employer, school, or organization receiving information about guests/employees/children should usually receive less revealing output than a local downstream app or a caregiver receiving a safety signal.
 - Respect the stated purpose. Do not preserve details useful for other purposes, such as work monitoring, routine tracking, identification, or behavioral inference, unless those details are necessary for the requested task.
 - Respect the transmission principle. Hidden or continuous collection should push you toward stronger minimization or denial; disclosed, local, event-triggered, explicit-consent, or authorized-personnel-only flows may still require minimization.
-- If no operator chain can both satisfy the downstream app format and be plausibly acceptable for the CI context, return decision = "deny" or "needs_review".
+- If no operator chain can both satisfy the downstream app format and be plausibly acceptable for the CI context, return decision = "no_compromise".
+- If a pipeline may be acceptable only with missing consent, disclosure, approval, or human judgment, return decision = "needs_review".
+- Do not use no_compromise simply because a less revealing output would have lower utility; use it only when you believe every utility-compatible output would be contextually inappropriate or policy-prohibited.
 
 You are NOT allowed to invent operators. Choose only operator ids from the catalog. Use op.source at the beginning and op.route_publish at the end if available.
 
 Return JSON only with this schema:
 {{
-  "decision": "select_pipeline | deny | needs_review",
+  "decision": "select_pipeline | no_compromise | needs_review | deny",
   "operator_ids": ["op.source", "...", "op.route_publish"],
   "operator_parameters": {{
     "op.some_operator": {{"example_parameter": "value"}}
@@ -249,7 +255,9 @@ Return JSON only with this schema:
   "downstream_compatibility_rationale": "why the final output should be consumable by the downstream app",
   "contextual_integrity_rationale": "how the chosen pipeline fits the CI context: context, space, sender, subject, recipient, purpose, and transmission principle",
   "privacy_rationale": "why this preprocessing is more acceptable / less revealing than raw input while preserving utility",
-  "rationale": "brief overall explanation"
+  "rationale": "brief overall explanation",
+  "no_compromise_rationale": "only required when decision is no_compromise or deny; explain why no utility-compatible output is contextually appropriate",
+  "needs_review_rationale": "only required when decision is needs_review; explain what consent/disclosure/review condition is missing"
 }}
 
 Application request output contract:
@@ -411,16 +419,78 @@ def conservative_unknown_residual() -> Dict[str, str]:
     return {a: "unknown" for a in RESIDUAL_ATTRIBUTES}
 
 
+
+NO_COMPROMISE_DECISIONS = {"no_compromise", "deny", "denied", "reject", "reject_flow"}
+NEEDS_REVIEW_DECISIONS = {"needs_review", "review", "consent_or_review_required", "human_review"}
+SELECT_DECISIONS = {"select_pipeline", "select", "pipeline"}
+
+
+def normalize_llm_decision(decision: Any) -> str:
+    """Normalize the LLM's free-form decision into the baseline result space."""
+    d = str(decision or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if d in SELECT_DECISIONS:
+        return "select_pipeline"
+    if d in NO_COMPROMISE_DECISIONS:
+        return "no_compromise"
+    if d in NEEDS_REVIEW_DECISIONS:
+        return "consent_or_review_required"
+    return "invalid_or_no_pipeline"
+
+
+def make_non_selection_diagnostics(llm_choice: Dict[str, Any], normalized_decision: str) -> Dict[str, Any]:
+    """Diagnostics for LLM no-compromise/review outcomes.
+
+    These fields mirror the full mediator's no-compromise output enough for
+    context-generation and survey code to treat the result as no shared output,
+    while still preserving why the LLM denied or escalated the scenario.
+    """
+    rationale = (
+        llm_choice.get("no_compromise_rationale")
+        or llm_choice.get("needs_review_rationale")
+        or llm_choice.get("contextual_integrity_rationale")
+        or llm_choice.get("privacy_rationale")
+        or llm_choice.get("rationale")
+    )
+    return {
+        "validation_status": "non_selection_decision",
+        "validation_reason": f"LLM returned {llm_choice.get('decision')!r}, normalized to {normalized_decision}.",
+        "llm_normalized_decision": normalized_decision,
+        "llm_no_compromise_rationale": llm_choice.get("no_compromise_rationale"),
+        "llm_needs_review_rationale": llm_choice.get("needs_review_rationale"),
+        "llm_contextual_integrity_rationale": llm_choice.get("contextual_integrity_rationale"),
+        "llm_privacy_rationale": llm_choice.get("privacy_rationale"),
+        "llm_downstream_compatibility_rationale": llm_choice.get("downstream_compatibility_rationale"),
+        "llm_overall_rationale": llm_choice.get("rationale"),
+        "no_compromise_diagnostics": {
+            "source": "direct_llm_baseline",
+            "decision": normalized_decision,
+            "reason": rationale,
+            "candidate_enumeration_used": False,
+            "hard_ci_rules_evaluated": False,
+            "note": (
+                "This is the direct-LLM baseline's own judgment. Unlike the full mediator, "
+                "it does not enumerate all candidates or prove that every utility-compatible "
+                "pipeline failed hard CI constraints."
+            ),
+        } if normalized_decision == "no_compromise" else None,
+        "review_diagnostics": {
+            "source": "direct_llm_baseline",
+            "decision": normalized_decision,
+            "reason": rationale,
+            "candidate_enumeration_used": False,
+            "hard_ci_rules_evaluated": False,
+        } if normalized_decision == "consent_or_review_required" else None,
+        "full_candidate_enumeration_used": False,
+    }
+
 def make_llm_candidate(
     operator_catalog: Dict[str, Any],
     request: Dict[str, Any],
     llm_choice: Dict[str, Any],
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    if llm_choice.get("decision") not in {"select_pipeline", "select", "pipeline"}:
-        return None, {
-            "validation_status": "not_selected",
-            "reason": f"LLM decision was {llm_choice.get('decision')}",
-        }
+    normalized_decision = normalize_llm_decision(llm_choice.get("decision"))
+    if normalized_decision != "select_pipeline":
+        return None, make_non_selection_diagnostics(llm_choice, normalized_decision)
     if not isinstance(llm_choice.get("operator_ids"), list):
         return None, {
             "validation_status": "invalid",
@@ -550,6 +620,7 @@ def run_direct_llm_baseline(
 
     selected, validation = make_llm_candidate(operator_catalog, request, llm_choice)
     diagnostics.update(validation)
+    normalized_decision = str(validation.get("llm_normalized_decision") or normalize_llm_decision(llm_choice.get("decision")))
 
     if selected:
         return wrap_baseline_output(
@@ -565,13 +636,47 @@ def run_direct_llm_baseline(
             diagnostics=diagnostics,
         )
 
+    if normalized_decision == "no_compromise":
+        return wrap_baseline_output(
+            baseline_name="direct_llm",
+            request=request,
+            candidates=[],
+            selected_pipeline_id=None,
+            decision="no_compromise",
+            reason=(
+                diagnostics.get("llm_no_compromise_rationale")
+                or diagnostics.get("llm_contextual_integrity_rationale")
+                or diagnostics.get("llm_privacy_rationale")
+                or diagnostics.get("llm_rationale")
+                or "Direct LLM baseline judged that no utility-compatible output is contextually appropriate."
+            ),
+            diagnostics=diagnostics,
+        )
+
+    if normalized_decision == "consent_or_review_required":
+        return wrap_baseline_output(
+            baseline_name="direct_llm",
+            request=request,
+            candidates=[],
+            selected_pipeline_id=None,
+            decision="consent_or_review_required",
+            reason=(
+                diagnostics.get("llm_needs_review_rationale")
+                or diagnostics.get("llm_contextual_integrity_rationale")
+                or diagnostics.get("llm_privacy_rationale")
+                or diagnostics.get("llm_rationale")
+                or "Direct LLM baseline judged that consent, disclosure, or human review is required."
+            ),
+            diagnostics=diagnostics,
+        )
+
     return wrap_baseline_output(
         baseline_name="direct_llm",
         request=request,
         candidates=[],
         selected_pipeline_id=None,
         decision="invalid_or_no_pipeline",
-        reason="LLM did not select a pipeline.",
+        reason="LLM did not select a pipeline, no-compromise, or review outcome.",
         diagnostics=diagnostics,
     )
 

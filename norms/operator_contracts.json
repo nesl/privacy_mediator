@@ -491,6 +491,18 @@
         },
         {
           "semantic_type": "application/x-count"
+        },
+        {
+          "media_type": "image/x-raw"
+        },
+        {
+          "media_type": "image/x-redacted"
+        },
+        {
+          "media_type": "video/x-redacted"
+        },
+        {
+          "media_type": "audio/x-filtered"
         }
       ],
       "output_caps": [
@@ -553,6 +565,18 @@
         },
         {
           "media_type": "audio/x-raw"
+        },
+        {
+          "media_type": "image/x-raw"
+        },
+        {
+          "media_type": "image/x-redacted"
+        },
+        {
+          "media_type": "video/x-redacted"
+        },
+        {
+          "media_type": "audio/x-filtered"
         }
       ],
       "output_caps": [
@@ -1111,13 +1135,15 @@
       ],
       "output_caps": [
         {
-          "media_type": "video/x-raw",
+          "media_type": "video/x-redacted",
+          "schema": "redacted_video_stream",
           "properties": {
             "redacted": true
           }
         },
         {
-          "media_type": "image/x-raw",
+          "media_type": "image/x-redacted",
+          "schema": "redacted_image_frame",
           "properties": {
             "redacted": true
           }
@@ -1206,7 +1232,7 @@
         ],
         "pipelineStage": "intermediate_representation"
       },
-      "composition_notes": "Format-preserving: downstream apps expecting video may still consume output."
+      "composition_notes": "Format-preserving: downstream apps expecting video may still consume output. Output caps explicitly use redacted media caps so survey/evaluation distinguish redacted media from raw media while preserving format compatibility for legacy media-style apps."
     },
     {
       "id": "op.speech_content_removal",

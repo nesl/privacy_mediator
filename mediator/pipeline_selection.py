@@ -154,12 +154,66 @@ def request_contexts(request: Dict[str, Any]) -> List[str]:
     return [str(v) for v in vals]
 
 
+
+def active_ablation_modes(selection_config: Optional[Dict[str, Any]]) -> List[str]:
+    """Return normalized selector ablation modes from selection_config.
+
+    Supported modes:
+      - no_ci_filter: ignore CI feasibility in final selection.
+      - no_residual_bounds: ignore residual-disclosure request bounds.
+      - utility_only: ignore CI and residual bounds, rank by app utility priority.
+      - no_least_revealing: keep feasibility filters but rank by utility/cost rather than risk.
+      - metadata_only: ignore empirical probe residuals.
+      - uniform_risk_weights: use equal weights for all residual attributes.
+      - first_feasible: keep candidate order after feasibility filtering.
+      - latency_first: rank feasible pipelines by latency/cost before privacy risk.
+    """
+    if not selection_config:
+        return []
+    raw = selection_config.get("ablation_mode", selection_config.get("ablation_modes", []))
+    if raw is None:
+        return []
+    raw_items = [raw] if isinstance(raw, str) else list(raw)
+    aliases = {
+        "no_ci": "no_ci_filter",
+        "skip_ci": "no_ci_filter",
+        "no_residual": "no_residual_bounds",
+        "no_privacy": "utility_only",
+        "utility": "utility_only",
+        "first": "first_feasible",
+        "no_context_weights": "uniform_risk_weights",
+        "no_context_specific_weights": "uniform_risk_weights",
+        "no_probes": "metadata_only",
+        "no_probe_residuals": "metadata_only",
+    }
+    modes = []
+    for item in raw_items:
+        m = aliases.get(str(item).strip().lower(), str(item).strip().lower())
+        if m and m != "full":
+            modes.append(m)
+    return sorted(set(modes))
+
+
+def ablation_enabled(selection_config: Optional[Dict[str, Any]], mode: str) -> bool:
+    return mode in active_ablation_modes(selection_config)
+
+
 def context_specific_weights(request: Dict[str, Any], selection_config: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
     """Return context-specific residual-risk weights.
 
     This is intentionally transparent and configurable. The defaults are not a
     universal privacy ordering; they only instantiate R_C for a given request.
     """
+    if ablation_enabled(selection_config, "uniform_risk_weights"):
+        weights = {a: 1.0 for a in RESIDUAL_ATTRIBUTES}
+        # Still allow explicit weights to override the uniform ablation, so batch
+        # experiments can test controlled alternatives.
+        if selection_config:
+            for k, v in (selection_config.get("weights", {}) or {}).items():
+                if k in weights:
+                    weights[k] = float(v)
+        return weights
+
     weights = dict(DEFAULT_WEIGHTS)
     purposes = set(request_purposes(request))
     contexts = set(request_contexts(request))
@@ -395,6 +449,67 @@ def is_ci_feasible(ev: Optional[Dict[str, Any]]) -> bool:
     return d in {"accept_hard_constraints_only", "accept_llm_norm", "acceptable"}
 
 
+
+def summarize_selection_failures(rejected: List[Dict[str, Any]], candidates_present: bool) -> Dict[str, Any]:
+    """Explain why the selector ended with no selected pipeline."""
+    out: Dict[str, Any] = {
+        "candidate_count": len(rejected),
+        "candidates_present": candidates_present,
+        "ci_failure_count": 0,
+        "residual_failure_count": 0,
+        "both_ci_and_residual_failure_count": 0,
+        "ci_failure_decision_counts": {},
+        "residual_failure_examples": [],
+        "hard_rule_failure_counts": {},
+        "hard_action_failure_counts": {},
+        "hard_category_failure_counts": {},
+        "closest_rejected_candidates": [],
+    }
+    for r in rejected:
+        ci_failed = not bool(r.get("raw_ci_feasible"))
+        res_failed = not bool(r.get("raw_residual_feasible"))
+        if ci_failed:
+            out["ci_failure_count"] += 1
+        if res_failed:
+            out["residual_failure_count"] += 1
+        if ci_failed and res_failed:
+            out["both_ci_and_residual_failure_count"] += 1
+        dec = (r.get("ci_decision") or {}).get("decision") or "unknown"
+        if ci_failed:
+            out["ci_failure_decision_counts"][dec] = out["ci_failure_decision_counts"].get(dec, 0) + 1
+        for f in r.get("raw_residual_failures", []) or []:
+            if len(out["residual_failure_examples"]) < 20:
+                out["residual_failure_examples"].append(f)
+        hard = (r.get("ci_decision") or {}).get("hard_failure_summary") or r.get("hard_failure_summary") or {}
+        for rid in hard.get("failed_rule_ids", []) or []:
+            out["hard_rule_failure_counts"][rid] = out["hard_rule_failure_counts"].get(rid, 0) + 1
+        for action, count in (hard.get("counts_by_action") or {}).items():
+            out["hard_action_failure_counts"][action] = out["hard_action_failure_counts"].get(action, 0) + count
+        for cat, count in (hard.get("counts_by_category") or {}).items():
+            out["hard_category_failure_counts"][cat] = out["hard_category_failure_counts"].get(cat, 0) + count
+
+    closest = sorted(rejected, key=lambda r: (r.get("risk_score", 10**9), len(r.get("raw_residual_failures", []) or [])))[:10]
+    out["closest_rejected_candidates"] = [
+        {
+            "pipeline_id": r.get("pipeline_id"),
+            "matched_output_cap": r.get("matched_output_cap"),
+            "operators": r.get("operators"),
+            "risk_score": r.get("risk_score"),
+            "raw_ci_feasible": r.get("raw_ci_feasible"),
+            "raw_residual_feasible": r.get("raw_residual_feasible"),
+            "ci_decision": r.get("ci_decision"),
+            "raw_residual_failures": r.get("raw_residual_failures"),
+            "final_residual": r.get("final_residual"),
+        }
+        for r in closest
+    ]
+    out["top_failed_rules"] = sorted(
+        [{"rule_id": k, "count": v} for k, v in out["hard_rule_failure_counts"].items()],
+        key=lambda x: (-x["count"], x["rule_id"]),
+    )[:20]
+    return out
+
+
 def select_pipeline(
     candidate_generation_result: Dict[str, Any],
     ci_evaluation_result: Dict[str, Any],
@@ -410,11 +525,15 @@ def select_pipeline(
       - probe residual overrides/combines with metadata residual when available.
     """
     selection_config = selection_config or {}
+    ablation_modes = active_ablation_modes(selection_config)
     weights = context_specific_weights(request, selection_config)
     cap_prio = accepted_cap_priority(request)
     cands = candidates_by_pipeline(candidate_generation_result)
     evals = ci_evaluations_by_pipeline(ci_evaluation_result)
-    probe_by_id = probe_residuals_by_pipeline(probe_stage_result)
+    probe_by_id = {} if "metadata_only" in ablation_modes else probe_residuals_by_pipeline(probe_stage_result)
+
+    ignore_ci = bool({"no_ci_filter", "utility_only"} & set(ablation_modes))
+    ignore_residual = bool({"no_residual_bounds", "utility_only"} & set(ablation_modes))
 
     feasible: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
@@ -426,15 +545,23 @@ def select_pipeline(
         # through combine is safe and conservative.
         final_res = combine_residuals(meta_res, probe_by_id.get(pid)) if pid in probe_by_id else residual_vector(meta_res)
 
-        ci_ok = is_ci_feasible(ev)
-        residual_ok, residual_failures = residual_satisfies_request(final_res, request)
+        raw_ci_ok = is_ci_feasible(ev)
+        raw_residual_ok, raw_residual_failures = residual_satisfies_request(final_res, request)
+        ci_ok = True if ignore_ci else raw_ci_ok
+        residual_ok = True if ignore_residual else raw_residual_ok
+        residual_failures = [] if ignore_residual else raw_residual_failures
 
         record = {
             "pipeline_id": pid,
             "matched_output_cap": cand.get("matched_output_cap"),
             "ci_feasible": ci_ok,
+            "raw_ci_feasible": raw_ci_ok,
+            "ci_filter_ignored": ignore_ci,
             "residual_feasible": residual_ok,
+            "raw_residual_feasible": raw_residual_ok,
+            "residual_filter_ignored": ignore_residual,
             "residual_failures": residual_failures,
+            "raw_residual_failures": raw_residual_failures,
             "metadata_residual": residual_vector(meta_res),
             "probe_or_combined_residual_available": pid in probe_by_id,
             "final_residual": final_res,
@@ -446,6 +573,7 @@ def select_pipeline(
             "accepted_cap_priority": cap_prio.get(str(cand.get("matched_output_cap")), 999),
             "operators": [op.get("operator") for op in cand.get("operators", []) or []],
             "ci_decision": (ev or {}).get("ci_decision"),
+            "hard_failure_summary": (ev or {}).get("hard_failure_summary") or ((ev or {}).get("ci_decision") or {}).get("hard_failure_summary"),
         }
 
         if ci_ok and residual_ok:
@@ -453,9 +581,37 @@ def select_pipeline(
         else:
             rejected.append(record)
 
-    # Ranking method.
+    # Ranking method. Ablations can keep the feasibility filters while changing
+    # only how the final feasible set is ordered.
     method = selection_config.get("method", "weighted")
-    if method == "lexicographic":
+    if "utility_only" in ablation_modes:
+        method = "utility_only"
+    elif "no_least_revealing" in ablation_modes:
+        method = "no_least_revealing"
+    elif "first_feasible" in ablation_modes:
+        method = "first_feasible"
+    elif "latency_first" in ablation_modes:
+        method = "latency_first"
+
+    if method == "first_feasible":
+        # Preserve the candidate order emitted by the planner.
+        pass
+    elif method in {"utility_only", "no_least_revealing", "utility_first"}:
+        feasible.sort(key=lambda r: (
+            r["accepted_cap_priority"],
+            -r["utility_margin"],
+            r["latency_ms"],
+            r["implementation_cost"],
+            r["risk_score"],
+        ))
+    elif method == "latency_first":
+        feasible.sort(key=lambda r: (
+            r["latency_ms"],
+            r["implementation_cost"],
+            r["accepted_cap_priority"],
+            r["risk_score"],
+        ))
+    elif method == "lexicographic":
         feasible.sort(key=lambda r: (
             tuple(r["lexicographic_key"]),
             -r["utility_margin"],
@@ -489,25 +645,35 @@ def select_pipeline(
             "decision": "select_pipeline",
             "selected_pipeline_id": selected["pipeline_id"],
             "selected_output_cap": selected["matched_output_cap"],
-            "reason": "Selected least-revealing feasible pipeline after utility, CI, residual, and optional probe evaluation.",
+            "reason": (
+                "Selected least-revealing feasible pipeline after utility, CI, residual, and optional probe evaluation."
+                if method not in {"utility_only", "no_least_revealing", "utility_first", "first_feasible", "latency_first"}
+                else f"Selected pipeline under selector ablation mode: {method}."
+            ),
         }
     else:
         # Diagnose why no pipeline survived.
-        any_ci_feasible = any(r["ci_feasible"] for r in rejected)
+        raw_any_ci_feasible = any(r["raw_ci_feasible"] for r in rejected)
+        raw_any_residual_feasible = any(r["raw_residual_feasible"] for r in rejected)
+        selection_failure_diagnostics = summarize_selection_failures(rejected, bool(cands))
         if not cands:
             d = "no_candidates"
             reason = "No generated candidate pipelines were available."
-        elif not any_ci_feasible:
+        elif not raw_any_ci_feasible:
             d = "no_compromise"
             reason = "No candidate pipeline passed contextual-integrity evaluation."
-        else:
+        elif not raw_any_residual_feasible:
             d = "no_compromise"
             reason = "Some candidates passed CI evaluation, but none satisfied final residual-disclosure constraints."
+        else:
+            d = "no_compromise"
+            reason = "No candidate survived the active selector feasibility filters."
         decision = {
             "decision": d,
             "selected_pipeline_id": None,
             "selected_output_cap": None,
             "reason": reason,
+            "selection_failure_diagnostics": selection_failure_diagnostics,
         }
 
     return {
@@ -516,6 +682,9 @@ def select_pipeline(
         "scenario_id": candidate_generation_result.get("scenario_id") or request.get("request_identity", {}).get("scenario_id"),
         "selector": {
             "method": method,
+            "ablation_modes": ablation_modes,
+            "ignore_ci_filter": ignore_ci,
+            "ignore_residual_bounds": ignore_residual,
             "weights": weights,
             "probe_stage_used": bool(probe_by_id),
             "num_candidates": len(cands),
@@ -563,6 +732,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--ci-evaluation", required=True, help="ci_evaluation.json")
     p.add_argument("--probe-stage", help="Optional privacy_probe_stage_result.json")
     p.add_argument("--selection-config", help="Optional JSON config with weights/method")
+    p.add_argument("--ablation-mode", action="append", default=[], help="Selector ablation mode. May be repeated.")
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
 
@@ -570,7 +740,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     candidates = load_json(args.candidates)
     ci_eval = load_json(args.ci_evaluation)
     probe = load_json(args.probe_stage) if args.probe_stage else None
-    config = load_json(args.selection_config) if args.selection_config else None
+    config = load_json(args.selection_config) if args.selection_config else {}
+    if args.ablation_mode:
+        existing = config.get("ablation_modes", [])
+        if isinstance(existing, str):
+            existing = [existing]
+        config["ablation_modes"] = list(existing) + list(args.ablation_mode)
 
     result = select_pipeline(
         candidate_generation_result=candidates,

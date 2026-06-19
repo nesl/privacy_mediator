@@ -442,6 +442,145 @@ def evaluate_hard_constraints(flow: Dict[str, Any], constraints: Dict[str, Any])
     }
 
 
+
+def summarize_hard_constraint_result(hard: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact rule-level diagnostics for one candidate's hard-CI outcome."""
+    denied = hard.get("denied_by", []) or []
+    missing_conditions = hard.get("missing_conditions", []) or []
+    missing_transformations = hard.get("missing_transformations", []) or []
+    allow_if_failures = hard.get("allow_if_failures", []) or []
+
+    failed_rules: List[Dict[str, Any]] = []
+    for category, rows in [
+        ("denied_by", denied),
+        ("missing_conditions", missing_conditions),
+        ("missing_transformations", missing_transformations),
+        ("allow_if_failures", allow_if_failures),
+    ]:
+        for r in rows:
+            failed_rules.append({
+                "category": category,
+                "rule_id": r.get("rule_id"),
+                "ruleType": r.get("ruleType"),
+                "action": r.get("action"),
+                "priority": r.get("priority"),
+                "source_name": r.get("source_name"),
+                "explanation": r.get("explanation"),
+                "natural_language_description": r.get("natural_language_description"),
+                "missing_required": r.get("missing_required", []),
+                "missing_transformations": r.get("missing_transformations", []),
+                "forbidden_present": r.get("forbidden_present", []),
+            })
+
+    counts_by_action: Dict[str, int] = {}
+    counts_by_category: Dict[str, int] = {}
+    rule_ids: List[str] = []
+    for r in failed_rules:
+        action = str(r.get("action") or "unknown")
+        category = str(r.get("category") or "unknown")
+        counts_by_action[action] = counts_by_action.get(action, 0) + 1
+        counts_by_category[category] = counts_by_category.get(category, 0) + 1
+        if r.get("rule_id"):
+            rule_ids.append(str(r["rule_id"]))
+
+    return {
+        "hard_pass": bool(hard.get("hard_pass")),
+        "failure_count": len(failed_rules),
+        "counts_by_action": counts_by_action,
+        "counts_by_category": counts_by_category,
+        "failed_rule_ids": sorted(set(rule_ids)),
+        "failed_rules": failed_rules,
+        "obligations_satisfied_count": len(hard.get("obligations_satisfied", []) or []),
+    }
+
+
+def compact_candidate_summary(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    cap = candidate.get("final_output_cap", {}) or {}
+    return {
+        "pipeline_id": candidate.get("pipeline_id"),
+        "matched_output_cap": candidate.get("matched_output_cap"),
+        "matched_output_schema": candidate.get("matched_output_schema"),
+        "final_output_type": cap.get("semantic_type") or cap.get("media_type"),
+        "final_output_schema": cap.get("schema"),
+        "operators": [op.get("operator") for op in candidate.get("operators", []) or []],
+        "residual_score": candidate.get("residual_score", risk_score(candidate.get("residual_disclosure", {}) or {})),
+    }
+
+
+def build_no_compromise_diagnostics(evaluations: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Explain why no candidate passed CI and which rejected candidates were closest."""
+    candidate_by_id = {str(c.get("pipeline_id")): c for c in candidates if c.get("pipeline_id")}
+    diagnostics: Dict[str, Any] = {
+        "candidate_count": len(candidates),
+        "evaluation_count": len(evaluations),
+        "ci_feasible_count": 0,
+        "hard_rejection_count": 0,
+        "llm_rejection_count": 0,
+        "other_rejection_count": 0,
+        "rule_failure_counts": {},
+        "action_failure_counts": {},
+        "category_failure_counts": {},
+        "primary_reason": "No candidate pipeline passed the CI evaluator.",
+        "closest_rejected_candidates": [],
+    }
+
+    rejected_records: List[Dict[str, Any]] = []
+    for ev in evaluations:
+        decision = ev.get("ci_decision") or {}
+        if decision.get("feasible"):
+            diagnostics["ci_feasible_count"] += 1
+            continue
+        d = str(decision.get("decision") or "unknown")
+        if d == "reject_hard_constraint":
+            diagnostics["hard_rejection_count"] += 1
+        elif "llm" in d:
+            diagnostics["llm_rejection_count"] += 1
+        else:
+            diagnostics["other_rejection_count"] += 1
+
+        hard_summary = summarize_hard_constraint_result(ev.get("hard_constraint_result", {}) or {})
+        for rid in hard_summary.get("failed_rule_ids", []):
+            diagnostics["rule_failure_counts"][rid] = diagnostics["rule_failure_counts"].get(rid, 0) + 1
+        for action, count in (hard_summary.get("counts_by_action") or {}).items():
+            diagnostics["action_failure_counts"][action] = diagnostics["action_failure_counts"].get(action, 0) + count
+        for cat, count in (hard_summary.get("counts_by_category") or {}).items():
+            diagnostics["category_failure_counts"][cat] = diagnostics["category_failure_counts"].get(cat, 0) + count
+
+        cand = candidate_by_id.get(str(ev.get("pipeline_id")), {})
+        rejected_records.append({
+            "pipeline_id": ev.get("pipeline_id"),
+            "ci_decision": decision,
+            "candidate": compact_candidate_summary(cand) if cand else {"pipeline_id": ev.get("pipeline_id")},
+            "hard_failure_summary": hard_summary,
+            "flow_context": {
+                "context": (ev.get("flow") or {}).get("context"),
+                "space": (ev.get("flow") or {}).get("space"),
+                "purpose": (ev.get("flow") or {}).get("purpose"),
+                "transmissionPrinciple": (ev.get("flow") or {}).get("transmissionPrinciple"),
+                "pipelineStage": (ev.get("flow") or {}).get("pipelineStage"),
+                "attribute": (ev.get("flow") or {}).get("attribute"),
+            },
+            "residual_score": ev.get("residual_score", 10**9),
+        })
+
+    if not candidates:
+        diagnostics["primary_reason"] = "No candidate pipelines were generated."
+    elif diagnostics["hard_rejection_count"] == len(evaluations) and evaluations:
+        diagnostics["primary_reason"] = "All utility-compatible candidates failed hard contextual-integrity rules or required conditions/transformations."
+    elif diagnostics["hard_rejection_count"] > 0:
+        diagnostics["primary_reason"] = "No candidate passed CI; at least one failed hard contextual-integrity rules or required conditions/transformations."
+    elif diagnostics["llm_rejection_count"] > 0:
+        diagnostics["primary_reason"] = "Hard rules passed for some candidates, but no candidate passed LLM norm judgment."
+
+    rejected_records.sort(key=lambda r: (r.get("residual_score", 10**9), len((r.get("hard_failure_summary") or {}).get("failed_rule_ids", []))))
+    diagnostics["closest_rejected_candidates"] = rejected_records[:10]
+    diagnostics["top_failed_rules"] = sorted(
+        [{"rule_id": k, "count": v} for k, v in diagnostics["rule_failure_counts"].items()],
+        key=lambda x: (-x["count"], x["rule_id"]),
+    )[:20]
+    return diagnostics
+
+
 def make_llm(model: str = "gpt-4o-mini", temperature: float = 0.0):
     """Create a LangChain ChatOpenAI backend. Set os.environ['OPENAI_API_KEY'] before calling."""
     try:
@@ -513,6 +652,29 @@ Candidate pipeline summary:
     return parsed
 
 
+
+
+def normalize_ci_mode(ci_mode: str) -> str:
+    mode = str(ci_mode or "full").strip().lower()
+    aliases = {
+        "hard_only": "full",
+        "hard_rules_only": "full",
+        "no_ci": "no_hard_rules",
+        "skip_hard_rules": "no_hard_rules",
+        "utility_only": "no_hard_rules",
+        "collapse_stages": "no_staged_flows",
+    }
+    return aliases.get(mode, mode)
+
+
+def maybe_collapse_flow_stages(flow: Dict[str, Any], collapse_stages: bool) -> Dict[str, Any]:
+    if not collapse_stages:
+        return flow
+    out = dict(flow)
+    out["original_pipelineStage"] = as_str_list(flow.get("pipelineStage"))
+    out["pipelineStage"] = ["output_to_application"]
+    return out
+
 def llm_judgment_passes(judgment: Dict[str, Any], threshold: float) -> bool:
     label = str(judgment.get("acceptability_label", "")).strip().lower()
     try:
@@ -522,8 +684,25 @@ def llm_judgment_passes(judgment: Dict[str, Any], threshold: float) -> bool:
     return label in {"acceptable", "acceptable_with_mitigations"} and conf >= threshold
 
 
-def evaluate_candidate(candidate: Dict[str, Any], request: Dict[str, Any], constraints: Dict[str, Any], environment: Optional[Dict[str, Any]], sensor_stream: Optional[Dict[str, Any]], use_llm: bool = False, llm_model: str = "gpt-4o-mini", llm_temperature: float = 0.0, llm_confidence_threshold: float = 0.75) -> Dict[str, Any]:
+def evaluate_candidate(
+    candidate: Dict[str, Any],
+    request: Dict[str, Any],
+    constraints: Dict[str, Any],
+    environment: Optional[Dict[str, Any]],
+    sensor_stream: Optional[Dict[str, Any]],
+    use_llm: bool = False,
+    llm_model: str = "gpt-4o-mini",
+    llm_temperature: float = 0.0,
+    llm_confidence_threshold: float = 0.75,
+    ci_mode: str = "full",
+    collapse_stages: bool = False,
+) -> Dict[str, Any]:
+    ci_mode = normalize_ci_mode(ci_mode)
+    if ci_mode == "no_staged_flows":
+        collapse_stages = True
+
     flow = construct_ci_flow(candidate, request, environment, sensor_stream)
+    flow = maybe_collapse_flow_stages(flow, collapse_stages)
     hard = evaluate_hard_constraints(flow, constraints)
     result = {
         "pipeline_id": candidate.get("pipeline_id"),
@@ -531,11 +710,52 @@ def evaluate_candidate(candidate: Dict[str, Any], request: Dict[str, Any], const
         "residual_score": candidate.get("residual_score", risk_score(candidate.get("residual_disclosure", {}))),
         "flow": flow,
         "hard_constraint_result": hard,
+        "hard_failure_summary": summarize_hard_constraint_result(hard),
         "llm_norm_judgment": None,
         "ci_decision": None,
+        "ci_mode": ci_mode,
     }
+
+    if ci_mode == "no_hard_rules":
+        # Keep diagnostics in hard_constraint_result, but do not gate feasibility on them.
+        result["ci_decision"] = {
+            "decision": "accept_ablation_no_hard_rules",
+            "feasible": True,
+            "reason": "Ablation: hard CI rules were evaluated for diagnostics but not used as a feasibility gate.",
+        }
+        return result
+
+    if ci_mode == "llm_only":
+        if not use_llm:
+            result["ci_decision"] = {
+                "decision": "reject_llm_only_no_llm",
+                "feasible": False,
+                "reason": "LLM-only CI ablation requires --use-llm.",
+            }
+            return result
+        judgment = call_llm_norm_judgment(flow, candidate, request, environment, model=llm_model, temperature=llm_temperature)
+        result["llm_norm_judgment"] = judgment
+        if llm_judgment_passes(judgment, llm_confidence_threshold):
+            result["ci_decision"] = {
+                "decision": "accept_ablation_llm_only",
+                "feasible": True,
+                "reason": "Ablation: LLM norm judgment used without hard-rule gating.",
+            }
+        else:
+            result["ci_decision"] = {
+                "decision": "uncertain_or_reject_ablation_llm_only",
+                "feasible": False,
+                "reason": "Ablation: LLM-only judgment was low-confidence, uncertain, or inappropriate.",
+            }
+        return result
+
     if not hard["hard_pass"]:
-        result["ci_decision"] = {"decision": "reject_hard_constraint", "feasible": False, "reason": "Hard CI constraint denied the flow or required unmet conditions/transformations."}
+        result["ci_decision"] = {
+            "decision": "reject_hard_constraint",
+            "feasible": False,
+            "reason": "Hard CI constraint denied the flow or required unmet conditions/transformations.",
+            "hard_failure_summary": result["hard_failure_summary"],
+        }
         return result
     if use_llm:
         judgment = call_llm_norm_judgment(flow, candidate, request, environment, model=llm_model, temperature=llm_temperature)
@@ -557,23 +777,54 @@ def select_best(evaluations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return feasible[0]
 
 
-def evaluate_candidates(candidate_output: Dict[str, Any], request: Dict[str, Any], constraints: Dict[str, Any], environment: Optional[Dict[str, Any]] = None, sensor_stream: Optional[Dict[str, Any]] = None, use_llm: bool = False, llm_model: str = "gpt-4o-mini", llm_temperature: float = 0.0, llm_confidence_threshold: float = 0.75, top_k_for_llm: Optional[int] = None) -> Dict[str, Any]:
+def evaluate_candidates(
+    candidate_output: Dict[str, Any],
+    request: Dict[str, Any],
+    constraints: Dict[str, Any],
+    environment: Optional[Dict[str, Any]] = None,
+    sensor_stream: Optional[Dict[str, Any]] = None,
+    use_llm: bool = False,
+    llm_model: str = "gpt-4o-mini",
+    llm_temperature: float = 0.0,
+    llm_confidence_threshold: float = 0.75,
+    top_k_for_llm: Optional[int] = None,
+    ci_mode: str = "full",
+    collapse_stages: bool = False,
+) -> Dict[str, Any]:
     candidates = candidate_output.get("candidates", []) or []
     candidates_for_llm = candidates
     if use_llm and top_k_for_llm is not None:
         candidates_for_llm = sorted(candidates, key=lambda c: c.get("residual_score", risk_score(c.get("residual_disclosure", {}))))[:top_k_for_llm]
     llm_ids = {id(c) for c in candidates_for_llm}
-    evals = [evaluate_candidate(c, request, constraints, environment, sensor_stream, use_llm=(use_llm and id(c) in llm_ids), llm_model=llm_model, llm_temperature=llm_temperature, llm_confidence_threshold=llm_confidence_threshold) for c in candidates]
+    ci_mode = normalize_ci_mode(ci_mode)
+    if ci_mode == "llm_only":
+        use_llm = True
+    evals = [
+        evaluate_candidate(
+            c, request, constraints, environment, sensor_stream,
+            use_llm=(use_llm and id(c) in llm_ids),
+            llm_model=llm_model,
+            llm_temperature=llm_temperature,
+            llm_confidence_threshold=llm_confidence_threshold,
+            ci_mode=ci_mode,
+            collapse_stages=collapse_stages,
+        )
+        for c in candidates
+    ]
     best = select_best(evals)
+    no_compromise_diagnostics = None
     if best:
         decision = {"decision": "select_pipeline", "selected_pipeline_id": best.get("pipeline_id"), "selected_output_cap": best.get("matched_output_cap"), "reason": (best.get("ci_decision") or {}).get("reason")}
     else:
         hard_rejections = [e for e in evals if (e.get("ci_decision") or {}).get("decision") == "reject_hard_constraint"]
+        no_compromise_diagnostics = build_no_compromise_diagnostics(evals, candidates)
+        decision_kind = "no_compromise" if hard_rejections else ("consent_or_review_required" if candidates else "no_candidates")
         decision = {
-            "decision": "no_compromise" if hard_rejections else ("consent_or_review_required" if candidates else "no_candidates"),
+            "decision": decision_kind,
             "selected_pipeline_id": None,
             "selected_output_cap": None,
-            "reason": "No candidate pipeline passed the CI evaluator.",
+            "reason": no_compromise_diagnostics.get("primary_reason", "No candidate pipeline passed the CI evaluator."),
+            "no_compromise_diagnostics": no_compromise_diagnostics,
         }
     return {
         "schema_version": "smartpriv_ci_evaluation_output_v1",
@@ -585,8 +836,11 @@ def evaluate_candidates(candidate_output: Dict[str, Any], request: Dict[str, Any
             "llm_model": llm_model if use_llm else None,
             "llm_confidence_threshold": llm_confidence_threshold if use_llm else None,
             "templates_ignored": True,
+            "ci_mode": ci_mode,
+            "collapse_stages": collapse_stages or ci_mode == "no_staged_flows",
         },
         "decision": decision,
+        "no_compromise_diagnostics": no_compromise_diagnostics,
         "evaluations": evals,
     }
 
@@ -608,6 +862,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--llm-temperature", type=float, default=0.0)
     p.add_argument("--llm-confidence-threshold", type=float, default=0.75)
     p.add_argument("--top-k-for-llm", type=int)
+    p.add_argument("--ci-mode", default="full", choices=["full", "no_hard_rules", "llm_only", "no_staged_flows"], help="Ablation mode for CI evaluation.")
+    p.add_argument("--collapse-stages", action="store_true", help="Ablation: collapse staged flows to output_to_application before rule evaluation.")
     args = p.parse_args(argv)
     result = evaluate_candidates(
         candidate_output=load_json(args.candidates),
@@ -620,6 +876,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         llm_temperature=args.llm_temperature,
         llm_confidence_threshold=args.llm_confidence_threshold,
         top_k_for_llm=args.top_k_for_llm,
+        ci_mode=args.ci_mode,
+        collapse_stages=args.collapse_stages,
     )
     if args.out:
         write_json(result, args.out)

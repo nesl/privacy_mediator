@@ -30,6 +30,7 @@ import argparse
 import copy
 import csv
 import importlib
+import inspect
 import importlib.util
 import json
 import os
@@ -85,6 +86,21 @@ TASK_TO_REQUEST_FILENAME: Dict[str, str] = {
 }
 
 DEFAULT_BASELINES = ["raw", "manual", "direct_llm", "full_mediator"]
+
+# Default ablations are chosen to be runnable without requiring an LLM API key.
+# Add llm_only explicitly with --ablations if you want to test unconstrained LLM decisions.
+DEFAULT_ABLATION_MODES = [
+    "utility_only",
+    "no_ci_filter",
+    "no_residual_bounds",
+    "no_least_revealing",
+    "uniform_risk_weights",
+    "metadata_only",
+    "no_staged_flows",
+    "first_feasible",
+    "latency_first",
+]
+
 
 
 def load_json(path: str | Path) -> Dict[str, Any]:
@@ -310,6 +326,11 @@ def all_candidates(result: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def selected_candidate(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # Only an actual selection should be materialized as a survey output.
+    # no_compromise / consent_or_review / no_candidates may include closest rejected
+    # candidates for diagnostics, but those are not shared outputs.
+    if decision_text(result) != "select_pipeline":
+        return None
     sel = result.get("selected_candidate") or result.get("selected")
     if isinstance(sel, dict):
         return sel
@@ -320,7 +341,7 @@ def selected_candidate(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 return cand
     # Baseline wrappers usually have candidates but no nested selected candidate.
     cands = all_candidates(result)
-    if cands and (not pid or str(cands[0].get("pipeline_id")) == pid):
+    if cands and pid and str(cands[0].get("pipeline_id")) == pid:
         return cands[0]
     return None
 
@@ -398,6 +419,12 @@ def result_diagnostic_fields(result: Dict[str, Any]) -> Dict[str, Any]:
         "selector_num_candidates": selector.get("num_candidates"),
         "selector_num_feasible": selector.get("num_feasible"),
         "selector_num_rejected": selector.get("num_rejected"),
+        "no_compromise_reason": ((result.get("no_compromise_diagnostics") or {}).get("reason") or ((result.get("decision") or {}) if isinstance(result.get("decision"), dict) else {}).get("reason")),
+        "no_compromise_candidate_count": (result.get("no_compromise_diagnostics") or {}).get("candidate_count"),
+        "no_compromise_hard_rejection_count": (result.get("no_compromise_diagnostics") or {}).get("hard_rejection_count"),
+        "no_compromise_ci_feasible_count": (result.get("no_compromise_diagnostics") or {}).get("ci_feasible_count"),
+        "no_compromise_top_failed_rules": json.dumps((result.get("no_compromise_diagnostics") or {}).get("top_failed_rules") or []),
+        "no_compromise_diagnostics_json": json.dumps(result.get("no_compromise_diagnostics") or {}),
     }
 
 def make_stage_specs_from_candidate(cand: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -537,51 +564,92 @@ def run_direct_llm_baseline(direct_module, operator_catalog: Dict[str, Any], req
     )
 
 
-def run_full_mediator(full_module, args: argparse.Namespace, request_path: Path, out_dir: Path) -> Dict[str, Any]:
+def run_full_mediator(
+    full_module,
+    args: argparse.Namespace,
+    request_path: Path,
+    out_dir: Path,
+    ablation_mode: Optional[str] = None,
+) -> Dict[str, Any]:
     if not args.constraints:
         raise ValueError("--constraints is required when running full_mediator")
-    return full_module.run_mediator(
-        operators_path=args.operators,
-        request_path=request_path,
-        constraints_path=args.constraints,
-        environment_path=None,
-        sensor_stream_path=None,
-        candidate_generator_path=args.candidate_generator,
-        evaluator_path=args.evaluator,
-        selector_path=args.selector,
-        max_depth=args.max_depth,
-        max_states=args.max_states,
-        use_llm=args.full_mediator_use_llm,
-        llm_model=args.llm_model,
-        llm_temperature=args.llm_temperature,
-        llm_confidence_threshold=args.llm_confidence_threshold,
-        top_k_for_llm=args.top_k_for_llm,
-        probe_artifacts_path=args.probe_artifacts,
-        probe_config_path=args.probe_config,
-        probe_package_dir=args.probe_package_dir,
-        selection_config_path=args.selection_config,
-    )
+
+    kwargs: Dict[str, Any] = {
+        "operators_path": args.operators,
+        "request_path": request_path,
+        "constraints_path": args.constraints,
+        "environment_path": None,
+        "sensor_stream_path": None,
+        "candidate_generator_path": args.candidate_generator,
+        "evaluator_path": args.evaluator,
+        "selector_path": args.selector,
+        "max_depth": args.max_depth,
+        "max_states": args.max_states,
+        "use_llm": args.full_mediator_use_llm,
+        "llm_model": args.llm_model,
+        "llm_temperature": args.llm_temperature,
+        "llm_confidence_threshold": args.llm_confidence_threshold,
+        "top_k_for_llm": args.top_k_for_llm,
+        "probe_artifacts_path": args.probe_artifacts,
+        "probe_config_path": args.probe_config,
+        "probe_package_dir": args.probe_package_dir,
+        "selection_config_path": args.selection_config,
+    }
+
+    sig = inspect.signature(full_module.run_mediator)
+    if ablation_mode:
+        if "ablation_modes" in sig.parameters:
+            kwargs["ablation_modes"] = [ablation_mode]
+        elif "ablation_mode" in sig.parameters:
+            kwargs["ablation_mode"] = ablation_mode
+        else:
+            raise TypeError(
+                "Requested ablation mode "
+                f"{ablation_mode!r}, but the selected full_mediator module does not "
+                "expose an ablation_modes/ablation_mode parameter. Use the "
+                "ablation-supported full_mediator.py generated with this patch."
+            )
+    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return full_module.run_mediator(**filtered)
+
+
+def method_summary_entry(r: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "method_id": r.get("method_id") or r.get("baseline"),
+        "method_kind": r.get("method_kind"),
+        "baseline": r.get("baseline"),
+        "baseline_id": r.get("baseline_id"),
+        "ablation_mode": r.get("ablation_mode"),
+        "parent_method": r.get("parent_method"),
+        "decision": r.get("decision"),
+        "selected_pipeline_id": r.get("selected_pipeline_id"),
+        "matched_output_cap": r.get("matched_output_cap"),
+        "matched_output_schema": r.get("matched_output_schema"),
+        "final_output_type": r.get("final_output_type"),
+        "final_output_schema": r.get("final_output_schema"),
+        "operators": r.get("operators"),
+        "output_dir": r.get("method_output_dir") or r.get("baseline_output_dir"),
+        "result_json": r.get("result_json"),
+        "selected_pipeline_json": r.get("selected_pipeline_json"),
+        "pipeline_spec_json": r.get("pipeline_spec_json"),
+        "error": r.get("error"),
+        "no_compromise_reason": r.get("no_compromise_reason"),
+        "no_compromise_top_failed_rules": r.get("no_compromise_top_failed_rules"),
+    }
 
 
 def write_context_summary(context_dir: Path, scenario: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
+    methods = {str(r.get("method_id") or r.get("baseline")): method_summary_entry(r) for r in rows}
+    baselines = {str(r.get("baseline_id") or r.get("baseline")): method_summary_entry(r) for r in rows if r.get("method_kind") == "baseline"}
+    ablations = {str(r.get("ablation_mode")): method_summary_entry(r) for r in rows if r.get("method_kind") == "ablation"}
     simple = {
         "scenario_id": rows[0]["scenario_id"] if rows else scenario.get("scenario_id"),
         "task": rows[0]["task"] if rows else scenario_task(scenario),
         "context_family": scenario.get("context_family"),
         "ci_parameters_scalar_context_only": scenario_ci_params(scenario),
-        "baselines": {
-            r["baseline"]: {
-                "decision": r["decision"],
-                "selected_pipeline_id": r.get("selected_pipeline_id"),
-                "matched_output_cap": r.get("matched_output_cap"),
-                "final_output_type": r.get("final_output_type"),
-                "final_output_schema": r.get("final_output_schema"),
-                "operators": r.get("operators"),
-                "output_dir": r.get("baseline_output_dir"),
-                "error": r.get("error"),
-            }
-            for r in rows
-        },
+        "methods": methods,
+        "baselines": baselines,
+        "ablations": ablations,
     }
     write_json(simple, context_dir / "context_summary.json")
 
@@ -610,6 +678,45 @@ def parse_list_arg(value: Optional[str], default: Sequence[str]) -> List[str]:
     return [x.strip() for x in str(value).split(",") if x.strip()]
 
 
+def parse_ablation_modes(value: Optional[str]) -> List[str]:
+    if value is None:
+        return list(DEFAULT_ABLATION_MODES)
+    raw = str(value).strip()
+    if raw == "" or raw.lower() in {"none", "false", "off", "0"}:
+        return []
+    if raw.lower() == "all":
+        return list(DEFAULT_ABLATION_MODES) + ["llm_only"]
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def make_run_specs(requested_baselines: Sequence[str], requested_ablations: Sequence[str]) -> List[Dict[str, Any]]:
+    specs: List[Dict[str, Any]] = []
+    for baseline in requested_baselines:
+        specs.append({
+            "method_id": baseline,
+            "method_kind": "baseline",
+            "baseline": baseline,
+            "baseline_id": baseline,
+            "ablation_mode": None,
+            "parent_method": None,
+            "method_label": baseline,
+            "dir_parts": ("baselines", baseline),
+        })
+    for mode in requested_ablations:
+        method_id = f"ablation:{mode}"
+        specs.append({
+            "method_id": method_id,
+            "method_kind": "ablation",
+            "baseline": method_id,  # Backward-compatible column used by older survey loaders.
+            "baseline_id": None,
+            "ablation_mode": mode,
+            "parent_method": "full_mediator",
+            "method_label": f"full_mediator ablation: {mode}",
+            "dir_parts": ("ablations", mode),
+        })
+    return specs
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Run all preprocessing baselines/full mediator over all context scenarios.")
     p.add_argument("--contexts", default="survey/data/ci_focused_user_study_context_only_dedup_32_no_output_readable.json")
@@ -632,6 +739,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--audio-request", default=None)
 
     p.add_argument("--baselines", default=",".join(DEFAULT_BASELINES), help="Comma list: raw,manual,direct_llm,full_mediator")
+    p.add_argument(
+        "--ablations",
+        default=",".join(DEFAULT_ABLATION_MODES),
+        help=(
+            "Comma list of full-mediator ablation modes to run for every context. "
+            "Use an empty string or 'none' to disable; use 'all' to include llm_only."
+        ),
+    )
     p.add_argument("--scenario-ids", default=None, help="Optional comma-separated subset of scenario ids")
     p.add_argument("--out-dir", default="runs/context_pipeline_generation")
     p.add_argument("--max-depth", type=int, default=7)
@@ -659,6 +774,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     requested_baselines = parse_list_arg(args.baselines, DEFAULT_BASELINES)
     # Backwards-compatible alias from the older runner/package.
     requested_baselines = ["manual" if b == "manual_space_task" else b for b in requested_baselines]
+    requested_ablations = parse_ablation_modes(args.ablations)
+    run_specs = make_run_specs(requested_baselines, requested_ablations)
     wanted_sids = set(parse_list_arg(args.scenario_ids, [])) if args.scenario_ids else None
 
     out_root = Path(args.out_dir)
@@ -675,11 +792,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     operator_catalog = load_json(args.operators)
 
-    # Import baseline modules only if requested.
+    # Import baseline modules only if requested. Full mediator is also required for ablations.
     raw_module = import_module_or_path("preprocessing_baselines.raw_baseline", args.raw_module) if "raw" in requested_baselines else None
     manual_module = import_module_or_path("preprocessing_baselines.manual_baseline", args.manual_module) if "manual" in requested_baselines else None
     direct_module = import_module_or_path("preprocessing_baselines.direct_llm_baseline", args.direct_llm_module) if "direct_llm" in requested_baselines else None
-    full_module = import_module_from_path("evaluation_full_mediator", args.full_mediator_module) if "full_mediator" in requested_baselines else None
+    full_module = import_module_from_path("evaluation_full_mediator", args.full_mediator_module) if ("full_mediator" in requested_baselines or requested_ablations) else None
 
     explicit_requests = {
         "visitor_presence_detection": args.visitor_request,
@@ -694,10 +811,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "contexts_file": str(args.contexts),
         "out_dir": str(out_root),
         "baselines": requested_baselines,
+        "ablations": requested_ablations,
+        "methods": [
+            {
+                "method_id": s["method_id"],
+                "method_kind": s["method_kind"],
+                "baseline_id": s.get("baseline_id"),
+                "ablation_mode": s.get("ablation_mode"),
+                "parent_method": s.get("parent_method"),
+                "method_label": s.get("method_label"),
+            }
+            for s in run_specs
+        ],
         "contexts": {},
     }
 
-    total_runs = len(scenarios) * len(requested_baselines)
+    total_runs = len(scenarios) * len(run_specs)
     with make_progress(total_runs, enabled=not args.no_progress) as progress:
         for ordinal, sid, scenario in scenarios:
             task = scenario_task(scenario)
@@ -721,13 +850,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "context_family": scenario.get("context_family"),
                 "request_path": str(request_path),
                 "source_app_request_path": str(app_request_path),
+                "methods": {},
                 "baselines": {},
+                "ablations": {},
             }
 
-            for baseline in requested_baselines:
-                baseline_dir = context_dir / "baselines" / baseline
+            for spec in run_specs:
+                method_id = str(spec["method_id"])
+                method_kind = str(spec["method_kind"])
+                baseline = str(spec["baseline"])
+                ablation_mode = spec.get("ablation_mode")
+                method_dir = context_dir.joinpath(*spec["dir_parts"])
+                baseline_dir = method_dir  # Backward-compatible local variable used by writer code.
                 baseline_dir.mkdir(parents=True, exist_ok=True)
-                progress.set_postfix_str(f"{sid} {baseline}")
+                progress.set_postfix_str(f"{sid} {method_id}")
                 result: Optional[Dict[str, Any]] = None
                 error: Optional[str] = None
                 tb: Optional[str] = None
@@ -761,6 +897,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         )
                     elif baseline == "full_mediator":
                         result = run_full_mediator(full_module, args, request_path, baseline_dir)
+                    elif method_kind == "ablation":
+                        result = run_full_mediator(full_module, args, request_path, baseline_dir, ablation_mode=str(ablation_mode))
                         # Mirror full_mediator's usual stage files for easier inspection.
                         if result:
                             if result.get("candidate_generation_result") is not None:
@@ -777,8 +915,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     error = repr(exc)
                     tb = traceback.format_exc()
                     result = {
-                        "schema_version": "baseline_error_v1",
+                        "schema_version": "method_error_v1",
                         "baseline": baseline,
+                        "method_id": method_id,
+                        "method_kind": method_kind,
+                        "baseline_id": spec.get("baseline_id"),
+                        "ablation_mode": ablation_mode,
+                        "parent_method": spec.get("parent_method"),
                         "request_id": context_request.get("request_identity", {}).get("request_id"),
                         "scenario_id": sid,
                         "decision": {"decision": "error", "selected_pipeline_id": None, "reason": error},
@@ -803,13 +946,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "purpose": params.get("purpose"),
                     "transmission_principle": params.get("transmission_principle"),
                     "context_family": scenario.get("context_family"),
+                    "method_id": method_id,
+                    "method_kind": method_kind,
+                    "method_label": spec.get("method_label"),
                     "baseline": baseline,
+                    "baseline_id": spec.get("baseline_id"),
+                    "ablation_mode": ablation_mode,
+                    "parent_method": spec.get("parent_method"),
                     "app_request_path": str(app_request_path),
                     "context_request_path": str(request_path),
                     "decision": decision_text(result or {}),
                     **fields,
                     **result_diagnostic_fields(result or {}),
-                    "baseline_output_dir": str(baseline_dir),
+                    "baseline_output_dir": str(baseline_dir),  # Backward-compatible alias.
+                    "method_output_dir": str(method_dir),
                     "result_json": paths.get("result_json"),
                     "selected_pipeline_json": paths.get("selected_pipeline_json"),
                     "pipeline_spec_json": paths.get("pipeline_spec_json"),
@@ -818,7 +968,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 }
                 context_rows.append(row)
                 all_rows.append(row)
-                index["contexts"][sid]["baselines"][baseline] = row
+                index["contexts"][sid]["methods"][method_id] = row
+                if method_kind == "baseline":
+                    index["contexts"][sid]["baselines"][str(spec.get("baseline_id") or baseline)] = row
+                elif method_kind == "ablation":
+                    index["contexts"][sid]["ablations"][str(ablation_mode)] = row
                 progress.update(1)
 
             write_context_summary(context_dir, scenario, context_rows)
@@ -829,18 +983,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     write_csv(all_rows, out_root / "summary.csv")
 
     by_context_simple = {
-        sid: {
-            baseline: {
-                "decision": entry.get("decision"),
-                "selected_pipeline_id": entry.get("selected_pipeline_id"),
-                "matched_output_cap": entry.get("matched_output_cap"),
-                "final_output_type": entry.get("final_output_type"),
-                "operators": entry.get("operators"),
-                "baseline_output_dir": entry.get("baseline_output_dir"),
-                "error": entry.get("error"),
-            }
-            for baseline, entry in meta["baselines"].items()
-        }
+        sid: {method_id: method_summary_entry(entry) for method_id, entry in meta.get("methods", {}).items()}
         for sid, meta in index["contexts"].items()
     }
     write_json(by_context_simple, out_root / "summary_by_context.json")
@@ -848,6 +991,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(json.dumps({
         "contexts": len(scenarios),
         "baselines": requested_baselines,
+        "ablations": requested_ablations,
+        "methods": [s["method_id"] for s in run_specs],
         "runs": len(all_rows),
         "out_dir": str(out_root),
         "summary_csv": str(out_root / "summary.csv"),

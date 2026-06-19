@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Contextual Integrity Acceptability Survey</title>
+  <title>Smart-Space Data Sharing Survey</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <main class="container">
     <section id="start-card" class="card">
-      <h1>Contextual Integrity Acceptability Survey</h1>
+      <h1>Smart-Space Data Sharing Survey</h1>
       <p>
-        You will review short smart-space context scenarios. These items are deduplicated context-only scenarios. They intentionally omit the data/output parameter; no output/data type is shown in this version.
+        You will review short smart-space scenarios. Each scenario describes a situation and the kind of data that would be shared with an app or person.
       </p>
       <p class="muted">
-        Each question shows one value for each CI context parameter: sender, data subject, recipient, purpose, and transmission principle. Situation summarizes context and space. The output/data parameter is intentionally not included.
+        Please imagine the scenario involves you, your space, or someone you are responsible for in the role of the person the data is about. Give your own judgment about whether this data sharing is appropriate in that specific situation. You are not being asked whether you would buy the system, whether the system is technically useful, or whether society as a whole would approve.
       </p>
       <div class="form-row">
         <label for="participant-code">Participant code</label>
@@ -22,7 +22,7 @@
       </div>
       <div class="form-row">
         <label for="k-input">Number of questions</label>
-        <input id="k-input" type="number" min="1" max="32" value="{{ default_k }}" />
+        <input id="k-input" type="number" min="1" max="200" value="{{ default_k }}" />
       </div>
       <button id="start-btn" class="primary">Start survey</button>
       <div id="start-error" class="error hidden"></div>
@@ -43,14 +43,14 @@
       </div>
 
       <div class="rating-card">
-        <h3>Acceptability rating</h3>
-        <p class="muted">Given only these CI context parameters, how acceptable does this scenario seem?</p>
+        <h3>Appropriateness rating</h3>
+        <p class="muted">In your judgment, how appropriate is it for this system to share the listed data in this situation?</p>
         <div id="rating-options" class="rating-options">
-          <label><input type="radio" name="rating" value="1"> 1<br><span>Clearly unacceptable</span></label>
-          <label><input type="radio" name="rating" value="2"> 2<br><span>Somewhat unacceptable</span></label>
-          <label><input type="radio" name="rating" value="3"> 3<br><span>Unsure / depends</span></label>
-          <label><input type="radio" name="rating" value="4"> 4<br><span>Somewhat acceptable</span></label>
-          <label><input type="radio" name="rating" value="5"> 5<br><span>Clearly acceptable</span></label>
+          <label><input type="radio" name="rating" value="1"> 1<br><span>Completely inappropriate</span></label>
+          <label><input type="radio" name="rating" value="2"> 2<br><span>Somewhat inappropriate</span></label>
+          <label><input type="radio" name="rating" value="3"> 3<br><span>Neutral / unsure</span></label>
+          <label><input type="radio" name="rating" value="4"> 4<br><span>Somewhat appropriate</span></label>
+          <label><input type="radio" name="rating" value="5"> 5<br><span>Completely appropriate</span></label>
         </div>
       </div>
 
@@ -68,7 +68,7 @@
 
       <div class="form-row">
         <label for="free-text">Optional note</label>
-        <textarea id="free-text" rows="3" placeholder="What made this acceptable or unacceptable?"></textarea>
+        <textarea id="free-text" rows="3" placeholder="What made this appropriate or inappropriate?"></textarea>
       </div>
 
       <div id="submit-error" class="error hidden"></div>
