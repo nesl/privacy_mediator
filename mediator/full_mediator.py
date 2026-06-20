@@ -32,7 +32,7 @@ Example:
 
 With LLM norm judgment:
   export OPENAI_API_KEY=...
-  python mediator/full_mediator.py ... --use-llm --llm-model gpt-4o-mini --top-k-for-llm 5
+  python mediator/full_mediator.py ... --use-llm --llm-model gpt-4o --top-k-for-llm 5
 
 With privacy probes after transformed artifacts exist:
   python mediator/full_mediator.py ... \
@@ -324,7 +324,7 @@ def run_mediator(
     max_depth: int = 7,
     max_states: int = 25000,
     use_llm: bool = False,
-    llm_model: str = "gpt-4o-mini",
+    llm_model: str = "gpt-4o",
     llm_temperature: float = 0.0,
     llm_confidence_threshold: float = 0.75,
     top_k_for_llm: Optional[int] = None,
@@ -490,7 +490,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     p.add_argument("--use-llm", action="store_true", help="Use LLM-assisted norm judgment after hard constraints pass")
     p.add_argument("--openai-api-key", help="Optional API key; otherwise use OPENAI_API_KEY env var")
-    p.add_argument("--llm-model", default="gpt-4o-mini")
+    p.add_argument("--llm-model", default="gpt-4o")
     p.add_argument("--llm-temperature", type=float, default=0.0)
     p.add_argument("--llm-confidence-threshold", type=float, default=0.75)
     p.add_argument("--top-k-for-llm", type=int, help="Only call LLM on top-k candidates by residual score")

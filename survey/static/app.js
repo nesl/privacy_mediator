@@ -102,28 +102,50 @@ async function loadItem(index) {
   renderItem(currentItem);
 }
 
+function formatExample(example) {
+  const text = String(example || '').trim();
+  if (!text) return '';
+  return /^example\s*:/i.test(text) ? text : `Example: ${text}`;
+}
+
 function renderItem(item) {
   document.getElementById('progress-text').textContent = `Question ${item.index + 1} of ${item.total}`;
   document.getElementById('progress-fill').style.width = `${((item.index + 1) / item.total) * 100}%`;
-  document.getElementById('task-title').textContent = item.flow.task_label || item.flow.task || 'Smart-space scenario';
-  document.getElementById('vignette').textContent = item.vignette;
+
+  const flow = item.flow || {};
+  const participantVisible = item.participant_visible || {};
+  document.getElementById('task-title').textContent = flow.task_label || participantVisible.task_title || flow.task || 'Smart-space scenario';
+  document.getElementById('vignette').textContent = item.vignette || participantVisible.vignette || '';
 
   const table = document.getElementById('ci-table');
   table.innerHTML = '';
-  for (const row of item.display_fields) {
+  const fields = item.display_fields || participantVisible.display_fields || [];
+  for (const row of fields) {
     const tr = document.createElement('tr');
     const tdLabel = document.createElement('td');
     const tdValue = document.createElement('td');
-    tdLabel.textContent = row.label;
+    tdLabel.textContent = row.label || '';
+
     const main = document.createElement('div');
-    main.textContent = row.value;
+    main.textContent = row.value || '';
     tdValue.appendChild(main);
-    if (row.help) {
+
+    const helpText = row.help || row.description || '';
+    if (helpText) {
       const help = document.createElement('div');
       help.className = 'field-help';
-      help.textContent = row.example ? `${row.help} Example: ${row.example}` : row.help;
+      help.textContent = helpText;
       tdValue.appendChild(help);
     }
+
+    const exampleText = formatExample(row.example);
+    if (exampleText) {
+      const example = document.createElement('div');
+      example.className = 'field-help field-example';
+      example.textContent = exampleText;
+      tdValue.appendChild(example);
+    }
+
     tr.appendChild(tdLabel);
     tr.appendChild(tdValue);
     table.appendChild(tr);

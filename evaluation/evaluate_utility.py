@@ -12,6 +12,8 @@ The evaluator deliberately uses the existing downstream inference CLIs rather
 than importing task datasets directly.  This keeps the privacy-pipeline utility
 check aligned with the same programs used for the raw downstream tasks.
 
+Default: if --tasks is omitted, the evaluator runs every configured task present in the generated pipeline summary and evaluates only --split test.
+
 Typical smoke test, visitor/chokepoint only:
 
     python -m evaluation.evaluate_utility \
@@ -20,9 +22,9 @@ Typical smoke test, visitor/chokepoint only:
       --tasks visitor_presence_detection \
       --scenario-ids S001 \
       --methods full_mediator,manual,raw \
-      --chokepoint-manifest data/chokepoint/manifest.csv \
+      --chokepoint-manifest data/chokepoint/chokepoint_manifest.csv \
       --chokepoint-data-root data/chokepoint \
-      --chokepoint-infer-module baselines.task.chokepoint.infer_chokepoint \
+      --chokepoint-infer-module baselines.task.chokepoint_presence.infer_yolo \
       --device cpu \
       --max-samples 2
 
@@ -57,11 +59,14 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import dataclasses
 import hashlib
+import importlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -72,14 +77,294 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+EVALUATE_UTILITY_PATCH_VERSION = "2026-06-auto-utility-metrics"
+
 try:
     from tqdm.auto import tqdm
 except Exception:  # pragma: no cover
     tqdm = None  # type: ignore
 
+# Global progress switch.  It is set from --no-progress in main(), and used by
+# helper functions that are called deep inside preprocessing/downstream stages.
+_PROGRESS_ENABLED = True
+
+
+def set_progress_enabled(enabled: bool) -> None:
+    global _PROGRESS_ENABLED
+    _PROGRESS_ENABLED = bool(enabled)
+
+
+def progress_enabled() -> bool:
+    return bool(tqdm is not None and _PROGRESS_ENABLED)
+
+
+def progress_write(msg: str) -> None:
+    if progress_enabled():
+        try:
+            tqdm.write(str(msg))  # type: ignore[union-attr]
+        except Exception:
+            print(str(msg), file=sys.stderr, flush=True)
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".ogg", ".m4a"}
 VIDEO_EXTS = {".avi", ".mp4", ".mov", ".mkv", ".mpg", ".mpeg", ".m4v", ".wmv"}
+
+
+# Runtime package configuration.  Your repository may expose the runtime either as
+# top-level smartpriv_runtime (when mediator/ is on PYTHONPATH) or as
+# mediator.smartpriv_runtime (when the project root is on PYTHONPATH).
+_RUNTIME_PROJECT_ROOT = Path(".").resolve()
+_RUNTIME_PACKAGE = "auto"
+_SUBPROCESS_CUDA_VISIBLE_DEVICES: Optional[str] = None
+_SUBPROCESS_CUDA_DEVICE_ORDER: str = "PCI_BUS_ID"
+
+
+def _query_nvidia_smi_gpus() -> List[Dict[str, str]]:
+    """Best-effort nvidia-smi query returning index/uuid/name rows."""
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index,uuid,name", "--format=csv,noheader"],
+            text=True,
+            stderr=subprocess.STDOUT,
+        )
+    except Exception:
+        return []
+    rows: List[Dict[str, str]] = []
+    for line in out.splitlines():
+        parts = [x.strip() for x in line.split(",", 2)]
+        if len(parts) == 3:
+            rows.append({"index": parts[0], "uuid": parts[1], "name": parts[2]})
+    return rows
+
+
+def _select_cuda_visible_devices(prefer_gpu_name: Optional[str]) -> Optional[str]:
+    """Return the UUID for a preferred GPU name, falling back to None.
+
+    Numeric CUDA_VISIBLE_DEVICES values can be ambiguous on mixed systems because
+    CUDA ordering may differ from nvidia-smi ordering.  UUIDs are stable, and if
+    a subprocess receives a single GPU UUID, that GPU becomes visible cuda:0.
+    """
+    if not prefer_gpu_name:
+        return None
+    needle = str(prefer_gpu_name).strip().lower()
+    if not needle:
+        return None
+    for gpu in _query_nvidia_smi_gpus():
+        if needle in gpu.get("name", "").lower():
+            return gpu.get("uuid") or None
+    return None
+
+
+def configure_gpu_visibility_for_run(args: argparse.Namespace) -> Dict[str, Any]:
+    """Force evaluator/subprocess CUDA visibility to a preferred GPU UUID when possible."""
+    global _SUBPROCESS_CUDA_VISIBLE_DEVICES, _SUBPROCESS_CUDA_DEVICE_ORDER
+    device = str(getattr(args, "device", "auto") or "auto").strip().lower()
+    report: Dict[str, Any] = {"enabled": False, "reason": ""}
+    if device == "cpu":
+        report["reason"] = "device=cpu"
+        return report
+    if getattr(args, "no_prefer_gpu_env", False):
+        report["reason"] = "--no-prefer-gpu-env"
+        return report
+
+    explicit = str(getattr(args, "cuda_visible_devices", "") or "").strip()
+    selected = explicit or _select_cuda_visible_devices(getattr(args, "prefer_gpu_name", None))
+    if not selected:
+        report["reason"] = "no preferred GPU UUID found"
+        return report
+
+    _SUBPROCESS_CUDA_DEVICE_ORDER = "PCI_BUS_ID"
+    _SUBPROCESS_CUDA_VISIBLE_DEVICES = selected
+    os.environ["CUDA_DEVICE_ORDER"] = _SUBPROCESS_CUDA_DEVICE_ORDER
+    os.environ["CUDA_VISIBLE_DEVICES"] = selected
+    report.update({
+        "enabled": True,
+        "CUDA_DEVICE_ORDER": _SUBPROCESS_CUDA_DEVICE_ORDER,
+        "CUDA_VISIBLE_DEVICES": selected,
+        "prefer_gpu_name": getattr(args, "prefer_gpu_name", None),
+        "explicit_cuda_visible_devices": explicit or None,
+    })
+    return report
+
+
+def configure_import_paths(project_root: str | Path) -> None:
+    """Make project modules importable for both this process and subprocesses."""
+    root = Path(project_root).resolve()
+    candidates = [root, root / "mediator"]
+    for c in candidates:
+        if c.exists():
+            cs = str(c)
+            if cs not in sys.path:
+                sys.path.insert(0, cs)
+
+
+def set_runtime_config(project_root: str | Path, runtime_package: str = "auto") -> None:
+    global _RUNTIME_PROJECT_ROOT, _RUNTIME_PACKAGE
+    _RUNTIME_PROJECT_ROOT = Path(project_root).resolve()
+    _RUNTIME_PACKAGE = str(runtime_package or "auto")
+    configure_import_paths(_RUNTIME_PROJECT_ROOT)
+
+
+def runtime_package_candidates() -> List[str]:
+    if _RUNTIME_PACKAGE and _RUNTIME_PACKAGE != "auto":
+        return [_RUNTIME_PACKAGE]
+    return ["smartpriv_runtime", "mediator.smartpriv_runtime"]
+
+
+def make_subprocess_env(cwd: Optional[str | Path]) -> Dict[str, str]:
+    """Return env with project root and mediator/ added to PYTHONPATH."""
+    env = os.environ.copy()
+    roots: List[str] = []
+    for x in [cwd, _RUNTIME_PROJECT_ROOT, _RUNTIME_PROJECT_ROOT / "mediator"]:
+        if x is None:
+            continue
+        px = Path(x).resolve()
+        if px.exists():
+            roots.append(str(px))
+    existing = env.get("PYTHONPATH", "")
+    parts = roots + ([existing] if existing else [])
+    env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys([p for p in parts if p]))
+    # Encourage downstream Python scripts to flush logs/progress promptly.
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    if _SUBPROCESS_CUDA_VISIBLE_DEVICES:
+        env["CUDA_DEVICE_ORDER"] = _SUBPROCESS_CUDA_DEVICE_ORDER
+        env["CUDA_VISIBLE_DEVICES"] = _SUBPROCESS_CUDA_VISIBLE_DEVICES
+    return env
+
+
+def _cuda_available() -> bool:
+    """Best-effort CUDA availability check without making torch a hard import."""
+    try:
+        import torch  # type: ignore
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        # If torch is unavailable at evaluator import time, still prefer the
+        # conventional GPU device string.  The downstream script will produce the
+        # real error or fall back if it supports retry-cpu-on-error.
+        return True
+
+
+def normalized_device(device: Optional[Any], *, ultralytics: bool = False, torch_script: bool = False) -> Optional[str]:
+    """Normalize user shorthand for downstream scripts.
+
+    Device policy:
+      * None: do not pass --device; downstream script default decides.
+      * auto: prefer GPU when CUDA is available, otherwise CPU.
+      * gpu/cuda: force the first GPU.
+
+    Ultralytics CLIs in this repo expect '0' or 'cpu'.  Torch classifiers are
+    more likely to expect 'cuda:0' or 'cpu'.  Explicit values such as 'cpu',
+    '0', '1', 'cuda:1', or 'mps' are preserved except for aliases below.
+    """
+    if device is None:
+        return None
+    text = str(device).strip()
+    low = text.lower()
+    if not text:
+        return None
+    if low == "auto":
+        use_cuda = _cuda_available()
+        if ultralytics:
+            return "0" if use_cuda else "cpu"
+        if torch_script:
+            return "cuda:0" if use_cuda else "cpu"
+        return "cuda:0" if use_cuda else "cpu"
+    if low in {"gpu", "cuda"}:
+        if ultralytics:
+            return "0"
+        if torch_script:
+            return "cuda:0"
+        return "cuda:0"
+    return text
+
+
+def cuda_device_report() -> Dict[str, Any]:
+    """Return a small, best-effort CUDA/GPU report for progress/debug logs."""
+    report: Dict[str, Any] = {"torch_imported": False, "cuda_available": None, "device_count": None, "devices": []}
+    try:
+        import torch  # type: ignore
+
+        report["torch_imported"] = True
+        report["cuda_available"] = bool(torch.cuda.is_available())
+        if torch.cuda.is_available():
+            count = int(torch.cuda.device_count())
+            report["device_count"] = count
+            devices = []
+            for i in range(count):
+                info: Dict[str, Any] = {"index": i}
+                try:
+                    info["name"] = torch.cuda.get_device_name(i)
+                except Exception:
+                    info["name"] = None
+                try:
+                    major, minor = torch.cuda.get_device_capability(i)
+                    info["capability"] = f"{major}.{minor}"
+                except Exception:
+                    info["capability"] = None
+                devices.append(info)
+            report["devices"] = devices
+        else:
+            report["device_count"] = 0
+    except Exception as exc:
+        report["torch_error"] = repr(exc)
+    report["CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES")
+    return report
+
+
+def compact_device_report(report: Dict[str, Any]) -> str:
+    if report.get("cuda_available") is True:
+        names = []
+        for d in report.get("devices") or []:
+            name = d.get("name") or "unknown GPU"
+            idx = d.get("index")
+            cap = d.get("capability")
+            names.append(f"{idx}:{name}" + (f" cc{cap}" if cap else ""))
+        visible = report.get("CUDA_VISIBLE_DEVICES")
+        return "CUDA available; visible devices=" + ", ".join(names) + (f"; CUDA_VISIBLE_DEVICES={visible}" if visible else "")
+    if report.get("cuda_available") is False:
+        return "CUDA not available; using CPU unless downstream script overrides"
+    return "CUDA status unknown" + (f"; torch_error={report.get('torch_error')}" if report.get("torch_error") else "")
+
+
+def resolved_device_summary(device: Optional[Any]) -> Dict[str, Any]:
+    report = cuda_device_report()
+    return {
+        "requested_device": str(device) if device is not None else None,
+        "ultralytics_device": normalized_device(device, ultralytics=True),
+        "torch_device": normalized_device(device, torch_script=True),
+        "cuda_report": report,
+        "cuda_summary": compact_device_report(report),
+    }
+
+
+def cli_option_value(cmd: Sequence[str], flag: str) -> Optional[str]:
+    vals = [str(x) for x in cmd]
+    for i, x in enumerate(vals):
+        if x == flag and i + 1 < len(vals):
+            return vals[i + 1]
+        if x.startswith(flag + "="):
+            return x.split("=", 1)[1]
+    return None
+
+
+def describe_command_device(cmd: Sequence[str]) -> str:
+    dev = cli_option_value(cmd, "--device")
+    cmd_s = " ".join(str(x) for x in cmd)
+    if dev is None:
+        return "device=downstream-default"
+    low = str(dev).lower()
+    if low in {"cpu"}:
+        kind = "CPU"
+    elif low == "mps":
+        kind = "Apple MPS"
+    elif low.startswith("cuda") or low.isdigit() or low in {"gpu", "0", "1", "2", "3"}:
+        kind = "GPU/CUDA"
+    else:
+        kind = "custom"
+    family = "YOLO/Ultralytics" if ("chokepoint" in cmd_s or "extract_pose" in cmd_s or "yolo" in cmd_s.lower()) else "Torch/classifier"
+    return f"{family} device={dev} ({kind})"
+
 
 TASK_TO_SHORT = {
     "visitor_presence_detection": "chokepoint",
@@ -89,6 +374,154 @@ TASK_TO_SHORT = {
 }
 
 DEFAULT_METHODS = ["raw", "manual", "direct_llm", "full_mediator"]
+
+# Utility evaluation defaults should focus on ablations that actually changed
+# decisions or selected operator chains in the context-pipeline generation study.
+# These are the ablations worth running by default because they probe the main
+# utility/privacy tradeoffs: removing CI gates, optimizing utility alone, and
+# disabling/weakening least-revealing selection.
+DEFAULT_MEANINGFUL_ABLATION_MODES = [
+    "utility_only",
+    "no_ci_filter",
+    "no_least_revealing",
+    "latency_first",
+]
+
+# These ablations were intentionally left available for explicit experiments,
+# but are skipped by the default utility-evaluation policy because they did not
+# change selected outputs in the current pipeline-generation summary.
+DEFAULT_SKIPPED_ABLATION_MODES = [
+    "no_residual_bounds",
+    "uniform_risk_weights",
+    "metadata_only",
+    "no_staged_flows",
+    "first_feasible",
+]
+
+# Default module candidates for the task-specific downstream CLIs.  These are
+# resolved against the user's repository at startup.  The first importable module
+# is used.  The canonical project layout currently uses:
+#   baselines/task/chokepoint_presence
+#   baselines/task/chime_home_audio or chim_home_audio
+#   baselines/task/le2i_fall
+#   baselines/task/youhome_adl
+DEFAULT_INFER_MODULE_CANDIDATES = {
+    "chokepoint": [
+        # Current project layout/name.
+        "baselines.task.chokepoint_presence.infer_yolo",
+        # Other possible names in older/local copies.
+        "baselines.task.chokepoint_presence.infer_chokepoint",
+        "baselines.task.chokepoint_presence.infer",
+        # Backward-compatible older/default names.
+        "baselines.task.chokepoint.infer_yolo",
+        "baselines.task.chokepoint.infer_chokepoint",
+        "baselines.task.chokepoint.infer",
+    ],
+    "fall_extract_pose": [
+        "baselines.task.le2i_fall.extract_pose",
+    ],
+    "fall_infer": [
+        "baselines.task.le2i_fall.infer",
+        "baselines.task.le2i_fall.infer_fall",
+    ],
+    "home_audio": [
+        "baselines.task.chime_home_audio.infer_home_audio",
+        "baselines.task.chime_home_audio.infer",
+        # Accept the spelling the repo may use in older local copies.
+        "baselines.task.chim_home_audio.infer_home_audio",
+        "baselines.task.chim_home_audio.infer",
+        # Backward-compatible older/default names.
+        "baselines.task.chime_home.infer_home_audio",
+        "baselines.task.chime_home.infer",
+    ],
+    "youhome": [
+        "baselines.task.youhome_adl.infer_youhome",
+        "baselines.task.youhome_adl.infer",
+    ],
+}
+
+
+def _module_is_importable(module_name: str) -> bool:
+    """Return True if `python -m module_name` should be resolvable.
+
+    We use find_spec instead of importing the module so heavy ML dependencies are
+    not loaded during evaluator setup.
+    """
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return False
+
+
+def resolve_module_candidate(name: str, candidates: Sequence[str]) -> str:
+    """Pick the first importable module candidate, else keep the first candidate.
+
+    Keeping the first candidate when none are importable makes the downstream
+    error message explicit while preserving deterministic behavior.
+    """
+    for module_name in candidates:
+        if _module_is_importable(module_name):
+            progress_write(f"[config] {name} module={module_name}")
+            return module_name
+    fallback = candidates[0]
+    progress_write(
+        f"[config] WARNING: could not find an importable module for {name}; "
+        f"using {fallback}. Override with --{name.replace('_', '-')}-module or --*-script."
+    )
+    return fallback
+
+# Conventional locations used only when the corresponding CLI argument was not
+# supplied.  Missing paths are not fatal unless the user explicitly requested
+# that task or passed --strict-task-config.
+AUTO_PATH_CANDIDATES = {
+    # Prefer the original task-created manifest names used in this project.
+    # Split filtering is applied later, so these should be full train/val/test
+    # manifests rather than manually pre-filtered files.
+    "chokepoint_manifest": [
+        "data/chokepoint/chokepoint_manifest.csv",
+        "data/chokepoint/chokepoint_test_manifest.csv",
+        "data/chokepoint/manifest.csv",
+    ],
+    "fall_manifest": [
+        # Prefer the raw task manifest when present.  If it lacks keypoints_path,
+        # the downstream-app pose extractor is run on the test-filtered manifest.
+        "data/le2i/le2i_manifest.csv",
+        "data/le2i/le2i_manifest_with_keypoints.csv",
+        "outputs/le2i/le2i_manifest_with_keypoints.csv",
+        "outputs/le2i_pose/le2i_manifest_with_keypoints.csv",
+    ],
+    "fall_checkpoint": [
+        "outputs/le2i/checkpoint.pt",
+        "outputs/le2i/best.pt",
+        "outputs/le2i/model.pt",
+    ],
+    "fall_label_map": [
+        "outputs/le2i/label_map.json",
+        "data/le2i/label_map.json",
+    ],
+    "home_audio_manifest": [
+        "data/chime_home/chime_home_manifest.csv",
+        "data/chime_home/manifest.csv",
+    ],
+    "home_audio_checkpoint": [
+        "outputs/chime_home/checkpoint.pt",
+        "outputs/chime_home/best.pt",
+        "outputs/chime_home/model.pt",
+    ],
+    "youhome_manifest": [
+        "data/youhome/youhome_manifest.csv",
+        "data/youhome/manifest.csv",
+    ],
+    "youhome_checkpoint": [
+        "outputs/youhome/checkpoint.pt",
+        "outputs/youhome/best.pt",
+        "outputs/youhome/model.pt",
+    ],
+    "youhome_label_map": [
+        "outputs/youhome/label_map.json",
+        "data/youhome/label_map.json",
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -232,24 +665,223 @@ def write_csv_rows(rows: Sequence[Dict[str, Any]], path: str | Path, fieldnames:
             writer.writerow(r)
 
 
+def manifest_has_column(path: str | Path, column: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            return column in (reader.fieldnames or [])
+    except Exception:
+        return False
+
+
+def manifest_has_nonempty_column(path: str | Path, column: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if column not in (reader.fieldnames or []):
+                return False
+            for row in reader:
+                if str(row.get(column) or "").strip():
+                    return True
+        return False
+    except Exception:
+        return False
+
+
+def filter_manifest_rows(
+    manifest_path: str | Path,
+    out_path: str | Path,
+    split: Optional[str],
+    max_samples: Optional[int],
+) -> Dict[str, Any]:
+    """Write a small filtered manifest and return diagnostic metadata.
+
+    This is intentionally used even for raw/no-transform paths so that utility
+    evaluation never accidentally evaluates train/validation rows.  It only
+    writes a CSV manifest, not copied media.
+    """
+    rows, fields = read_csv_rows(manifest_path, max_rows=None)
+    original_count = len(rows)
+    if split:
+        rows = [r for r in rows if str(r.get("split", "")) == str(split)]
+    split_count = len(rows)
+    if max_samples is not None:
+        rows = rows[:max_samples]
+    write_csv_rows(rows, out_path, fields)
+    return {
+        "source_manifest": str(manifest_path),
+        "filtered_manifest": str(out_path),
+        "split": split,
+        "max_samples": max_samples,
+        "original_row_count": original_count,
+        "after_split_row_count": split_count,
+        "written_row_count": len(rows),
+    }
+
+
+def choose_existing_path(project_root: str | Path, candidates: Sequence[str]) -> Optional[str]:
+    root = Path(project_root)
+    for candidate in candidates:
+        p = Path(candidate)
+        checks = [p] if p.is_absolute() else [p, root / p]
+        for check in checks:
+            if check.exists():
+                return str(check)
+    return None
+
+
+def default_data_root_from_manifest(manifest_path: Optional[str | Path]) -> Optional[str]:
+    """Infer a dataset root from a manifest path.
+
+    Your task manifests usually live directly under the dataset root, e.g.
+    data/chokepoint/chokepoint_manifest.csv with frame_dir values like
+    P1E_S1/P1E_S1_C1.  In that layout, the manifest parent is the correct
+    --data-root for both preprocessing and downstream inference.
+    """
+    if not manifest_path:
+        return None
+    p = Path(str(manifest_path))
+    if not p.is_absolute():
+        project_relative = Path(_RUNTIME_PROJECT_ROOT) / p
+        if project_relative.exists():
+            p = project_relative
+    if p.exists():
+        return str(p.parent)
+    # Even if the manifest does not exist yet, the parent is still the least
+    # surprising default for relative media paths.
+    return str(p.parent) if str(p.parent) not in {"", "."} else None
+
+
+def apply_auto_defaults(args: argparse.Namespace) -> None:
+    """Fill conventional modules/paths so a single command can cover all tasks.
+
+    The script still requires task data/checkpoints to exist somewhere.  When
+    --tasks is omitted or set to auto/all, tasks without enough configuration
+    are skipped with diagnostics instead of crashing the whole run.
+    """
+    if not args.no_auto_task_config:
+        args.chokepoint_infer_module = args.chokepoint_infer_module or resolve_module_candidate("chokepoint", DEFAULT_INFER_MODULE_CANDIDATES["chokepoint"])
+        args.fall_extract_pose_module = args.fall_extract_pose_module or resolve_module_candidate("fall_extract_pose", DEFAULT_INFER_MODULE_CANDIDATES["fall_extract_pose"])
+        args.fall_infer_module = args.fall_infer_module or resolve_module_candidate("fall_infer", DEFAULT_INFER_MODULE_CANDIDATES["fall_infer"])
+        args.home_audio_infer_module = args.home_audio_infer_module or resolve_module_candidate("home_audio", DEFAULT_INFER_MODULE_CANDIDATES["home_audio"])
+        args.youhome_infer_module = args.youhome_infer_module or resolve_module_candidate("youhome", DEFAULT_INFER_MODULE_CANDIDATES["youhome"])
+
+        for attr, candidates in AUTO_PATH_CANDIDATES.items():
+            if getattr(args, attr, None):
+                continue
+            found = choose_existing_path(args.project_root, candidates)
+            if found:
+                setattr(args, attr, found)
+
+        # Infer dataset roots from manifest locations when the user does not
+        # provide them explicitly.  This is important for manifests whose media
+        # paths are relative to the dataset directory rather than the repo root,
+        # e.g. ChokePoint frame_dir=P1E_S1/P1E_S1_C1 under data/chokepoint.
+        if getattr(args, "chokepoint_manifest", None) and not getattr(args, "chokepoint_data_root", None):
+            args.chokepoint_data_root = default_data_root_from_manifest(args.chokepoint_manifest)
+        if getattr(args, "fall_manifest", None) and not getattr(args, "fall_data_root", None):
+            args.fall_data_root = default_data_root_from_manifest(args.fall_manifest)
+        if getattr(args, "youhome_manifest", None) and not getattr(args, "youhome_data_root", None):
+            args.youhome_data_root = default_data_root_from_manifest(args.youhome_manifest)
+
+
+def requested_task_set(args: argparse.Namespace) -> Tuple[set[str], bool]:
+    text = str(args.tasks or "").strip().lower()
+    if text in {"", "auto", "all", "*"}:
+        return set(), True
+    return set(parse_csv_list(args.tasks)), False
+
+
+def task_config_errors(args: argparse.Namespace, task: str) -> List[str]:
+    errors: List[str] = []
+    if task == "visitor_presence_detection":
+        if not args.chokepoint_manifest:
+            errors.append("missing --chokepoint-manifest")
+        if not (args.chokepoint_infer_module or args.chokepoint_infer_script):
+            errors.append("missing --chokepoint-infer-module/--chokepoint-infer-script")
+    elif task == "fall_detection":
+        if not args.fall_manifest:
+            errors.append("missing --fall-manifest")
+        if not (args.fall_infer_module or args.fall_infer_script):
+            errors.append("missing --fall-infer-module/--fall-infer-script")
+        if not args.fall_checkpoint:
+            errors.append("missing --fall-checkpoint")
+        if not args.fall_label_map:
+            errors.append("missing --fall-label-map")
+        # Pose extraction is required when the manifest does not already contain
+        # keypoints_path, or when a pipeline outputs image/video for fall.
+        if args.fall_manifest and not manifest_has_nonempty_column(args.fall_manifest, "keypoints_path"):
+            if not (args.fall_extract_pose_module or args.fall_extract_pose_script):
+                errors.append("missing --fall-extract-pose-module/--fall-extract-pose-script for non-pose manifest")
+    elif task == "domestic_sound_monitoring":
+        if not args.home_audio_manifest:
+            errors.append("missing --home-audio-manifest")
+        if not (args.home_audio_infer_module or args.home_audio_infer_script):
+            errors.append("missing --home-audio-infer-module/--home-audio-infer-script")
+        if not args.home_audio_checkpoint:
+            errors.append("missing --home-audio-checkpoint")
+    elif task == "adl_recognition":
+        if not args.youhome_manifest:
+            errors.append("missing --youhome-manifest")
+        if not (args.youhome_infer_module or args.youhome_infer_script):
+            errors.append("missing --youhome-infer-module/--youhome-infer-script")
+        if not args.youhome_checkpoint:
+            errors.append("missing --youhome-checkpoint")
+        if not args.youhome_label_map:
+            errors.append("missing --youhome-label-map")
+    else:
+        errors.append(f"unsupported task {task!r}")
+    return errors
+
+
+def configured_tasks(args: argparse.Namespace, tasks_present: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for task in sorted(set(tasks_present)):
+        errors = task_config_errors(args, task)
+        out[task] = {"configured": not errors, "errors": errors}
+    return out
+
+
 def run_cmd(cmd: Sequence[str], cwd: Optional[str | Path], log_path: Path, dry_run: bool = False) -> Dict[str, Any]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = now_ms()
     cmd_list = [str(x) for x in cmd]
     if dry_run:
         write_text("DRY RUN\n" + shlex.join(cmd_list) + "\n", log_path)
+        progress_write(f"[downstream] dry run: {shlex.join(cmd_list)}")
         return {"cmd": cmd_list, "returncode": 0, "elapsed_ms": 0, "dry_run": True}
 
+    progress_write(f"[downstream] start: {shlex.join(cmd_list)}")
+    progress_write(f"[downstream] device: {describe_command_device(cmd_list)}; {compact_device_report(cuda_device_report())}")
     proc = subprocess.run(
         cmd_list,
         cwd=str(cwd) if cwd else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=make_subprocess_env(cwd),
     )
     elapsed = now_ms() - started
-    write_text("$ " + shlex.join(cmd_list) + "\n\n" + (proc.stdout or ""), log_path)
-    return {"cmd": cmd_list, "returncode": proc.returncode, "elapsed_ms": elapsed, "dry_run": False}
+    stdout = proc.stdout or ""
+    write_text("$ " + shlex.join(cmd_list) + "\n\n" + stdout, log_path)
+    progress_write(f"[downstream] done rc={proc.returncode} elapsed={elapsed/1000:.1f}s log={log_path}")
+    result = {
+        "cmd": cmd_list,
+        "returncode": proc.returncode,
+        "elapsed_ms": elapsed,
+        "dry_run": False,
+        "log_path": str(log_path),
+    }
+    if proc.returncode != 0:
+        # Put the actionable part of the downstream failure directly in
+        # utility_results.json so users do not have to manually open infer.log.
+        tail = stdout[-6000:] if len(stdout) > 6000 else stdout
+        result["stdout_tail"] = tail
+        # A compact one-line hint is useful in CSV/summary views.
+        lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+        if lines:
+            result["error_summary"] = lines[-1][:1000]
+    return result
 
 
 def command_base(module: Optional[str], script: Optional[str | Path], python_exe: str) -> List[str]:
@@ -270,6 +902,51 @@ def append_if(cmd: List[str], flag: str, value: Optional[Any]) -> None:
 
 def append_bool(cmd: List[str], flag: str, enabled: bool) -> None:
     if enabled:
+        cmd.append(flag)
+
+
+_CLI_FLAG_CACHE: Dict[Tuple[str, ...], Optional[set[str]]] = {}
+
+
+def supported_cli_flags(base_cmd: Sequence[str], cwd: Optional[str | Path]) -> Optional[set[str]]:
+    """Best-effort argparse --help probing for optional downstream flags.
+
+    Several of the task scripts evolved over time.  This lets the evaluator run
+    against older versions by not passing optional flags that the installed
+    script does not support.  If help probing itself fails, return None and keep
+    the old permissive behavior.
+    """
+    key = tuple(str(x) for x in base_cmd)
+    if key in _CLI_FLAG_CACHE:
+        return _CLI_FLAG_CACHE[key]
+    try:
+        proc = subprocess.run(
+            list(key) + ["--help"],
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+            env=make_subprocess_env(cwd),
+        )
+        text = proc.stdout or ""
+        flags = set(re.findall(r"--[A-Za-z0-9][A-Za-z0-9_-]*", text))
+        _CLI_FLAG_CACHE[key] = flags if flags else None
+        return _CLI_FLAG_CACHE[key]
+    except Exception:
+        _CLI_FLAG_CACHE[key] = None
+        return None
+
+
+def append_if_supported(cmd: List[str], supported: Optional[set[str]], flag: str, value: Optional[Any]) -> None:
+    if value is None or value == "":
+        return
+    if supported is None or flag in supported:
+        cmd.extend([flag, str(value)])
+
+
+def append_bool_if_supported(cmd: List[str], supported: Optional[set[str]], flag: str, enabled: bool) -> None:
+    if enabled and (supported is None or flag in supported):
         cmd.append(flag)
 
 
@@ -405,13 +1082,32 @@ class RuntimeAdapter:
     def load(self) -> None:
         if self._loaded:
             return
-        from smartpriv_runtime.pipeline import ExecutablePipeline  # type: ignore
-        from smartpriv_runtime.media_io import item_from_media, save_image, save_audio  # type: ignore
-        self.ExecutablePipeline = ExecutablePipeline
-        self.item_from_media = item_from_media
-        self.save_image = save_image
-        self.save_audio = save_audio
-        self._loaded = True
+        configure_import_paths(_RUNTIME_PROJECT_ROOT)
+        errors: List[str] = []
+        for package in runtime_package_candidates():
+            try:
+                # Import operators to populate the runtime registry before loading specs.
+                try:
+                    importlib.import_module(f"{package}.operators")
+                except Exception as op_exc:
+                    # Some deployments import operators elsewhere; keep trying pipeline/media_io.
+                    errors.append(f"{package}.operators: {op_exc!r}")
+                pipeline_mod = importlib.import_module(f"{package}.pipeline")
+                media_mod = importlib.import_module(f"{package}.media_io")
+                self.ExecutablePipeline = getattr(pipeline_mod, "ExecutablePipeline")
+                self.item_from_media = getattr(media_mod, "item_from_media")
+                self.save_image = getattr(media_mod, "save_image")
+                self.save_audio = getattr(media_mod, "save_audio")
+                self._loaded = True
+                return
+            except Exception as exc:
+                errors.append(f"{package}: {exc!r}")
+        raise ModuleNotFoundError(
+            "Could not import smartpriv_runtime. Tried packages "
+            f"{runtime_package_candidates()} with project_root={_RUNTIME_PROJECT_ROOT}. "
+            "For your repo layout, either run from the project root or pass "
+            "--runtime-package mediator.smartpriv_runtime. Errors: " + "; ".join(errors)
+        )
 
     def pipeline_from_spec(self, spec_path: Path):
         self.load()
@@ -525,11 +1221,33 @@ def media_type_for_path(path: Path, task: str) -> str:
 def transform_image_dir(runtime: RuntimeAdapter, pipe: Any, in_dir: Path, out_dir: Path, max_frames: Optional[int], task: str) -> Dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     frames = sorted_images(in_dir)
+    original_frame_count = len(frames)
     if max_frames is not None:
         frames = frames[:max_frames]
     saved = 0
     errors: List[str] = []
-    for img in frames:
+    progress_write(
+        f"[frames] sample_dir={in_dir.name}: transforming {len(frames)}/{original_frame_count} image frames "
+        f"(the frame progress-bar denominator is frames in this one sample; "
+        f"max_frames_per_sample={max_frames if max_frames is not None else 'none'})"
+    )
+    if progress_enabled() and len(frames) > 1:
+        frame_iter = tqdm(
+            frames,
+            desc=f"frames/sample:{in_dir.name[:20]} n={len(frames)}",
+            unit="frame",
+            leave=False,
+            position=2,
+            dynamic_ncols=True,
+        )
+    else:
+        frame_iter = frames
+    for img in frame_iter:
+        if hasattr(frame_iter, "set_postfix_str"):
+            try:
+                frame_iter.set_postfix_str(img.name[:60])  # type: ignore[attr-defined]
+            except Exception:
+                pass
         try:
             item = runtime.item_from_path(img, media_type="image/x-raw")
             out = pipe.process(item)
@@ -566,28 +1284,62 @@ def transform_manifest_with_pipeline(
     rows, fieldnames = read_csv_rows(manifest_path, max_rows=None)
     if split:
         rows = [r for r in rows if str(r.get("split", "")) == str(split)]
+    split_filtered_count = len(rows)
     if max_samples is not None:
         rows = rows[:max_samples]
+
+    progress_write(
+        f"[preprocess] task={task}: transforming {len(rows)} manifest rows/samples "
+        f"(preprocess progress-bar denominator; split={split or 'already-filtered/all'}; "
+        f"rows_after_split={split_filtered_count}; max_samples={max_samples if max_samples is not None else 'none'})"
+    )
 
     if dry_run:
         write_csv_rows(rows, out_manifest_path, fieldnames)
         return {"status": "dry_run", "manifest": str(out_manifest_path), "num_rows": len(rows), "num_transformed": 0}
 
     runtime = RuntimeAdapter()
+    progress_write(f"[preprocess] loading runtime pipeline spec={spec_path}")
     pipe = runtime.pipeline_from_spec(spec_path)
+    progress_write(f"[preprocess] loaded runtime pipeline spec={spec_path}")
     new_rows: List[Dict[str, Any]] = []
     transform_records: List[Dict[str, Any]] = []
-    iterator = tqdm(rows, desc=f"preprocess:{task}", unit="sample") if tqdm else rows
+    if progress_enabled():
+        iterator = tqdm(
+            rows,
+            desc=f"preprocess samples:{task} n={len(rows)}",
+            unit="sample",
+            leave=False,
+            position=1,
+            dynamic_ncols=True,
+        )
+    else:
+        iterator = rows
 
     for i, row in enumerate(iterator):
         sample_id = str(row.get("sample_id") or row.get("chunk_id") or i)
+        if hasattr(iterator, "set_postfix_str"):
+            try:
+                iterator.set_postfix_str(f"sample={sample_id}")  # type: ignore[attr-defined]
+            except Exception:
+                pass
         in_path = resolve_manifest_media_path(row, data_root)
         new_row: Dict[str, Any] = dict(row)
         if in_path is None:
             new_row["preprocess_error"] = "missing_input"
+            if hasattr(iterator, "set_postfix_str"):
+                try:
+                    iterator.set_postfix_str(f"sample={sample_id} missing_input")  # type: ignore[attr-defined]
+                except Exception:
+                    pass
             new_rows.append(new_row)
             continue
 
+        if hasattr(iterator, "set_postfix_str"):
+            try:
+                iterator.set_postfix_str(f"sample={sample_id} input={str(in_path)[-55:]}")  # type: ignore[attr-defined]
+            except Exception:
+                pass
         sample_base = out_data_dir / sample_id
         try:
             if in_path.is_dir():
@@ -638,11 +1390,21 @@ def transform_manifest_with_pipeline(
 
     write_csv_rows(new_rows, out_manifest_path, fieldnames)
     write_json(transform_records, out_manifest_path.with_suffix(".transforms.json"))
+    unresolved = sum(1 for r in new_rows if r.get("preprocess_error") == "missing_input")
+    transformed = sum(1 for r in transform_records if r.get("path"))
+    status = "ok"
+    if len(new_rows) > 0 and transformed == 0 and unresolved == len(new_rows):
+        status = "no_inputs_resolved"
+    progress_write(
+        f"[preprocess] done task={task} rows={len(new_rows)} transformed={transformed} "
+        f"missing_inputs={unresolved} status={status} manifest={out_manifest_path}"
+    )
     return {
-        "status": "ok",
+        "status": status,
         "manifest": str(out_manifest_path),
         "num_rows": len(new_rows),
-        "num_transformed": sum(1 for r in transform_records if r.get("path")),
+        "num_transformed": transformed,
+        "num_missing_inputs": unresolved,
         "transform_records_json": str(out_manifest_path.with_suffix(".transforms.json")),
     }
 
@@ -656,17 +1418,25 @@ def infer_visitor(args: argparse.Namespace, manifest: Path, data_root: Optional[
     if not args.chokepoint_infer_module and not args.chokepoint_infer_script:
         raise ValueError("visitor_presence_detection requires --chokepoint-infer-module or --chokepoint-infer-script")
     output_csv = out_dir / "predictions.csv"
+    error_csv = out_dir / "prediction_errors.csv"
     cmd = command_base(args.chokepoint_infer_module, args.chokepoint_infer_script, args.python)
+    supported = supported_cli_flags(cmd, cwd=args.project_root)
     cmd.extend(["--manifest", str(manifest), "--output-csv", str(output_csv)])
-    append_if(cmd, "--data-root", data_root)
-    append_if(cmd, "--split", args.split)
-    append_if(cmd, "--model", args.chokepoint_model)
-    append_if(cmd, "--device", args.device)
-    append_if(cmd, "--stride", args.chokepoint_stride)
-    append_if(cmd, "--max-frames", args.max_frames_per_sample)
-    append_bool(cmd, "--safe-cuda", args.safe_cuda)
-    append_bool(cmd, "--retry-cpu-on-error", args.retry_cpu_on_error)
-    append_bool(cmd, "--allow-empty-output", True)
+    append_if_supported(cmd, supported, "--data-root", data_root)
+    append_if_supported(cmd, supported, "--split", args.split)
+    append_if_supported(cmd, supported, "--model", args.chokepoint_model)
+    append_if_supported(cmd, supported, "--device", normalized_device(args.device, ultralytics=True))
+    append_if_supported(cmd, supported, "--prefer-gpu-name", args.prefer_gpu_name)
+    append_if_supported(cmd, supported, "--stride", args.chokepoint_stride)
+    append_if_supported(cmd, supported, "--max-frames", args.max_frames_per_sample)
+    append_if_supported(cmd, supported, "--error-log", error_csv)
+    append_bool_if_supported(cmd, supported, "--safe-cuda", args.safe_cuda)
+    append_bool_if_supported(cmd, supported, "--retry-cpu-on-error", args.retry_cpu_on_error)
+    # Utility evaluation should not abort an entire method because one frame is
+    # unreadable or triggers a backend error.  The error CSV records skipped
+    # frames for inspection.
+    append_bool_if_supported(cmd, supported, "--skip-error-frames", True)
+    append_bool_if_supported(cmd, supported, "--allow-empty-output", True)
     run = run_cmd(cmd, cwd=args.project_root, log_path=out_dir / "infer.log", dry_run=dry_run)
 
     metrics: Dict[str, Any] = {}
@@ -683,7 +1453,13 @@ def infer_visitor(args: argparse.Namespace, manifest: Path, data_root: Optional[
         metrics["eval_command"] = eval_run
         if metrics_json.exists():
             metrics.update(load_json(metrics_json))
-    return {"status": "ok" if run["returncode"] == 0 else "error", "inference": run, "output_csv": str(output_csv), "metrics": metrics}
+    return {
+        "status": "ok" if run["returncode"] == 0 else "error",
+        "inference": run,
+        "output_csv": str(output_csv),
+        "error_csv": str(error_csv) if 'error_csv' in locals() else None,
+        "metrics": metrics,
+    }
 
 
 def run_fall_extract_pose(args: argparse.Namespace, manifest: Path, data_root: Optional[str | Path], out_dir: Path, dry_run: bool) -> Tuple[Path, Dict[str, Any]]:
@@ -695,7 +1471,7 @@ def run_fall_extract_pose(args: argparse.Namespace, manifest: Path, data_root: O
     cmd.extend(["--manifest", str(manifest), "--output-dir", str(pose_dir), "--updated-manifest", str(pose_manifest)])
     append_if(cmd, "--data-root", data_root)
     append_if(cmd, "--model", args.fall_pose_model)
-    append_if(cmd, "--device", args.device)
+    append_if(cmd, "--device", normalized_device(args.device, ultralytics=True))
     append_if(cmd, "--stride", args.fall_pose_stride)
     append_if(cmd, "--max-frames", args.max_frames_per_sample)
     append_bool(cmd, "--no-sanitize-videos", args.no_sanitize_videos)
@@ -723,7 +1499,7 @@ def infer_fall(args: argparse.Namespace, manifest: Path, data_root: Optional[str
     append_if(cmd, "--data-root", data_root)
     append_if(cmd, "--split", args.split or "test")
     append_if(cmd, "--sample-mode", args.fall_sample_mode)
-    append_if(cmd, "--device", args.device)
+    append_if(cmd, "--device", normalized_device(args.device, torch_script=True))
     append_if(cmd, "--batch-size", args.batch_size)
     append_if(cmd, "--num-workers", args.num_workers)
     run = run_cmd(cmd, cwd=args.project_root, log_path=out_dir / "infer.log", dry_run=dry_run)
@@ -746,7 +1522,7 @@ def infer_home_audio(args: argparse.Namespace, manifest: Path, out_dir: Path, dr
         "--metrics-json", str(metrics_json),
     ])
     append_if(cmd, "--split", args.split or "test")
-    append_if(cmd, "--device", args.device)
+    append_if(cmd, "--device", normalized_device(args.device, torch_script=True))
     append_if(cmd, "--batch-size", args.batch_size)
     append_if(cmd, "--num-workers", args.num_workers)
     append_if(cmd, "--threshold", args.home_audio_threshold)
@@ -773,7 +1549,7 @@ def infer_youhome(args: argparse.Namespace, manifest: Path, data_root: Optional[
     ])
     append_if(cmd, "--data-root", data_root)
     append_if(cmd, "--split", args.split or "test")
-    append_if(cmd, "--device", args.device)
+    append_if(cmd, "--device", normalized_device(args.device, torch_script=True))
     append_if(cmd, "--batch-size", args.batch_size)
     append_if(cmd, "--num-workers", args.num_workers)
     append_if(cmd, "--tta-runs", args.youhome_tta_runs)
@@ -781,6 +1557,345 @@ def infer_youhome(args: argparse.Namespace, manifest: Path, data_root: Optional[
     metrics = load_json(metrics_json) if metrics_json.exists() else {}
     return {"status": "ok" if run["returncode"] == 0 else "error", "inference": run, "output_csv": str(output_csv), "metrics_json": str(metrics_json), "metrics": metrics}
 
+
+
+# ---------------------------------------------------------------------------
+# Utility metric computation
+# ---------------------------------------------------------------------------
+
+TRUE_COL_CANDIDATES = ["y_true", "true", "target", "label", "gt", "ground_truth", "person_present_gt"]
+PRED_COL_CANDIDATES = ["y_pred", "pred", "prediction", "pred_label", "person_present", "person_present_pred"]
+PERSON_LABELS = {"person", "pedestrian", "human", "visitor"}
+
+
+def metric_is_blank(x: Any) -> bool:
+    if x is None:
+        return True
+    try:
+        import pandas as pd  # type: ignore
+        if pd.isna(x):
+            return True
+    except Exception:
+        pass
+    return str(x).strip() == ""
+
+
+def metric_as_int(x: Any, default: Optional[int] = None) -> Optional[int]:
+    if metric_is_blank(x):
+        return default
+    text = str(x).strip()
+    stem = Path(text).stem
+    for candidate in (text, stem):
+        try:
+            return int(float(candidate))
+        except Exception:
+            continue
+    m = re.search(r"(\d+)", stem)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return default
+    return default
+
+
+def metric_candidate_paths(value: Any, roots: Iterable[Optional[Path]]) -> List[Path]:
+    if metric_is_blank(value):
+        return []
+    raw = Path(str(value))
+    out: List[Path] = []
+    if raw.is_absolute():
+        out.append(raw)
+    else:
+        out.append(raw)
+        for root in roots:
+            if root is not None:
+                out.append(root / raw)
+    dedup: List[Path] = []
+    seen: set[str] = set()
+    for pth in out:
+        key = str(pth)
+        if key not in seen:
+            dedup.append(pth)
+            seen.add(key)
+    return dedup
+
+
+def metric_infer_data_root(source_manifest: Optional[Path], explicit: Optional[str | Path] = None) -> Optional[Path]:
+    if explicit:
+        return Path(explicit)
+    if source_manifest is None:
+        return None
+    return source_manifest.parent
+
+
+def metric_resolve_path(value: Any, source_manifest: Optional[Path] = None, data_root: Optional[Path] = None) -> Optional[Path]:
+    roots: List[Optional[Path]] = [data_root, source_manifest.parent if source_manifest is not None else None, Path.cwd(), _RUNTIME_PROJECT_ROOT]
+    for pth in metric_candidate_paths(value, roots):
+        if pth.exists():
+            return pth
+    return None
+
+
+def parse_chokepoint_xml(xml_path: Path) -> Dict[int, int]:
+    """Return frame_index -> person_present for common frame/object XML formats."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(xml_path).getroot()
+    gt: Dict[int, int] = {}
+
+    # CVAT interpolation format: <track label="person"><box frame="123" outside="0" .../></track>
+    for track in root.iter():
+        if track.tag.lower().endswith("track"):
+            label = str(track.attrib.get("label", "")).strip().lower()
+            label_is_person = (not label) or label in PERSON_LABELS
+            for box in track.iter():
+                if not box.tag.lower().endswith("box"):
+                    continue
+                frame = metric_as_int(box.attrib.get("frame"))
+                if frame is None:
+                    continue
+                outside = str(box.attrib.get("outside", "0")).strip().lower() in {"1", "true", "yes"}
+                if not outside and label_is_person:
+                    gt[frame] = 1
+                else:
+                    gt.setdefault(frame, 0)
+
+    # CVAT image format: <image id="123" name="00000123.jpg"><box label="person" .../></image>
+    for image in root.iter():
+        if not image.tag.lower().endswith("image"):
+            continue
+        frame = metric_as_int(image.attrib.get("id"), None)
+        if frame is None:
+            frame = metric_as_int(image.attrib.get("name"), None)
+        if frame is None:
+            continue
+        present = 0
+        for child in image.iter():
+            tag = child.tag.lower().split("}")[-1]
+            if tag in {"box", "polygon", "points", "object"}:
+                label = str(child.attrib.get("label", child.attrib.get("name", ""))).strip().lower()
+                if (not label) or label in PERSON_LABELS:
+                    outside = str(child.attrib.get("outside", "0")).strip().lower() in {"1", "true", "yes"}
+                    if not outside:
+                        present = 1
+                        break
+        gt[frame] = max(gt.get(frame, 0), present)
+
+    # Generic frame format: <frame number="..."> ... objects ... </frame>
+    for frame_el in root.iter():
+        tag = frame_el.tag.lower().split("}")[-1]
+        if tag not in {"frame", "img", "image"}:
+            continue
+        frame = None
+        for key in ("number", "num", "frame", "id", "index", "name"):
+            frame = metric_as_int(frame_el.attrib.get(key), None)
+            if frame is not None:
+                break
+        if frame is None:
+            continue
+        present = 0
+        for child in frame_el.iter():
+            ctag = child.tag.lower().split("}")[-1]
+            if ctag in {"object", "person", "box", "bndbox", "bbox"}:
+                label = str(child.attrib.get("label", child.attrib.get("name", child.tag))).strip().lower().split("}")[-1]
+                if label in PERSON_LABELS or ctag in {"person", "object", "box", "bndbox", "bbox"}:
+                    present = 1
+                    break
+        gt[frame] = max(gt.get(frame, 0), present)
+
+    return gt
+
+
+def binary_metrics(y_true: List[int], y_pred: List[int]) -> Dict[str, Any]:
+    tp = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 1)
+    tn = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 0)
+    fp = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 1)
+    fn = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 0)
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    beta2 = 2.0
+    f2 = (1 + beta2**2) * precision * recall / (beta2**2 * precision + recall) if (precision + recall) else 0.0
+    accuracy = (tp + tn) / len(y_true) if y_true else 0.0
+    return {
+        "n": len(y_true),
+        "support_pos": sum(y_true),
+        "support_neg": len(y_true) - sum(y_true),
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "f2": f2,
+        "accuracy": accuracy,
+    }
+
+
+def evaluate_chokepoint_metrics(
+    prediction_csv: str | Path,
+    source_manifest: str | Path,
+    data_root: Optional[str | Path] = None,
+) -> Dict[str, Any]:
+    """Frame-level binary person/visitor-presence metrics for ChokePoint."""
+    import pandas as pd  # type: ignore
+
+    pred_path = Path(prediction_csv)
+    pred = pd.read_csv(pred_path)
+    if pred.empty:
+        return {"status": "error", "error": "prediction CSV is empty"}
+    required = {"sample_id", "frame_index", "person_present"}
+    missing = sorted(required - set(pred.columns))
+    if missing:
+        return {"status": "error", "error": f"prediction CSV lacks required columns: {missing}"}
+
+    source_manifest_path = Path(source_manifest)
+    if not source_manifest_path.is_absolute():
+        candidate = _RUNTIME_PROJECT_ROOT / source_manifest_path
+        if candidate.exists():
+            source_manifest_path = candidate
+    if not source_manifest_path.exists():
+        return {"status": "error", "error": f"source manifest not found: {source_manifest_path}"}
+
+    root = metric_infer_data_root(source_manifest_path, data_root)
+    manifest = pd.read_csv(source_manifest_path)
+    if "split" in manifest.columns and "split" in pred.columns:
+        split_values = set(str(x) for x in pred["split"].dropna().unique())
+        if len(split_values) == 1:
+            manifest = manifest[manifest["split"].astype(str) == next(iter(split_values))]
+    if "sample_id" not in manifest.columns or "xml_path" not in manifest.columns:
+        return {"status": "error", "error": "source manifest lacks sample_id or xml_path columns"}
+
+    pred_samples = set(str(x) for x in pred["sample_id"].astype(str).unique())
+    manifest = manifest[manifest["sample_id"].astype(str).isin(pred_samples)]
+
+    missing_xml: List[str] = []
+    empty_xml: List[str] = []
+    gt_by_sample: Dict[str, Dict[int, int]] = {}
+    for _, mrow in manifest.iterrows():
+        sample_id = str(mrow["sample_id"])
+        xml_path = metric_resolve_path(mrow.get("xml_path"), source_manifest=source_manifest_path, data_root=root)
+        if xml_path is None:
+            missing_xml.append(sample_id)
+            continue
+        try:
+            gt_map = parse_chokepoint_xml(xml_path)
+        except Exception as e:
+            return {"status": "error", "error": f"failed parsing XML for sample {sample_id}: {e}"}
+        if not gt_map:
+            empty_xml.append(sample_id)
+        gt_by_sample[sample_id] = gt_map
+
+    y_true: List[int] = []
+    y_pred: List[int] = []
+    for _, prow in pred.iterrows():
+        sample_id = str(prow["sample_id"])
+        frame = metric_as_int(prow["frame_index"])
+        if frame is None:
+            continue
+        gt_map = gt_by_sample.get(sample_id)
+        if not gt_map:
+            continue
+        y_true.append(int(gt_map.get(frame, 0)))
+        y_pred.append(1 if int(prow["person_present"]) > 0 else 0)
+
+    if not y_true:
+        return {
+            "status": "error",
+            "error": "no prediction rows could be aligned to XML ground truth",
+            "missing_xml_samples": missing_xml[:10],
+            "empty_xml_samples": empty_xml[:10],
+            "n_missing_xml_samples": len(missing_xml),
+            "n_empty_xml_samples": len(empty_xml),
+        }
+
+    out = binary_metrics(y_true, y_pred)
+    out.update({
+        "status": "ok",
+        "task": "visitor_presence_detection",
+        "level": "frame_binary_presence",
+        "n_prediction_rows": int(len(pred)),
+        "n_aligned_rows": int(len(y_true)),
+        "n_missing_xml_samples": len(missing_xml),
+        "n_empty_xml_samples": len(empty_xml),
+    })
+    return out
+
+
+def evaluate_generic_binary_metrics(prediction_csv: str | Path, task: str) -> Dict[str, Any]:
+    """Fallback metrics when prediction CSV already contains true/pred columns."""
+    import pandas as pd  # type: ignore
+
+    pred_path = Path(prediction_csv)
+    df = pd.read_csv(pred_path)
+    true_col = next((c for c in TRUE_COL_CANDIDATES if c in df.columns), None)
+    pred_col = next((c for c in PRED_COL_CANDIDATES if c in df.columns and c != true_col), None)
+    if true_col is None or pred_col is None:
+        return {"status": "skipped", "error": "no generic true/pred columns found"}
+    y_true = [1 if int(x) > 0 else 0 for x in df[true_col].fillna(0)]
+    y_pred = [1 if int(x) > 0 else 0 for x in df[pred_col].fillna(0)]
+    out = binary_metrics(y_true, y_pred)
+    out.update({"status": "ok", "task": task, "level": "generic_binary", "true_col": true_col, "pred_col": pred_col})
+    return out
+
+
+def compute_downstream_metrics(args: argparse.Namespace, row: MethodRow, prep: Dict[str, Any], downstream: Dict[str, Any], work_dir: Path) -> Dict[str, Any]:
+    """Compute task metrics after downstream inference and write metrics.json.
+
+    Downstream scripts for fall/audio/ADL may already produce metrics.json; this
+    function fills the gap for ChokePoint and also provides a generic binary
+    fallback for any prediction CSV that includes both truth and prediction cols.
+    """
+    if args.dry_run:
+        return {"status": "skipped", "error": "dry_run"}
+    if downstream.get("status") != "ok":
+        return {"status": "skipped", "error": "downstream status is not ok"}
+    output_csv = downstream.get("output_csv")
+    if not output_csv or not Path(str(output_csv)).exists():
+        return {"status": "skipped", "error": "prediction CSV does not exist"}
+
+    # Preserve task metrics produced by downstream scripts if present, but let
+    # ChokePoint compute its own frame-level metric file because infer_yolo only
+    # produces predictions.
+    if row.task == "visitor_presence_detection":
+        metrics = evaluate_chokepoint_metrics(
+            prediction_csv=output_csv,
+            source_manifest=prep.get("source_manifest"),
+            data_root=prep.get("source_data_root") or getattr(args, "chokepoint_data_root", None),
+        )
+    else:
+        existing = downstream.get("metrics") if isinstance(downstream.get("metrics"), dict) else {}
+        if existing:
+            metrics = dict(existing)
+            metrics.setdefault("status", "ok")
+            metrics.setdefault("task", row.task)
+            metrics.setdefault("level", "downstream_native")
+        else:
+            metrics = evaluate_generic_binary_metrics(output_csv, row.task)
+
+    metrics_json = work_dir / "metrics.json"
+    write_json(metrics, metrics_json)
+    downstream["metrics_json"] = str(metrics_json)
+    downstream["metrics"] = metrics
+    return metrics
+
+
+def format_metric_line(metrics: Dict[str, Any]) -> str:
+    if not metrics:
+        return "no metrics"
+    status = metrics.get("status") or metrics.get("metric_status") or "unknown"
+    if status != "ok":
+        return f"status={status} error={metrics.get('error') or metrics.get('metric_error')}"
+    parts = [f"status={status}"]
+    for k in ("precision", "recall", "f1", "f2", "accuracy"):
+        if k in metrics and isinstance(metrics[k], (int, float)):
+            parts.append(f"{k}={metrics[k]:.4f}")
+    for k in ("tp", "fp", "fn", "tn", "n"):
+        if k in metrics:
+            parts.append(f"{k}={metrics[k]}")
+    return " ".join(parts)
 
 # ---------------------------------------------------------------------------
 # Per-method evaluation orchestration
@@ -808,7 +1923,14 @@ def task_manifest_and_root(args: argparse.Namespace, task: str) -> Tuple[Path, O
 
 
 def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_dir: Path) -> Tuple[Path, Optional[str | Path], Dict[str, Any]]:
-    """Return a manifest/data-root to feed into downstream inference."""
+    """Return a manifest/data-root to feed into downstream inference.
+
+    This function always evaluates the requested split only.  It first writes a
+    tiny filtered manifest into the intermediate workspace, then performs any
+    required preprocessing against that filtered manifest.  Large transformed
+    artifacts still live only in the temporary intermediate workspace unless
+    --keep-intermediate-data is set.
+    """
     manifest, data_root = task_manifest_and_root(args, row.task)
     spec = load_spec(row.pipeline_spec_json)
     final_cap = (spec or {}).get("final_output_cap") or {
@@ -817,19 +1939,42 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
         "schema": row.final_output_schema,
     }
 
+    filtered_manifest = work_dir / "source_manifest_eval_split.csv"
+    filter_info = filter_manifest_rows(
+        manifest,
+        filtered_manifest,
+        split=args.split,
+        max_samples=args.max_samples,
+    )
+    manifest_for_eval = filtered_manifest
+
     prep: Dict[str, Any] = {
         "source_manifest": str(manifest),
         "source_data_root": str(data_root) if data_root else None,
         "pipeline_spec": str(row.pipeline_spec_json) if row.pipeline_spec_json else None,
         "final_output_cap": final_cap,
         "preprocessing_status": "not_started",
+        "evaluation_split": args.split,
+        "source_manifest_filter": filter_info,
     }
 
-    # Raw/no-transform: use original manifest.  This includes raw baseline and
-    # any selected candidate with no executable preprocessing stages.
+    # Fall raw/no-transform needs special handling: the downstream app contains
+    # pose extraction, so raw media must be converted to YOLO pose keypoints for
+    # the attached fall classifier unless the manifest already has keypoints.
+    if row.task == "fall_detection" and (not spec or pipeline_has_no_transform(spec) or row.baseline == "raw"):
+        if manifest_has_nonempty_column(manifest_for_eval, "keypoints_path"):
+            prep["preprocessing_status"] = "passthrough_existing_pose_manifest_test_split"
+            return manifest_for_eval, data_root, prep
+        pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run)
+        prep.update(pose_info)
+        prep["preprocessing_status"] = "raw_media_then_downstream_yolo_pose_test_split"
+        return pose_manifest, None, prep
+
+    # Raw/no-transform for other tasks: use the split-filtered manifest only;
+    # this does not copy underlying media/audio.
     if not spec or pipeline_has_no_transform(spec) or row.baseline == "raw":
-        prep["preprocessing_status"] = "passthrough_raw_or_no_transform"
-        return manifest, data_root, prep
+        prep["preprocessing_status"] = "passthrough_raw_or_no_transform_test_split"
+        return manifest_for_eval, data_root, prep
 
     # Fall special case: downstream app accepts either image/video or pose.
     # If selected pipeline emits pose, we need a manifest with keypoints_path.
@@ -843,108 +1988,107 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
                 pre_dir = work_dir / "pre_pose_media"
                 pre_spec_path = materialize_spec(pre_pose_spec, work_dir / "pre_pose_pipeline_spec.json")
                 pre_result = transform_manifest_with_pipeline(
-                    manifest,
+                    manifest_for_eval,
                     data_root,
                     pre_spec_path,
                     pre_manifest,
                     pre_dir,
                     task=row.task,
-                    split=args.split,
-                    max_samples=args.max_samples,
+                    split=None,
+                    max_samples=None,
                     max_frames_per_sample=args.max_frames_per_sample,
                     dry_run=args.dry_run,
                 )
                 prep["pre_pose_preprocessing"] = pre_result
                 pose_manifest, pose_info = run_fall_extract_pose(args, pre_manifest, None, work_dir, args.dry_run)
             else:
-                pose_manifest, pose_info = run_fall_extract_pose(args, manifest, data_root, work_dir, args.dry_run)
+                pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run)
             prep.update(pose_info)
-            prep["preprocessing_status"] = "pose_extracted_with_downstream_yolo_pose"
+            prep["preprocessing_status"] = "pose_extracted_with_downstream_yolo_pose_test_split"
             return pose_manifest, None, prep
 
         # Pipeline claims pose but does not contain a recognized pose extractor.
         # Try runtime pipeline directly; it may still produce keypoints_path rows.
         out_manifest = work_dir / "preprocessed_manifest.csv"
         transformed = transform_manifest_with_pipeline(
-            manifest,
+            manifest_for_eval,
             data_root,
             Path(row.pipeline_spec_json),
             out_manifest,
             work_dir / "preprocessed_data",
             task=row.task,
-            split=args.split,
-            max_samples=args.max_samples,
+            split=None,
+            max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
         )
         prep.update(transformed)
-        prep["preprocessing_status"] = "runtime_pose_manifest"
+        prep["preprocessing_status"] = "runtime_pose_manifest_test_split"
         return out_manifest, None, prep
 
     # Fall image/video output: app runs its internal pose detector before fall classifier.
     if row.task == "fall_detection" and (is_image_cap(final_cap) or is_video_cap(final_cap)):
         media_manifest = work_dir / "preprocessed_media_manifest.csv"
         transformed = transform_manifest_with_pipeline(
-            manifest,
+            manifest_for_eval,
             data_root,
             Path(row.pipeline_spec_json),
             media_manifest,
             work_dir / "preprocessed_media",
             task=row.task,
-            split=args.split,
-            max_samples=args.max_samples,
+            split=None,
+            max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
         )
         prep.update(transformed)
         pose_manifest, pose_info = run_fall_extract_pose(args, media_manifest, None, work_dir, args.dry_run)
         prep.update(pose_info)
-        prep["preprocessing_status"] = "media_preprocessed_then_downstream_pose"
+        prep["preprocessing_status"] = "media_preprocessed_then_downstream_pose_test_split"
         return pose_manifest, None, prep
 
     # Audio task with audio/x-filtered or waveform-like output.
     if row.task == "domestic_sound_monitoring" and is_audio_cap(final_cap):
         out_manifest = work_dir / "preprocessed_manifest.csv"
         transformed = transform_manifest_with_pipeline(
-            manifest,
+            manifest_for_eval,
             data_root,
             Path(row.pipeline_spec_json),
             out_manifest,
             work_dir / "preprocessed_audio",
             task=row.task,
-            split=args.split,
-            max_samples=args.max_samples,
+            split=None,
+            max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
         )
         prep.update(transformed)
-        prep["preprocessing_status"] = "audio_preprocessed"
+        prep["preprocessing_status"] = "audio_preprocessed_test_split"
         return out_manifest, None, prep
 
     # Visitor / ADL media outputs: materialize transformed manifest and use that.
     if is_image_cap(final_cap) or is_video_cap(final_cap) or is_audio_cap(final_cap):
         out_manifest = work_dir / "preprocessed_manifest.csv"
         transformed = transform_manifest_with_pipeline(
-            manifest,
+            manifest_for_eval,
             data_root,
             Path(row.pipeline_spec_json),
             out_manifest,
             work_dir / "preprocessed_data",
             task=row.task,
-            split=args.split,
-            max_samples=args.max_samples,
+            split=None,
+            max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
         )
         prep.update(transformed)
-        prep["preprocessing_status"] = "media_preprocessed"
+        prep["preprocessing_status"] = "media_preprocessed_test_split"
         return out_manifest, None, prep
 
     # Semantic outputs are not directly consumable by the attached downstream
     # models unless a task-specific adapter exists.
     prep["preprocessing_status"] = "incompatible_semantic_output_for_downstream_cli"
     raise ValueError(f"Final output {cap_type(final_cap)} / {cap_schema(final_cap)} is not supported by the downstream utility evaluator for task {row.task}.")
-
 
 def run_downstream_for_method(args: argparse.Namespace, row: MethodRow, manifest: Path, data_root: Optional[str | Path], work_dir: Path) -> Dict[str, Any]:
     if row.task == "visitor_presence_detection":
@@ -989,7 +2133,9 @@ def _evaluate_one_with_intermediate_workspace(
     downstream inference command finishes.
     """
     try:
+        progress_write(f"[method] {row.scenario_id}/{row.method_id}: prepare/preprocess start task={row.task}; evaluator device request={args.device}; {compact_device_report(cuda_device_report())}")
         manifest, data_root, prep = prepare_manifest_for_method(args, row, intermediate_dir)
+        progress_write(f"[method] {row.scenario_id}/{row.method_id}: downstream start manifest={manifest}")
         prep["intermediate_artifact_dir"] = str(intermediate_dir)
         prep["intermediate_artifacts_retained"] = bool(args.keep_intermediate_data)
         prep["intermediate_artifact_policy"] = (
@@ -1000,6 +2146,10 @@ def _evaluate_one_with_intermediate_workspace(
 
         downstream = run_downstream_for_method(args, row, manifest, data_root, work_dir)
         status = "ok" if downstream.get("status") == "ok" else "error"
+        if status == "ok":
+            metrics = compute_downstream_metrics(args, row, prep, downstream, work_dir)
+            progress_write(f"[metrics] {row.scenario_id}/{row.method_id}: {format_metric_line(metrics)}")
+        progress_write(f"[method] {row.scenario_id}/{row.method_id}: downstream done status={status}")
         result = {
             **base,
             "status": status,
@@ -1085,22 +2235,73 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--pipeline-root", default="runs/context_pipeline_generation")
     p.add_argument("--out-dir", default="runs/utility_eval")
     p.add_argument("--project-root", default=".")
+    p.add_argument("--runtime-package", default="auto", help="Runtime package for executable pipelines: auto, smartpriv_runtime, or mediator.smartpriv_runtime. Default auto tries both and also adds project_root/mediator to PYTHONPATH.")
     p.add_argument("--python", default=sys.executable)
-    p.add_argument("--tasks", default="", help="Comma list of task ids; default = all tasks present.")
+    p.add_argument("--tasks", default="auto", help="Comma list of task ids, or auto/all. Default auto evaluates all configured tasks present in the pipeline summary.")
     p.add_argument("--scenario-ids", default="", help="Comma list such as S001,S002.")
-    p.add_argument("--methods", default="", help="Comma list of method ids/baselines, e.g. raw,manual,full_mediator,ablation:utility_only.")
-    p.add_argument("--include-ablations", action="store_true", help="Include rows with method_kind=ablation when --methods is not specified.")
-    p.add_argument("--split", default=None)
+    p.add_argument("--methods", default="", help="Comma list of method ids/baselines, e.g. raw,manual,full_mediator,ablation:utility_only. If provided, this exact method filter overrides the default ablation policy.")
+    p.add_argument(
+        "--ablation-policy",
+        choices=["meaningful", "all", "none"],
+        default="meaningful",
+        help=(
+            "Which ablations to include when --methods is not specified. "
+            "Default meaningful runs only the ablations that changed decisions/operator chains in the pipeline-generation summary: "
+            + ",".join(DEFAULT_MEANINGFUL_ABLATION_MODES) + ". "
+            "Use none for baselines only, or all for every discovered ablation."
+        ),
+    )
+    p.add_argument(
+        "--ablation-modes",
+        default=",".join(DEFAULT_MEANINGFUL_ABLATION_MODES),
+        help=(
+            "Comma list of ablation modes used by --ablation-policy meaningful. "
+            "Default: " + ",".join(DEFAULT_MEANINGFUL_ABLATION_MODES) + ". "
+            "This is ignored when --methods is provided."
+        ),
+    )
+    p.add_argument("--include-ablations", action="store_true", help="Backward-compatible alias for --ablation-policy all when --methods is not specified.")
+    p.add_argument("--no-ablations", action="store_true", help="Evaluate baselines only. Alias for --ablation-policy none when --methods is not specified.")
+    p.add_argument(
+        "--keep-ablation-matches-full",
+        action="store_true",
+        help=(
+            "Do not skip ablation rows whose selected decision/operator/output signature matches full_mediator "
+            "for the same scenario. By default these duplicate ablation rows are skipped unless --methods is explicit."
+        ),
+    )
+    p.add_argument("--split", default="test", help="Dataset split to evaluate. Default: test. This is applied before preprocessing so train/val rows are not processed.")
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument("--max-frames-per-sample", type=int, default=None)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--no-progress", action="store_true")
+    p.add_argument(
+        "--no-task-pipeline-cache",
+        action="store_true",
+        help=(
+            "Disable the in-process cache that reuses results for duplicate task+pipeline pairs. "
+            "By default, if two selected rows have the same task and executable pipeline fingerprint, "
+            "only the first row is preprocessed/inferred and later rows are recorded as cache hits."
+        ),
+    )
     p.add_argument("--fail-fast", action="store_true")
     p.add_argument("--keep-intermediate-data", action="store_true", help="Retain transformed media/keypoint/audio artifacts. Default is to use a temporary directory and delete them after each downstream run.")
     p.add_argument("--intermediate-root", default=None, help="Optional parent directory for temporary intermediate artifacts. Useful if /tmp is small; artifacts are still deleted unless --keep-intermediate-data is set.")
+    p.add_argument("--no-auto-task-config", action="store_true", help="Disable conventional default module/path discovery.")
+    p.add_argument("--strict-task-config", action="store_true", help="Error if any requested or discovered task is missing manifest/checkpoint/inference configuration. By default auto mode skips unconfigured tasks.")
 
     # General inference resource knobs.
-    p.add_argument("--device", default=None, help="Device passed to downstream inference scripts, e.g. cpu, 0, cuda:0.")
+    p.add_argument(
+        "--device",
+        default="auto",
+        help=(
+            "Device passed to downstream inference scripts. Default: auto, which prefers GPU when CUDA is available. "
+            "Use cpu to force CPU, 0 for Ultralytics GPU 0, cuda:0 for Torch GPU 0, or gpu/cuda as aliases."
+        ),
+    )
+    p.add_argument("--prefer-gpu-name", default="RTX 2070", help="Preferred physical GPU name substring. By default, the evaluator sets CUDA_VISIBLE_DEVICES to this GPU's UUID so mixed-GPU machines expose it as cuda:0.")
+    p.add_argument("--cuda-visible-devices", default="", help="Explicit CUDA_VISIBLE_DEVICES value to pass to evaluator subprocesses, preferably a GPU UUID. Overrides --prefer-gpu-name.")
+    p.add_argument("--no-prefer-gpu-env", action="store_true", help="Do not override CUDA_VISIBLE_DEVICES based on --prefer-gpu-name.")
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--num-workers", type=int, default=None)
     p.add_argument("--safe-cuda", action="store_true")
@@ -1109,7 +2310,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # ChokePoint / visitor.
     p.add_argument("--chokepoint-manifest", default=None)
     p.add_argument("--chokepoint-data-root", default=None)
-    p.add_argument("--chokepoint-infer-module", default=None)
+    p.add_argument("--chokepoint-infer-module", default=None, help="Default auto: first importable of baselines.task.chokepoint_presence.infer_yolo, infer_chokepoint, infer, or older aliases")
     p.add_argument("--chokepoint-infer-script", default=None)
     p.add_argument("--chokepoint-model", default="yolo11n.pt")
     p.add_argument("--chokepoint-stride", type=int, default=None)
@@ -1118,9 +2319,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # LE2I fall.
     p.add_argument("--fall-manifest", default=None)
     p.add_argument("--fall-data-root", default=None)
-    p.add_argument("--fall-extract-pose-module", default=None)
+    p.add_argument("--fall-extract-pose-module", default=None, help="Default auto: baselines.task.le2i_fall.extract_pose")
     p.add_argument("--fall-extract-pose-script", default=None)
-    p.add_argument("--fall-infer-module", default=None)
+    p.add_argument("--fall-infer-module", default=None, help="Default auto: baselines.task.le2i_fall.infer")
     p.add_argument("--fall-infer-script", default=None)
     p.add_argument("--fall-checkpoint", default=None)
     p.add_argument("--fall-label-map", default=None)
@@ -1131,7 +2332,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # CHiME-Home audio.
     p.add_argument("--home-audio-manifest", default=None)
-    p.add_argument("--home-audio-infer-module", default=None)
+    p.add_argument("--home-audio-infer-module", default=None, help="Default auto: first importable of baselines.task.chime_home_audio.infer_home_audio, baselines.task.chim_home_audio.infer_home_audio, or older aliases")
     p.add_argument("--home-audio-infer-script", default=None)
     p.add_argument("--home-audio-checkpoint", default=None)
     p.add_argument("--home-audio-threshold", type=float, default=None)
@@ -1140,7 +2341,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # YouHome ADL.
     p.add_argument("--youhome-manifest", default=None)
     p.add_argument("--youhome-data-root", default=None)
-    p.add_argument("--youhome-infer-module", default=None)
+    p.add_argument("--youhome-infer-module", default=None, help="Default auto: baselines.task.youhome_adl.infer_youhome")
     p.add_argument("--youhome-infer-script", default=None)
     p.add_argument("--youhome-checkpoint", default=None)
     p.add_argument("--youhome-label-map", default=None)
@@ -1148,10 +2349,259 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def available_ablation_modes(rows: Iterable[MethodRow]) -> set[str]:
+    return {str(r.ablation_mode) for r in rows if r.method_kind == "ablation" and r.ablation_mode}
+
+
+def selected_default_ablation_modes(args: argparse.Namespace, rows: Iterable[MethodRow]) -> set[str]:
+    """Return ablation modes selected by the default utility-evaluation policy.
+
+    Explicit --methods is handled outside this helper and always wins.  The
+    default policy intentionally evaluates only ablations that changed decisions
+    or operator chains in the current context-pipeline generation results.
+    """
+    all_modes = available_ablation_modes(rows)
+    if getattr(args, "no_ablations", False):
+        return set()
+    if getattr(args, "include_ablations", False):
+        return set(all_modes)
+
+    policy = str(getattr(args, "ablation_policy", "meaningful") or "meaningful").strip().lower()
+    if policy == "none":
+        return set()
+    if policy == "all":
+        return set(all_modes)
+
+    requested = parse_csv_list(getattr(args, "ablation_modes", ""), DEFAULT_MEANINGFUL_ABLATION_MODES)
+    if any(str(x).strip().lower() in {"all", "*"} for x in requested):
+        return set(all_modes)
+    return {m for m in requested if m in all_modes}
+
+
+def row_decision_operator_signature(row: MethodRow) -> Tuple[str, str, str, str]:
+    """Signature used to skip ablation rows that duplicate full_mediator.
+
+    Utility evaluation is expensive, so for default ablation runs we only keep
+    rows that change the selected decision/operator/output relative to the full
+    mediator in the same scenario.  Pipeline ids alone are not enough because
+    equivalent operator chains can be emitted under different ids.
+    """
+    return (
+        str(row.decision or ""),
+        str(row.raw.get("operators") or ""),
+        str(row.final_output_type or ""),
+        str(row.final_output_schema or ""),
+    )
+
+
+def ablation_differs_from_full(row: MethodRow, full_row: Optional[MethodRow]) -> bool:
+    if full_row is None:
+        return True
+    return row_decision_operator_signature(row) != row_decision_operator_signature(full_row)
+
+
+# ---------------------------------------------------------------------------
+# Task/pipeline de-duplication helpers
+# ---------------------------------------------------------------------------
+
+
+_PIPELINE_CACHE_DROP_KEYS = {
+    # Generated identifiers/provenance.  These can differ across contexts even
+    # when the executable operator chain is identical.
+    "pipeline_id",
+    "candidate_id",
+    "stage_id",
+    "id",
+    "uuid",
+    "name",
+    "display_name",
+    "description",
+    "created_at",
+    "updated_at",
+    "source",
+    "source_path",
+    "result_json",
+    "selected_pipeline_json",
+    "pipeline_spec_json",
+    "score",
+    "rank",
+    "rationale",
+    "reason",
+}
+
+
+def _canonicalize_pipeline_for_cache(obj: Any) -> Any:
+    """Return a stable, mostly-functional view of a generated pipeline spec.
+
+    The cache should treat two specs as the same when they execute the same
+    operators with the same parameters, even if they were emitted for different
+    contexts and therefore have different generated ids or prose metadata.
+    """
+    if isinstance(obj, dict):
+        out: Dict[str, Any] = {}
+        for k in sorted(obj.keys(), key=str):
+            ks = str(k)
+            if ks in _PIPELINE_CACHE_DROP_KEYS or ks.startswith("_"):
+                continue
+            out[ks] = _canonicalize_pipeline_for_cache(obj[k])
+        return out
+    if isinstance(obj, list):
+        return [_canonicalize_pipeline_for_cache(x) for x in obj]
+    return obj
+
+
+def pipeline_execution_fingerprint(row: MethodRow) -> Tuple[str, Dict[str, Any]]:
+    """Return a short fingerprint for the executable part of one method row."""
+    spec = load_spec(row.pipeline_spec_json)
+    if spec:
+        # Most runtime-relevant information lives in stages.  Keeping the final
+        # output cap prevents unsafe reuse across pipelines with the same early
+        # stages but different downstream interface.
+        functional = {
+            "stages": _canonicalize_pipeline_for_cache(spec.get("stages", [])),
+            "final_output_cap": _canonicalize_pipeline_for_cache(
+                spec.get("final_output_cap")
+                or {
+                    "semantic_type": row.final_output_type if row.final_output_type.startswith("application/") else None,
+                    "media_type": row.final_output_type if not row.final_output_type.startswith("application/") else None,
+                    "schema": row.final_output_schema,
+                }
+            ),
+            "input_cap": _canonicalize_pipeline_for_cache(spec.get("input_cap") or spec.get("input_caps")),
+        }
+        fp = stable_hash(functional)
+        return fp, {"source": "pipeline_spec", "pipeline_fingerprint": fp, "functional_signature": functional}
+
+    fallback = {
+        "source": "row_signature_fallback",
+        "decision_operator_signature": row_decision_operator_signature(row),
+        "baseline": row.baseline,
+        "method_id": row.method_id,
+        "final_output_type": row.final_output_type,
+        "final_output_schema": row.final_output_schema,
+    }
+    fp = stable_hash(fallback)
+    fallback["pipeline_fingerprint"] = fp
+    return fp, fallback
+
+
+def task_pipeline_cache_key(row: MethodRow) -> Tuple[str, Dict[str, Any]]:
+    """Cache key used inside a single utility-evaluation invocation.
+
+    Same task + same executable pipeline means the same task manifest, split,
+    preprocessing result, downstream predictions, and utility metrics for this
+    invocation.  Different tasks are not shared even if their operator chains
+    look identical because the downstream interface/checkpoint is task-specific.
+    """
+    fp, info = pipeline_execution_fingerprint(row)
+    key = f"task={row.task}|pipeline={fp}"
+    info = dict(info)
+    info.update({"task": row.task, "cache_key": key})
+    return key, info
+
+
+def task_pipeline_cache_plan(rows: Sequence[MethodRow]) -> Dict[str, Any]:
+    buckets: Dict[str, List[MethodRow]] = {}
+    meta: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for row in rows:
+        key, info = task_pipeline_cache_key(row)
+        if key not in buckets:
+            buckets[key] = []
+            meta[key] = info
+            order.append(key)
+        buckets[key].append(row)
+
+    groups: List[Dict[str, Any]] = []
+    for i, key in enumerate(order, 1):
+        bucket = buckets[key]
+        first = bucket[0]
+        groups.append({
+            "unique_run_index": i,
+            "cache_key": key,
+            "task": first.task,
+            "pipeline_fingerprint": meta[key].get("pipeline_fingerprint"),
+            "row_count": len(bucket),
+            "first_row": {"scenario_id": first.scenario_id, "method_id": first.method_id},
+            "rows": [{"scenario_id": r.scenario_id, "method_id": r.method_id} for r in bucket],
+        })
+
+    return {
+        "selected_rows": len(rows),
+        "unique_task_pipeline_runs": len(order),
+        "duplicate_rows_reused_from_cache": max(0, len(rows) - len(order)),
+        "groups": groups,
+        "key_order": order,
+    }
+
+
+def clone_cached_result_for_row(
+    args: argparse.Namespace,
+    row: MethodRow,
+    cached_result: Dict[str, Any],
+    cache_key: str,
+    cache_info: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Create a per-row result record that points at an already-run equivalent."""
+    method_slug = row.method_id.replace(":", "__").replace("/", "_")
+    work_dir = Path(args.out_dir) / row.scenario_id / method_slug
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    original = {
+        "scenario_id": cached_result.get("scenario_id"),
+        "method_id": cached_result.get("method_id"),
+        "utility_work_dir": cached_result.get("utility_work_dir"),
+        "utility_result_json": str(Path(str(cached_result.get("utility_work_dir", ""))) / "utility_result.json")
+        if cached_result.get("utility_work_dir")
+        else None,
+    }
+    result = copy.deepcopy(cached_result)
+    # Make the row identity match the requested scenario/method while keeping
+    # nested paths to the reused predictions/logs/metrics intact.
+    result.update({
+        "scenario_id": row.scenario_id,
+        "task": row.task,
+        "method_id": row.method_id,
+        "method_kind": row.method_kind,
+        "baseline": row.baseline,
+        "ablation_mode": row.ablation_mode,
+        "decision": row.decision,
+        "pipeline_spec_json": str(row.pipeline_spec_json) if row.pipeline_spec_json else None,
+        "selected_pipeline_json": str(row.selected_pipeline_json) if row.selected_pipeline_json else None,
+        "result_json": str(row.result_json) if row.result_json else None,
+        "final_output_type": row.final_output_type,
+        "final_output_schema": row.final_output_schema,
+        "utility_work_dir": str(work_dir),
+        "elapsed_ms": 0,
+        "cache_status": "hit",
+        "cache_key": cache_key,
+        "pipeline_fingerprint": cache_info.get("pipeline_fingerprint"),
+        "reused_from": original,
+        "reused_outputs_note": "Nested downstream/preprocessing paths point to the first equivalent task+pipeline run.",
+    })
+    write_json(result, work_dir / "utility_result.json")
+    return result
+
+
 def filter_rows(args: argparse.Namespace, rows: List[MethodRow]) -> List[MethodRow]:
-    tasks = set(parse_csv_list(args.tasks))
+    explicit_tasks, auto_tasks = requested_task_set(args)
     sids = set(parse_csv_list(args.scenario_ids))
     methods = set(parse_csv_list(args.methods))
+    default_ablation_modes = selected_default_ablation_modes(args, rows) if not methods else set()
+    full_by_scenario_task = {
+        (r.scenario_id, r.task): r
+        for r in rows
+        if r.method_id == "full_mediator" or r.baseline == "full_mediator"
+    }
+    tasks_present = {r.task for r in rows if r.task in TASK_TO_SHORT}
+    config = configured_tasks(args, tasks_present)
+    configured = {t for t, info in config.items() if info.get("configured")}
+
+    if args.strict_task_config:
+        check_tasks = tasks_present if auto_tasks else explicit_tasks
+        missing = {t: config.get(t, {"errors": ["task not present"]}).get("errors", []) for t in check_tasks if config.get(t, {}).get("configured") is not True}
+        if missing:
+            raise ValueError("Missing utility-evaluation configuration for task(s): " + json.dumps(missing, indent=2))
 
     out: List[MethodRow] = []
     for r in rows:
@@ -1159,38 +2609,103 @@ def filter_rows(args: argparse.Namespace, rows: List[MethodRow]) -> List[MethodR
             # Keep raw rows even if the exact decision string varies; skip clear failures.
             if r.decision in {"error", "no_candidates", "no_compromise", "invalid_or_no_pipeline", "llm_error"}:
                 continue
-        if tasks and r.task not in tasks:
+        if auto_tasks:
+            if r.task not in configured:
+                continue
+        elif explicit_tasks and r.task not in explicit_tasks:
             continue
         if sids and r.scenario_id not in sids:
             continue
         if methods:
-            if r.method_id not in methods and r.baseline not in methods and (r.ablation_mode and f"ablation:{r.ablation_mode}" not in methods):
+            method_matches = (
+                r.method_id in methods
+                or r.baseline in methods
+                or bool(r.ablation_mode and f"ablation:{r.ablation_mode}" in methods)
+            )
+            if not method_matches:
                 continue
         else:
-            if r.method_kind == "ablation" and not args.include_ablations:
+            if r.method_kind == "ablation" and r.ablation_mode not in default_ablation_modes:
+                continue
+            skip_matching_ablation = (
+                str(getattr(args, "ablation_policy", "meaningful") or "meaningful") == "meaningful"
+                and not getattr(args, "include_ablations", False)
+                and not getattr(args, "keep_ablation_matches_full", False)
+            )
+            if (
+                r.method_kind == "ablation"
+                and skip_matching_ablation
+                and not ablation_differs_from_full(r, full_by_scenario_task.get((r.scenario_id, r.task)))
+            ):
                 continue
         if r.task not in TASK_TO_SHORT:
             continue
         out.append(r)
     return out
 
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    set_progress_enabled(not args.no_progress)
+    args.project_root = str(Path(args.project_root).resolve())
+    set_runtime_config(args.project_root, args.runtime_package)
+    gpu_visibility = configure_gpu_visibility_for_run(args)
+    if gpu_visibility.get("enabled"):
+        progress_write(
+            "[device] forcing CUDA visibility: "
+            f"CUDA_DEVICE_ORDER={gpu_visibility.get('CUDA_DEVICE_ORDER')} "
+            f"CUDA_VISIBLE_DEVICES={gpu_visibility.get('CUDA_VISIBLE_DEVICES')} "
+            f"prefer_gpu_name={gpu_visibility.get('prefer_gpu_name')}"
+        )
+    elif gpu_visibility.get("reason"):
+        progress_write(f"[device] not overriding CUDA visibility: {gpu_visibility.get('reason')}")
+    apply_auto_defaults(args)
     pipeline_root = Path(args.pipeline_root)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rows = discover_method_rows(pipeline_root)
+    requested_methods = set(parse_csv_list(args.methods))
+    default_ablation_modes = selected_default_ablation_modes(args, rows) if not requested_methods else set()
+    discovered_ablation_modes = available_ablation_modes(rows)
     selected = filter_rows(args, rows)
+    cache_enabled = not bool(getattr(args, "no_task_pipeline_cache", False))
+    cache_plan = task_pipeline_cache_plan(selected)
+    cache_key_order = {key: i + 1 for i, key in enumerate(cache_plan.get("key_order", []))}
+    cache_group_sizes = {g["cache_key"]: g["row_count"] for g in cache_plan.get("groups", [])}
 
+    task_config = configured_tasks(args, {r.task for r in rows if r.task in TASK_TO_SHORT})
+    device_summary = resolved_device_summary(args.device)
+    progress_write(
+        f"[device] requested={device_summary['requested_device']} "
+        f"ultralytics={device_summary['ultralytics_device']} torch={device_summary['torch_device']} "
+        f"| {device_summary['cuda_summary']}"
+    )
     write_json({
         "pipeline_root": str(pipeline_root),
         "out_dir": str(out_dir),
         "total_discovered_rows": len(rows),
         "selected_rows": len(selected),
-        "tasks": sorted({r.task for r in selected}),
+        "requested_tasks": args.tasks,
+        "selected_tasks": sorted({r.task for r in selected}),
+        "task_config": task_config,
         "methods": sorted({r.method_id for r in selected}),
+        "ablation_policy": ("explicit_methods" if requested_methods else args.ablation_policy),
+        "default_meaningful_ablation_modes": DEFAULT_MEANINGFUL_ABLATION_MODES,
+        "default_skipped_ablation_modes": DEFAULT_SKIPPED_ABLATION_MODES,
+        "discovered_ablation_modes": sorted(discovered_ablation_modes),
+        "selected_default_ablation_modes": sorted(default_ablation_modes),
+        "selected_ablation_modes": sorted({r.ablation_mode for r in selected if r.ablation_mode}),
+        "skip_ablation_matches_full": (
+            not bool(args.keep_ablation_matches_full)
+            and not bool(requested_methods)
+            and str(args.ablation_policy) == "meaningful"
+            and not bool(args.include_ablations)
+        ),
+        "split": args.split,
+        "runtime_package": args.runtime_package,
+        "project_root": args.project_root,
+        "device_summary": device_summary,
+        "gpu_visibility": gpu_visibility,
         "dry_run": bool(args.dry_run),
         "keep_intermediate_data": bool(args.keep_intermediate_data),
         "intermediate_root": args.intermediate_root,
@@ -1199,19 +2714,78 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.keep_intermediate_data
             else "temporary_deleted_after_each_downstream_run"
         ),
+        "task_pipeline_cache": {
+            "enabled": cache_enabled,
+            "policy": (
+                "Within this evaluator invocation, rows with the same task and executable pipeline fingerprint "
+                "reuse the first row's preprocessing/downstream/metric outputs."
+            ),
+            **cache_plan,
+        },
     }, out_dir / "utility_eval_plan.json")
 
+    progress_write(
+        f"[plan] selected utility rows={len(selected)}. "
+        f"The outer progress denominator is selected scenario/method rows after task/method/split filters. "
+        f"Unique task+pipeline runs={cache_plan['unique_task_pipeline_runs']}; "
+        f"cache-reused duplicate rows={cache_plan['duplicate_rows_reused_from_cache']} "
+        f"(cache {'enabled' if cache_enabled else 'disabled'})."
+    )
+
     results: List[Dict[str, Any]] = []
+    task_pipeline_cache: Dict[str, Dict[str, Any]] = {}
+    task_pipeline_cache_info: Dict[str, Dict[str, Any]] = {}
     iterator: Iterable[MethodRow]
-    if tqdm and not args.no_progress:
-        iterator = tqdm(selected, desc="utility eval", unit="method")
+    if progress_enabled():
+        iterator = tqdm(
+            selected,
+            desc=f"utility rows n={len(selected)} unique_runs={cache_plan['unique_task_pipeline_runs']}",
+            unit="row",
+            position=0,
+            dynamic_ncols=True,
+        )
     else:
         iterator = selected
 
-    for r in iterator:
+    for row_index, r in enumerate(iterator, 1):
+        cache_key, cache_info = task_pipeline_cache_key(r)
+        pipeline_fp = cache_info.get("pipeline_fingerprint")
+        unique_index = cache_key_order.get(cache_key, len(task_pipeline_cache) + 1)
+        duplicate_count = cache_group_sizes.get(cache_key, 1)
+        cache_status = "hit" if cache_enabled and cache_key in task_pipeline_cache else ("miss" if cache_enabled else "disabled")
         if tqdm and not args.no_progress:
-            iterator.set_postfix_str(f"{r.scenario_id} {r.method_id}")  # type: ignore[attr-defined]
-        result = evaluate_one(args, r)
+            iterator.set_postfix_str(
+                f"row={row_index}/{len(selected)} run={unique_index}/{cache_plan['unique_task_pipeline_runs']} "
+                f"cache={cache_status} task={r.task} scenario={r.scenario_id} method={r.method_id} pipe={pipeline_fp}",
+            )  # type: ignore[attr-defined]
+
+        progress_write(
+            f"[utility] row {row_index}/{len(selected)}; unique task+pipeline run "
+            f"{unique_index}/{cache_plan['unique_task_pipeline_runs']}; cache={cache_status}; "
+            f"task={r.task}; scenario={r.scenario_id}; method={r.method_id}; "
+            f"pipeline_fingerprint={pipeline_fp}; rows_sharing_this_key={duplicate_count}"
+        )
+
+        if cache_enabled and cache_key in task_pipeline_cache:
+            original = task_pipeline_cache[cache_key]
+            progress_write(
+                f"[cache] reuse task={r.task} pipeline_fingerprint={pipeline_fp}: "
+                f"{r.scenario_id}/{r.method_id} uses outputs from "
+                f"{original.get('scenario_id')}/{original.get('method_id')}"
+            )
+            result = clone_cached_result_for_row(args, r, original, cache_key, cache_info)
+        else:
+            result = evaluate_one(args, r)
+            result["cache_status"] = cache_status
+            result["cache_key"] = cache_key if cache_enabled else None
+            result["pipeline_fingerprint"] = pipeline_fp
+            if cache_enabled:
+                task_pipeline_cache[cache_key] = result
+                task_pipeline_cache_info[cache_key] = cache_info
+            # evaluate_one writes before cache fields are attached; update the
+            # per-method result file so cache diagnostics are visible there too.
+            if result.get("utility_work_dir"):
+                write_json(result, Path(str(result["utility_work_dir"])) / "utility_result.json")
         results.append(result)
         if args.fail_fast and result.get("status") == "error":
             break
@@ -1242,13 +2816,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         flat_rows.append(row)
     write_csv_rows(flat_rows, out_dir / "utility_summary.csv")
 
+    metric_cols = [
+        "scenario_id", "task", "method_id", "status", "downstream_status",
+        "preprocessing_status", "metric_status", "metric_level", "metric_n",
+        "metric_precision", "metric_recall", "metric_f1", "metric_f2", "metric_accuracy",
+        "metric_tp", "metric_fp", "metric_fn", "metric_tn", "metric_error",
+        "downstream_output_csv", "downstream_metrics_json",
+    ]
+    metric_rows = [{c: row.get(c) for c in metric_cols} for row in flat_rows]
+    write_csv_rows(metric_rows, out_dir / "utility_metrics_summary.csv", fieldnames=metric_cols)
+
     print(json.dumps({
         "discovered_rows": len(rows),
         "evaluated_rows": len(results),
         "ok": sum(1 for r in results if r.get("status") == "ok"),
         "errors": sum(1 for r in results if r.get("status") == "error"),
+        "selected_tasks": sorted({r.get("task") for r in results if r.get("task")}),
+        "split": args.split,
         "out_dir": str(out_dir),
         "summary_csv": str(out_dir / "utility_summary.csv"),
+        "metrics_summary_csv": str(out_dir / "utility_metrics_summary.csv"),
         "results_json": str(out_dir / "utility_results.json"),
     }, indent=2))
     return 0

@@ -581,7 +581,7 @@ def build_no_compromise_diagnostics(evaluations: List[Dict[str, Any]], candidate
     return diagnostics
 
 
-def make_llm(model: str = "gpt-4o-mini", temperature: float = 0.0):
+def make_llm(model: str = "gpt-4o", temperature: float = 0.0):
     """Create a LangChain ChatOpenAI backend. Set os.environ['OPENAI_API_KEY'] before calling."""
     try:
         from langchain_openai import ChatOpenAI  # type: ignore
@@ -598,7 +598,7 @@ def strip_json_fence(text: str) -> str:
     return s
 
 
-def call_llm_norm_judgment(flow: Dict[str, Any], candidate: Dict[str, Any], request: Dict[str, Any], environment: Optional[Dict[str, Any]] = None, model: str = "gpt-4o-mini", temperature: float = 0.0) -> Dict[str, Any]:
+def call_llm_norm_judgment(flow: Dict[str, Any], candidate: Dict[str, Any], request: Dict[str, Any], environment: Optional[Dict[str, Any]] = None, model: str = "gpt-4o", temperature: float = 0.0) -> Dict[str, Any]:
     llm = make_llm(model=model, temperature=temperature)
     prompt = f"""
 You are assisting a contextual-integrity privacy mediator. You do NOT select pipelines.
@@ -691,7 +691,7 @@ def evaluate_candidate(
     environment: Optional[Dict[str, Any]],
     sensor_stream: Optional[Dict[str, Any]],
     use_llm: bool = False,
-    llm_model: str = "gpt-4o-mini",
+    llm_model: str = "gpt-4o",
     llm_temperature: float = 0.0,
     llm_confidence_threshold: float = 0.75,
     ci_mode: str = "full",
@@ -784,7 +784,7 @@ def evaluate_candidates(
     environment: Optional[Dict[str, Any]] = None,
     sensor_stream: Optional[Dict[str, Any]] = None,
     use_llm: bool = False,
-    llm_model: str = "gpt-4o-mini",
+    llm_model: str = "gpt-4o",
     llm_temperature: float = 0.0,
     llm_confidence_threshold: float = 0.75,
     top_k_for_llm: Optional[int] = None,
@@ -858,7 +858,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--sensor-stream")
     p.add_argument("--out")
     p.add_argument("--use-llm", action="store_true")
-    p.add_argument("--llm-model", default="gpt-4o-mini")
+    p.add_argument("--llm-model", default="gpt-4o")
     p.add_argument("--llm-temperature", type=float, default=0.0)
     p.add_argument("--llm-confidence-threshold", type=float, default=0.75)
     p.add_argument("--top-k-for-llm", type=int)

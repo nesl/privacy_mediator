@@ -581,7 +581,7 @@ def run_direct_llm_baseline(
     candidate_generator_path: Optional[str | Path] = None,
     max_depth: int = 7,
     max_states: int = 25000,
-    llm_model: str = "gpt-4o-mini",
+    llm_model: str = "gpt-4o",
     llm_temperature: float = 0.0,
     openai_api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
