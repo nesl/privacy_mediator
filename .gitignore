@@ -3,3 +3,4 @@ outputs/
 venv/
 yolo*
 runs/
+survey/outputs

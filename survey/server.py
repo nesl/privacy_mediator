@@ -790,6 +790,11 @@ def init_db(db_path: Path) -> None:
                 metadata_json TEXT NOT NULL
             )
         """)
+        ensure_column(conn, "sessions", "completed_at_ms", "INTEGER")
+        ensure_column(conn, "sessions", "last_activity_at_ms", "INTEGER")
+        ensure_column(conn, "sessions", "total_elapsed_ms", "INTEGER")
+        ensure_column(conn, "sessions", "total_active_elapsed_ms", "INTEGER")
+        ensure_column(conn, "sessions", "answered_count", "INTEGER")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS responses (
                 session_id TEXT NOT NULL,
@@ -826,12 +831,26 @@ def init_db(db_path: Path) -> None:
         ensure_column(conn, "responses", "final_output_type", "TEXT")
         ensure_column(conn, "responses", "final_output_schema", "TEXT")
         ensure_column(conn, "responses", "information_types_json", "TEXT")
+        ensure_column(conn, "responses", "attention_check_field", "TEXT")
+        ensure_column(conn, "responses", "attention_check_prompt", "TEXT")
+        ensure_column(conn, "responses", "attention_check_expected", "TEXT")
+        ensure_column(conn, "responses", "attention_check_answer", "TEXT")
+        ensure_column(conn, "responses", "attention_check_correct", "INTEGER")
         conn.commit()
 
 
 def create_session(db_path: Path, session_id: str, participant_id: str, assignment: List[Dict[str, Any]], metadata: Dict[str, Any]) -> None:
+    created = now_ms()
     with sqlite3.connect(db_path) as conn:
-        conn.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?)", (session_id, participant_id, now_ms(), json.dumps(assignment), json.dumps(metadata)))
+        conn.execute(
+            """
+            INSERT INTO sessions(
+                session_id, participant_id, created_at_ms, assignment_json, metadata_json,
+                last_activity_at_ms, total_elapsed_ms, total_active_elapsed_ms, answered_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (session_id, participant_id, created, json.dumps(assignment), json.dumps(metadata), created, 0, 0, 0),
+        )
         conn.commit()
 
 
@@ -847,7 +866,14 @@ def get_session(db_path: Path, session_id: str) -> Optional[Dict[str, Any]]:
 def get_response(db_path: Path, session_id: str, index: int) -> Optional[Dict[str, Any]]:
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT rating, confidence, free_text, elapsed_ms FROM responses WHERE session_id=? AND item_index=?", (session_id, index)).fetchone()
+        row = conn.execute(
+            """
+            SELECT rating, confidence, free_text, elapsed_ms,
+                   attention_check_answer, attention_check_correct
+            FROM responses WHERE session_id=? AND item_index=?
+            """,
+            (session_id, index),
+        ).fetchone()
         return dict(row) if row else None
 
 
@@ -857,10 +883,26 @@ def get_responses_for_session(db_path: Path, session_id: str) -> List[Dict[str, 
         return [dict(r) for r in conn.execute("SELECT * FROM responses WHERE session_id=? ORDER BY item_index", (session_id,)).fetchall()]
 
 
+def normalize_attention_answer(value: Any) -> str:
+    """Normalize attention-check strings for exact-but-forgiving comparison."""
+    text = " ".join(str(value or "").strip().lower().split())
+    return text.rstrip(".")
+
+
+def attention_check_is_correct(expected: Any, answer: Any) -> bool:
+    return normalize_attention_answer(expected) == normalize_attention_answer(answer)
+
+
 def save_response(db_path: Path, session_id: str, participant_id: str, index: int, item: Dict[str, Any], rating: int, confidence: Any, free_text: str, elapsed_ms: Any, raw_payload: Dict[str, Any]) -> None:
     flow = item.get("flow", {})
     output = flow.get("output_data_slot", {}) or {}
     final_cap = output.get("final_output_cap") or {}
+    attention = item.get("attention_check") or {}
+    attention_answer = raw_payload.get("attention_check_answer")
+    attention_expected = attention.get("expected_value")
+    attention_correct = None
+    if attention:
+        attention_correct = 1 if attention_check_is_correct(attention_expected, attention_answer) else 0
     try:
         confidence_int = int(confidence) if confidence not in (None, "") else None
     except Exception:
@@ -888,8 +930,10 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
                 method_ids_json, method_count, method_details_json,
                 ablation_modes_json, baseline_method_ids_json,
                 output_variant_label, output_variant_description, variant_privacy_class, final_output_type,
-                final_output_schema, information_types_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                final_output_schema, information_types_json,
+                attention_check_field, attention_check_prompt, attention_check_expected,
+                attention_check_answer, attention_check_correct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             participant_id,
@@ -921,8 +965,53 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
             cap_type(final_cap),
             cap_schema(final_cap),
             json.dumps(output.get("information_types") or {}, sort_keys=True),
+            attention.get("field_label"),
+            attention.get("question"),
+            attention_expected,
+            attention_answer,
+            attention_correct,
         ))
         conn.commit()
+
+
+def update_session_progress(db_path: Path, session_id: str, total_assigned: int) -> Dict[str, Any]:
+    """Update and return session-level timing/progress summary."""
+    now = now_ms()
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sess = conn.execute("SELECT created_at_ms FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+        if not sess:
+            return {}
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS answered_count,
+                   COALESCE(SUM(COALESCE(elapsed_ms, 0)), 0) AS total_active_elapsed_ms
+            FROM responses WHERE session_id=?
+            """,
+            (session_id,),
+        ).fetchone()
+        answered = int(row["answered_count"] or 0)
+        total_active = int(row["total_active_elapsed_ms"] or 0)
+        total_elapsed = max(0, now - int(sess["created_at_ms"]))
+        completed_at = now if answered >= total_assigned else None
+        conn.execute(
+            """
+            UPDATE sessions
+            SET last_activity_at_ms=?, total_elapsed_ms=?, total_active_elapsed_ms=?,
+                answered_count=?, completed_at_ms=COALESCE(completed_at_ms, ?)
+            WHERE session_id=?
+            """,
+            (now, total_elapsed, total_active, answered, completed_at, session_id),
+        )
+        conn.commit()
+    return {
+        "answered_count": answered,
+        "total_assigned": total_assigned,
+        "completed": answered >= total_assigned,
+        "total_elapsed_ms": total_elapsed,
+        "total_active_elapsed_ms": total_active,
+        "completed_at_ms": completed_at,
+    }
 
 
 def assign_items(items: List[Dict[str, Any]], k: int, seed: int, participant_id: str, session_id: str, mode: str, db_path: Path) -> List[Dict[str, Any]]:
@@ -1436,6 +1525,48 @@ def plain_vignette(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]
     )
 
 
+def build_attention_check(item_id: Any, flow_id: Any, index: int, display_fields: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Create a lightweight per-scenario attention check.
+
+    The question asks the participant to identify the value of one field already
+    visible in the scenario details table. This helps screen inattentive or bot
+    responses without adding any hidden facts.
+    """
+    candidates = []
+    excluded = {"Scenario overview"}
+    for field in display_fields:
+        label = str(field.get("label") or "").strip()
+        value = str(field.get("value") or "").strip()
+        if not label or not value or label in excluded:
+            continue
+        # Avoid extremely long options when possible, but keep enough fields.
+        if len(value) > 260 and label != "What would be shared":
+            continue
+        candidates.append({"label": label, "value": value})
+    if not candidates:
+        return None
+    rng = random.Random(stable_int(f"attention::{item_id}::{flow_id}::{index}"))
+    target = candidates[rng.randrange(len(candidates))]
+    options = []
+    seen = set()
+    for c in candidates:
+        val = c["value"]
+        key = normalize_attention_answer(val)
+        if key and key not in seen:
+            seen.add(key)
+            options.append(val)
+    rng.shuffle(options)
+    return {
+        "field_label": target["label"],
+        "expected_value": target["value"],
+        "question": f"Attention check: which value is shown for ‘{target['label']}’?",
+        "input_type": "select",
+        "options": options,
+        "required": True,
+        "note": "This value is copied from one of the scenario details above.",
+    }
+
+
 def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, Any], index: int, total: int) -> Dict[str, Any]:
     base = items[int(assignment["item_index"])]
     flow = base["flow"]
@@ -1444,6 +1575,8 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
     method_details = list(base.get("method_details") or base.get("baseline_details") or [])
     baseline_ids = list(base.get("baseline_ids") or method_ids)
     ablation_modes = list(base.get("ablation_modes") or [])
+    display_fields = participant_display_fields(flow, output_variant)
+    attention_check = build_attention_check(base.get("item_id"), base.get("flow_id"), index, display_fields)
     return {
         "index": index,
         "total": total,
@@ -1471,7 +1604,8 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
             "ablation_modes": ablation_modes,
         },
         "vignette": plain_vignette(flow, output_variant),
-        "display_fields": participant_display_fields(flow, output_variant),
+        "display_fields": display_fields,
+        "attention_check": attention_check,
         "output_data_slot": {
             "status": "included_from_generated_pipeline_outputs" if output_variant else "not_included_in_context_only_survey",
             "output_data": (output_variant or {}).get("output_variant_label"),
@@ -1498,6 +1632,46 @@ def export_rows(db_path: Path) -> List[Dict[str, Any]]:
         return [dict(r) for r in conn.execute("SELECT * FROM responses ORDER BY created_at_ms ASC").fetchall()]
 
 
+def participant_counts(db_path: Path) -> List[Dict[str, Any]]:
+    """Return one row per participant/session with number of answered questions."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sessions = [dict(r) for r in conn.execute("SELECT * FROM sessions ORDER BY created_at_ms ASC").fetchall()]
+        counts = {
+            r["session_id"]: dict(r)
+            for r in conn.execute("""
+                SELECT session_id,
+                       COUNT(*) AS answered_count,
+                       AVG(CASE WHEN attention_check_correct IS NOT NULL THEN attention_check_correct END) AS attention_check_accuracy
+                FROM responses
+                GROUP BY session_id
+            """).fetchall()
+        }
+    out: List[Dict[str, Any]] = []
+    for srow in sessions:
+        try:
+            assigned_count = len(json.loads(srow.get("assignment_json") or "[]"))
+        except Exception:
+            assigned_count = None
+        c = counts.get(srow.get("session_id"), {})
+        answered = int(srow.get("answered_count") if srow.get("answered_count") is not None else (c.get("answered_count") or 0))
+        completed = bool(assigned_count is not None and answered >= assigned_count)
+        out.append({
+            "participant_id": srow.get("participant_id"),
+            "session_id": srow.get("session_id"),
+            "answered_count": answered,
+            "assigned_count": assigned_count,
+            "completed": completed,
+            "created_at_ms": srow.get("created_at_ms"),
+            "completed_at_ms": srow.get("completed_at_ms"),
+            "total_elapsed_ms": srow.get("total_elapsed_ms"),
+            "total_active_elapsed_ms": srow.get("total_active_elapsed_ms"),
+            "attention_check_accuracy": c.get("attention_check_accuracy"),
+        })
+    return out
+
+
+
 def summary(db_path: Path, state: SurveyState) -> Dict[str, Any]:
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -1505,6 +1679,18 @@ def summary(db_path: Path, state: SurveyState) -> Dict[str, Any]:
         response_count = conn.execute("SELECT COUNT(*) AS c FROM responses").fetchone()["c"]
         by_task = [dict(r) for r in conn.execute("SELECT task, COUNT(*) AS n, AVG(rating) AS avg_rating FROM responses GROUP BY task").fetchall()]
         by_output = [dict(r) for r in conn.execute("SELECT output_variant_id, output_variant_label, COUNT(*) AS n, AVG(rating) AS avg_rating FROM responses GROUP BY output_variant_id, output_variant_label").fetchall()]
+        attention = conn.execute("""
+            SELECT COUNT(*) AS n,
+                   SUM(CASE WHEN attention_check_correct=1 THEN 1 ELSE 0 END) AS correct,
+                   AVG(CASE WHEN attention_check_correct IS NOT NULL THEN attention_check_correct END) AS accuracy
+            FROM responses
+        """).fetchone()
+        timing = conn.execute("""
+            SELECT AVG(total_elapsed_ms) AS avg_total_elapsed_ms,
+                   AVG(total_active_elapsed_ms) AS avg_total_active_elapsed_ms,
+                   SUM(CASE WHEN completed_at_ms IS NOT NULL THEN 1 ELSE 0 END) AS completed_sessions
+            FROM sessions
+        """).fetchone()
     rated_item_ids = {r.get("item_id") for r in export_rows(db_path) if r.get("item_id")}
     out = {
         **state.item_pool_summary,
@@ -1518,6 +1704,8 @@ def summary(db_path: Path, state: SurveyState) -> Dict[str, Any]:
         "by_output_variant": by_output,
         "rated_survey_item_count": len(rated_item_ids),
         "mean_ratings_per_rated_item": (response_count / len(rated_item_ids)) if rated_item_ids else 0,
+        "attention_check": dict(attention) if attention else {},
+        "session_timing": dict(timing) if timing else {},
     }
     return out
 
@@ -1569,6 +1757,7 @@ def build_question_preview(
                 "rating_scale": rating_scale,
                 "confidence_prompt": "How confident are you in this rating?",
                 "free_text_prompt": "Optional: What made this appropriate or inappropriate?",
+                "attention_check": item.get("attention_check"),
             },
             "output_summary": {
                 "label": output.get("output_variant_label"),
@@ -1697,9 +1886,15 @@ def make_handler(state: SurveyState):
             if path == "/admin/summary":
                 return json_response(self, summary(state.config.db_path, state))
             if path == "/admin/export.json":
-                return json_response(self, {"responses": export_rows(state.config.db_path), "summary": summary(state.config.db_path, state)})
+                return json_response(self, {
+                    "responses": export_rows(state.config.db_path),
+                    "participants": participant_counts(state.config.db_path),
+                    "summary": summary(state.config.db_path, state),
+                })
             if path == "/admin/export.csv":
                 return self.export_csv()
+            if path == "/admin/participant_counts.json":
+                return json_response(self, {"participants": participant_counts(state.config.db_path)})
             if path == "/admin/flows.json":
                 return json_response(self, state.flow_data)
             if path == "/admin/survey_items.json":
@@ -1715,11 +1910,16 @@ def make_handler(state: SurveyState):
             if path == "/api/start":
                 payload = read_json_body(self)
                 participant_code = str(payload.get("participant_code") or "").strip()
-                k = max(1, min(int(payload.get("k") or state.config.k), len(state.items)))
-                participant_id = participant_code or f"P-{uuid.uuid4().hex[:10]}"
+                if not participant_code:
+                    return json_response(self, {"error": "participant code is required"}, 400)
+                k = max(1, min(int(state.config.k), len(state.items)))
+                participant_id = participant_code
                 session_id = uuid.uuid4().hex
                 assignment = assign_items(state.items, k, state.config.seed, participant_id, session_id, state.config.assignment_mode, state.config.db_path)
-                create_session(state.config.db_path, session_id, participant_id, assignment, payload)
+                metadata = dict(payload)
+                metadata["requested_k_ignored"] = payload.get("k") if "k" in payload else None
+                metadata["assigned_k"] = len(assignment)
+                create_session(state.config.db_path, session_id, participant_id, assignment, metadata)
                 return json_response(self, {"session_id": session_id, "participant_id": participant_id, "k": len(assignment), "first_index": 0})
             if path.startswith("/api/session/") and path.endswith("/submit"):
                 parts = path.strip("/").split("/")
@@ -1762,9 +1962,12 @@ def make_handler(state: SurveyState):
             if rating < 1 or rating > 5:
                 return json_response(self, {"error": "rating must be between 1 and 5"}, 400)
             item = materialize_survey_item(state.items, assignment[index], index, len(assignment))
+            attention = item.get("attention_check") or {}
+            if attention and attention.get("required") and not str(payload.get("attention_check_answer") or "").strip():
+                return json_response(self, {"error": "please answer the attention-check question before continuing"}, 400)
             save_response(state.config.db_path, session_id, session["participant_id"], index, item, rating, payload.get("confidence"), str(payload.get("free_text") or "").strip(), payload.get("elapsed_ms"), payload)
-            answered = len(get_responses_for_session(state.config.db_path, session_id))
-            return json_response(self, {"ok": True, "answered": answered, "k": len(assignment), "completed": answered >= len(assignment)})
+            progress = update_session_progress(state.config.db_path, session_id, len(assignment))
+            return json_response(self, {"ok": True, "answered": progress.get("answered_count", 0), "k": len(assignment), "completed": progress.get("completed", False), "total_elapsed_ms": progress.get("total_elapsed_ms"), "total_active_elapsed_ms": progress.get("total_active_elapsed_ms")})
 
         def serve_file(self, path: Path, content_type: Optional[str] = None) -> None:
             if not path.exists() or not path.is_file():
@@ -1789,6 +1992,8 @@ def make_handler(state: SurveyState):
                 "method_ids_json", "method_count", "method_details_json",
                 "ablation_modes_json", "baseline_method_ids_json",
                 "rating", "confidence", "free_text",
+                "attention_check_field", "attention_check_prompt", "attention_check_expected",
+                "attention_check_answer", "attention_check_correct",
                 "elapsed_ms", "created_at_ms", "information_types_json",
             ]
             writer = csv.DictWriter(buf, fieldnames=header, extrasaction="ignore")

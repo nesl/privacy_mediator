@@ -21,11 +21,7 @@
       </p>
       <div class="form-row">
         <label for="participant-code">Participant code</label>
-        <input id="participant-code" type="text" placeholder="optional" />
-      </div>
-      <div class="form-row">
-        <label for="k-input">Number of questions</label>
-        <input id="k-input" type="number" min="1" max="200" value="{{ default_k }}" />
+        <input id="participant-code" type="text" placeholder="Enter your participant code" required />
       </div>
       <button id="start-btn" class="primary">Start survey</button>
       <div id="start-error" class="error hidden"></div>
@@ -56,6 +52,7 @@
           <label><input type="radio" name="rating" value="5"> 5<br><span>Completely appropriate</span></label>
         </div>
       </div>
+
 
       <div class="form-row">
         <label for="confidence">How confident are you in this rating?</label>
