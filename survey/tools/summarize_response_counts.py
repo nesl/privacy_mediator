@@ -8,7 +8,8 @@ Usage:
 
 The text output shows participant/session IDs, number of answered questions,
 completion status, wall-clock time spent on the survey, browser-reported active
-question time when available, and attention-check accuracy when available.
+question time when available, attention-check accuracy when available, and one
+sample optional free-text response when a participant provided one.
 
 Timing fields:
   total_elapsed_ms        Wall-clock time from session creation to last submit or completion.
@@ -91,6 +92,23 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def clean_optional_text(value: Any) -> str:
+    """Collapse whitespace in a participant's optional free-text response."""
+    return " ".join(str(value or "").strip().split())
+
+
+def truncate_text(value: Any, limit: int = 220) -> str:
+    """Return a compact preview suitable for the text table."""
+    text = clean_optional_text(value)
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _select_existing_columns(response_cols: Set[str], preferred: List[str]) -> List[str]:
+    return [c for c in preferred if c in response_cols]
+
+
 def load_counts(db_path: Path) -> List[Dict[str, Any]]:
     if not db_path.exists():
         raise SystemExit(f"Database not found: {db_path}")
@@ -123,6 +141,11 @@ def load_counts(db_path: Path) -> List[Dict[str, Any]]:
             if "attention_check_correct" in response_cols
             else "NULL"
         )
+        optional_response_count_expr = (
+            "SUM(CASE WHEN free_text IS NOT NULL AND TRIM(free_text) != '' THEN 1 ELSE 0 END)"
+            if "free_text" in response_cols
+            else "NULL"
+        )
 
         counts = {
             r["session_id"]: dict(r)
@@ -134,11 +157,34 @@ def load_counts(db_path: Path) -> List[Dict[str, Any]]:
                        {response_elapsed_sum} AS summed_response_elapsed_ms,
                        {attention_expr} AS attention_check_accuracy,
                        {attention_answered_expr} AS attention_checks_answered,
-                       {attention_correct_expr} AS attention_checks_correct
+                       {attention_correct_expr} AS attention_checks_correct,
+                       {optional_response_count_expr} AS optional_response_count
                 FROM responses
                 GROUP BY session_id
             """).fetchall()
         }
+
+        optional_samples: Dict[str, Dict[str, Any]] = {}
+        if "free_text" in response_cols:
+            preferred_cols = [
+                "session_id", "item_index", "flow_id", "task", "context_family",
+                "output_variant_id", "output_variant_label", "variant_privacy_class",
+                "rating", "confidence", "free_text", "created_at_ms",
+            ]
+            sample_cols = _select_existing_columns(response_cols, preferred_cols)
+            order_col = "created_at_ms" if "created_at_ms" in response_cols else "item_index"
+            sample_sql = f"""
+                SELECT {', '.join(sample_cols)}
+                FROM responses
+                WHERE free_text IS NOT NULL AND TRIM(free_text) != ''
+                ORDER BY session_id ASC, {order_col} ASC
+            """
+            for raw in conn.execute(sample_sql).fetchall():
+                sample = dict(raw)
+                sid = sample.get("session_id")
+                if sid not in optional_samples:
+                    sample["free_text"] = clean_optional_text(sample.get("free_text"))
+                    optional_samples[str(sid)] = sample
 
     out: List[Dict[str, Any]] = []
     for srow in sessions:
@@ -172,6 +218,8 @@ def load_counts(db_path: Path) -> List[Dict[str, Any]]:
         attention_accuracy = c.get("attention_check_accuracy")
         attention_answered = c.get("attention_checks_answered")
         attention_correct = c.get("attention_checks_correct")
+        optional_response_count = c.get("optional_response_count")
+        sample = optional_samples.get(str(session_id)) if session_id is not None else None
 
         row = {
             "participant_id": srow.get("participant_id"),
@@ -193,6 +241,18 @@ def load_counts(db_path: Path) -> List[Dict[str, Any]]:
             "attention_checks_answered": attention_answered,
             "attention_checks_correct": attention_correct,
             "attention_check_accuracy": attention_accuracy,
+            "optional_response_count": optional_response_count,
+            "sample_optional_item_index": sample.get("item_index") if sample else None,
+            "sample_optional_flow_id": sample.get("flow_id") if sample else None,
+            "sample_optional_task": sample.get("task") if sample else None,
+            "sample_optional_context_family": sample.get("context_family") if sample else None,
+            "sample_optional_output_variant_id": sample.get("output_variant_id") if sample else None,
+            "sample_optional_output_variant_label": sample.get("output_variant_label") if sample else None,
+            "sample_optional_variant_privacy_class": sample.get("variant_privacy_class") if sample else None,
+            "sample_optional_rating": sample.get("rating") if sample else None,
+            "sample_optional_confidence": sample.get("confidence") if sample else None,
+            "sample_optional_created_at_ms": sample.get("created_at_ms") if sample else None,
+            "sample_optional_response": sample.get("free_text") if sample else None,
         }
         out.append(row)
     return out
@@ -207,7 +267,8 @@ def print_text(rows: List[Dict[str, Any]]) -> None:
         f"{'done':>5} "
         f"{'elapsed':>12} "
         f"{'active':>12} "
-        f"{'attn':>6}"
+        f"{'attn':>6} "
+        f"{'notes':>6}"
     )
     print(header)
     print("-" * len(header))
@@ -221,8 +282,20 @@ def print_text(rows: List[Dict[str, Any]]) -> None:
             f"{str(bool(r.get('completed'))):>5} "
             f"{str(r.get('total_elapsed_human') or ''):>12} "
             f"{str(r.get('total_active_elapsed_human') or ''):>12} "
-            f"{format_accuracy(r.get('attention_check_accuracy')):>6}"
+            f"{format_accuracy(r.get('attention_check_accuracy')):>6} "
+            f"{str(r.get('optional_response_count') or 0):>6}"
         )
+        sample = r.get("sample_optional_response")
+        if sample:
+            bits = []
+            if r.get("sample_optional_item_index") is not None:
+                bits.append(f"Q{int(r.get('sample_optional_item_index')) + 1}")
+            if r.get("sample_optional_rating") is not None:
+                bits.append(f"rating={r.get('sample_optional_rating')}")
+            if r.get("sample_optional_confidence") is not None:
+                bits.append(f"confidence={r.get('sample_optional_confidence')}")
+            context = f" ({', '.join(bits)})" if bits else ""
+            print(f"  optional response{context}: {truncate_text(sample)}")
 
 
 def print_csv(rows: List[Dict[str, Any]]) -> None:
@@ -241,6 +314,18 @@ def print_csv(rows: List[Dict[str, Any]]) -> None:
         "attention_checks_answered",
         "attention_checks_correct",
         "attention_check_accuracy",
+        "optional_response_count",
+        "sample_optional_item_index",
+        "sample_optional_flow_id",
+        "sample_optional_task",
+        "sample_optional_context_family",
+        "sample_optional_output_variant_id",
+        "sample_optional_output_variant_label",
+        "sample_optional_variant_privacy_class",
+        "sample_optional_rating",
+        "sample_optional_confidence",
+        "sample_optional_created_at_ms",
+        "sample_optional_response",
         "created_at_ms",
         "completed_at_ms",
         "last_activity_at_ms",

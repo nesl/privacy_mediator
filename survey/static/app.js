@@ -2,8 +2,8 @@ let sessionId = null;
 let currentIndex = 0;
 let currentItem = null;
 let itemStartedAt = null;
+let previousRenderedFields = null;
 let k = 25;
-let previousRenderedFieldValues = null;
 
 const startCard = document.getElementById('start-card');
 const surveyCard = document.getElementById('survey-card');
@@ -45,13 +45,12 @@ startBtn.addEventListener('click', async () => {
   try {
     const participantCode = document.getElementById('participant-code').value.trim();
     if (!participantCode) {
-      throw new Error('Please enter your participant code/number before starting.');
+      throw new Error('Please enter your participant code before starting.');
     }
     const data = await postJSON('/api/start', {participant_code: participantCode});
     sessionId = data.session_id;
     k = data.k;
     currentIndex = 0;
-    previousRenderedFieldValues = null;
     hide(startCard);
     show(surveyCard);
     await loadItem(currentIndex);
@@ -172,49 +171,58 @@ function renderAttentionCheck(item, table) {
   table.appendChild(tr);
 }
 
+function fieldChangeKey(row) {
+  return String((row && (row.ci_field_label || row.label)) || '');
+}
+
+function fieldChangeValue(row) {
+  return String((row && row.value) || '').trim();
+}
+
+function previousFieldMap(fields) {
+  const out = {};
+  for (const row of fields || []) {
+    const key = fieldChangeKey(row);
+    if (key) out[key] = fieldChangeValue(row);
+  }
+  return out;
+}
+
 function renderItem(item) {
   document.getElementById('progress-text').textContent = `Question ${item.index + 1} of ${item.total}`;
   document.getElementById('progress-fill').style.width = `${((item.index + 1) / item.total) * 100}%`;
 
   const flow = item.flow || {};
   const participantVisible = item.participant_visible || {};
-  const taskTitle = document.getElementById('task-title');
-  if (taskTitle) taskTitle.textContent = '';
+  const taskTitleEl = document.getElementById('task-title');
+  if (taskTitleEl) {
+    taskTitleEl.textContent = flow.task_label || participantVisible.task_title || flow.task || 'Smart-space scenario';
+  }
   document.getElementById('vignette').textContent = item.vignette || participantVisible.vignette || '';
 
   const table = document.getElementById('ci-table');
   table.innerHTML = '';
   const fields = item.display_fields || participantVisible.display_fields || [];
-  const currentFieldValues = {};
+  const prevMap = previousFieldMap(previousRenderedFields);
+  const showChanges = previousRenderedFields && item.index !== 0;
   for (const row of fields) {
-    const rowLabel = String(row.label || '');
-    const rowValue = String(row.value || '');
-    currentFieldValues[rowLabel] = rowValue;
-
     const tr = document.createElement('tr');
     const tdLabel = document.createElement('td');
     const tdValue = document.createElement('td');
-    tdLabel.textContent = rowLabel;
+    tdLabel.textContent = row.label || '';
 
-    const changedFromPrevious = previousRenderedFieldValues !== null && previousRenderedFieldValues[rowLabel] !== undefined && previousRenderedFieldValues[rowLabel] !== rowValue;
-    if (changedFromPrevious) {
+    const key = fieldChangeKey(row);
+    const changed = showChanges && key && prevMap[key] !== undefined && prevMap[key] !== fieldChangeValue(row);
+    if (changed && row.label !== 'Scenario overview') {
       tr.classList.add('changed-field');
-      tr.setAttribute('aria-label', `${rowLabel} changed from the previous question`);
-    }
-
-    const main = document.createElement('div');
-    main.textContent = rowValue;
-    if (changedFromPrevious) {
       const pill = document.createElement('span');
       pill.className = 'changed-pill';
       pill.textContent = 'changed';
-      main.appendChild(pill);
-      window.setTimeout(() => {
-        tr.classList.remove('changed-field');
-        pill.remove();
-        tr.removeAttribute('aria-label');
-      }, 2800);
+      tdLabel.appendChild(pill);
     }
+
+    const main = document.createElement('div');
+    main.textContent = row.value || '';
     tdValue.appendChild(main);
 
     const helpText = row.help || row.description || '';
@@ -238,8 +246,8 @@ function renderItem(item) {
     table.appendChild(tr);
   }
 
-  previousRenderedFieldValues = currentFieldValues;
   renderAttentionCheck(item, table);
+  previousRenderedFields = fields.map(row => ({...row}));
 
   document.querySelectorAll('input[name="rating"]').forEach(input => {
     input.checked = false;

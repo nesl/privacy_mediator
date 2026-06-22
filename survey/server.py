@@ -1164,22 +1164,61 @@ def _task_specific_app_label(flow: Optional[Dict[str, Any]]) -> str:
     purpose = _purpose_plain(flow).lower()
     task = str((flow or {}).get("task") or "").lower()
     if "fall" in purpose or "fall" in task:
-        return "the fall-detection app"
+        return "fall-detection app"
     if "sound" in task or "sound" in purpose or "communication" in purpose:
-        return "the sound-monitoring app"
+        return "sound-monitoring app"
     if "adl" in task or "activity" in task:
         if "personalization" in purpose:
-            return "the personalization app"
-        return "the daily-activity recognition app"
+            return "personalization app"
+        return "daily-activity recognition app"
     if "visitor" in task or "presence" in task:
         if "energy" in purpose or "lighting" in purpose:
-            return "the energy or lighting automation service"
-        return "the presence-detection app"
+            return "energy or lighting automation service"
+        return "presence-detection app"
     if "energy" in purpose or "lighting" in purpose:
-        return "the energy or lighting automation service"
+        return "energy or lighting automation service"
     if "personalization" in purpose:
-        return "the personalization app"
-    return "the task-specific app"
+        return "personalization app"
+    return "task-specific app"
+
+
+def _responsible_recipient_phrase(flow: Optional[Dict[str, Any]]) -> str:
+    """Who would normally use or see output delivered to a task app.
+
+    The normalized recipient may be downstream_application, but participants need
+    to know who the app is effectively serving. This keeps the machine-readable
+    recipient unchanged while clarifying the participant-facing wording.
+    """
+    try:
+        params = scenario_ci_params(flow or {})
+    except Exception:
+        params = {}
+    context = str(params.get("context") or "").strip()
+    sender = str(params.get("sender") or "").strip()
+    subject = _subject_plain(flow)
+    mapping = {
+        "home": "the home resident or homeowner",
+        "short_term_rental": "the rental host or property manager",
+        "workplace": "the employer or authorized workplace staff",
+        "public_space": "the person or organization responsible for the public area",
+        "long_term_care": f"a caregiver or care staff member responsible for the {subject}",
+        "hospital_or_clinic": f"a clinician or care team member responsible for the {subject}",
+        "school_or_classroom": "a teacher or school official",
+        "research_living_lab": "the researcher running the study",
+    }
+    if context in mapping:
+        return mapping[context]
+    if sender == "host_controlled_device":
+        return "the rental host or property manager"
+    if sender == "owner_controlled_device":
+        return "the device owner or space owner"
+    if sender == "data_controller":
+        return "the organization responsible for the setting"
+    return "the person or organization responsible for this setting"
+
+
+def _app_recipient_value(flow: Optional[Dict[str, Any]]) -> str:
+    return f"the {_task_specific_app_label(flow)} used by {_responsible_recipient_phrase(flow)}"
 
 
 def _event_phrase(flow: Optional[Dict[str, Any]]) -> str:
@@ -1200,7 +1239,42 @@ def _event_phrase(flow: Optional[Dict[str, Any]]) -> str:
     return "a relevant event for the stated purpose"
 
 
-def _contextual_actor_value(original_label: str, original_value: str, flow: Optional[Dict[str, Any]]) -> Optional[str]:
+def _sensor_device_description(flow: Optional[Dict[str, Any]], output_variant: Optional[Dict[str, Any]] = None) -> str:
+    """Participant-facing device/modality description.
+
+    The scenario JSON says who controls the sender, but not always whether the
+    sensing device is a camera, microphone, or other sensor. Infer this from the
+    generated output variant when possible and fall back to the task type.
+    """
+    label = str((output_variant or {}).get("output_variant_label") or "").lower()
+    desc = str((output_variant or {}).get("output_variant_description") or "").lower()
+    final_cap = (output_variant or {}).get("final_output_cap") or {}
+    media = str(final_cap.get("media_type") or final_cap.get("semantic_type") or "").lower()
+    schema = str(final_cap.get("schema") or "").lower()
+    combined = " ".join([label, desc, media, schema])
+
+    if "audio-video" in combined or ("audio" in combined and ("video" in combined or "camera" in combined)):
+        return "camera and microphone sensing device"
+    if any(x in combined for x in ["video", "image", "camera", "pose", "stick-figure", "skeleton"]):
+        return "camera-based sensing device"
+    if any(x in combined for x in ["audio", "sound", "speech", "decibel", "microphone"]):
+        return "microphone or audio sensor"
+    if any(x in combined for x in ["occupancy", "presence", "people count"]):
+        return "camera or presence sensor"
+
+    task = str((flow or {}).get("task") or "").lower()
+    if "sound" in task:
+        return "microphone or audio sensor"
+    if "adl" in task or "activity" in task:
+        return "camera and/or audio activity sensor"
+    if "fall" in task:
+        return "camera-based or motion-sensing fall detector"
+    if "visitor" in task or "presence" in task:
+        return "camera or presence sensor"
+    return "sensing device"
+
+
+def _contextual_actor_value(original_label: str, original_value: str, flow: Optional[Dict[str, Any]], output_variant: Optional[Dict[str, Any]] = None) -> Optional[str]:
     setting_plain = _setting_plain(flow)
     subject = _subject_plain(flow)
     text = original_value
@@ -1208,14 +1282,25 @@ def _contextual_actor_value(original_label: str, original_value: str, flow: Opti
         return None
 
     if original_label == "Sender":
+        device = _sensor_device_description(flow, output_variant)
+        try:
+            params = scenario_ci_params(flow or {})
+        except Exception:
+            params = {}
+        context = str(params.get("context") or "").strip()
+        resident_owned_label = (
+            f"privately owned {device} operating in the public area"
+            if context == "public_space"
+            else f"resident-owned {device} in the {setting_plain}"
+        )
         sender_map = {
-            "resident-owned device": f"resident-owned device in the {setting_plain}",
-            "rental host’s device": f"rental host’s device in or around the {setting_plain}",
-            "organization-operated system": f"organization-operated system in the {setting_plain}",
-            "hospital monitoring system": f"hospital monitoring system in the {setting_plain}",
-            "patient/family device": f"patient/family device in the {setting_plain}",
-            "research sensor system": f"research sensor system in the {setting_plain}",
-            "school monitoring system": f"school monitoring system in the {setting_plain}",
+            "resident-owned device": resident_owned_label,
+            "rental host’s device": f"rental host-owned {device} in or around the {setting_plain}",
+            "organization-operated system": f"organization-operated {device} in the {setting_plain}",
+            "hospital monitoring system": f"hospital-operated {device} in the {setting_plain}",
+            "patient/family device": f"patient- or family-managed {device} in the {setting_plain}",
+            "research sensor system": f"researcher-operated {device} in the {setting_plain}",
+            "school monitoring system": f"school-operated {device} in the {setting_plain}",
         }
         return sender_map.get(text)
 
@@ -1225,18 +1310,19 @@ def _contextual_actor_value(original_label: str, original_value: str, flow: Opti
     if original_label == "Recipient":
         recipient_map = {
             "home resident": f"home resident for the {setting_plain}",
+            "homeowner/resident": f"home resident for the {setting_plain}",
             "rental host": f"rental host for the {setting_plain}",
             "authorized staff": f"authorized staff for the {setting_plain}",
             "caregiver": f"caregiver for the {subject} in the {setting_plain}",
             "clinician": f"clinician caring for the {subject} in the {setting_plain}",
             "researcher": f"researcher for the {setting_plain} study",
             "teacher or school official": f"teacher or school official for the {setting_plain}",
-            "the smart-space app": _task_specific_app_label(flow),
-            "the app or software service": _task_specific_app_label(flow),
+            "the smart-space app": _app_recipient_value(flow),
+            "the app or software service": _app_recipient_value(flow),
+            "task-specific app": _app_recipient_value(flow),
         }
         return recipient_map.get(text)
     return None
-
 
 def _technical_task_description(flow: Optional[Dict[str, Any]]) -> str:
     task = str((flow or {}).get("task") or "").lower()
@@ -1285,7 +1371,7 @@ def _purpose_goal_description(original_value: str, flow: Optional[Dict[str, Any]
     if "training" in purpose or "supervision" in purpose:
         return "support training or supervision, such as school staff reviewing activity patterns or events for oversight"
     if purpose in {"voice command or communication", "audio-event or sound-cue support"} or "audio-event" in purpose or "sound-cue" in purpose:
-        return "support audio-event detection, such as noticing that a relevant home sound or cue occurred without sharing full speech content"
+        return "support safety or security by detecting relevant sound events"
     return purpose or "serve the stated purpose"
 
 
@@ -1300,7 +1386,7 @@ def _purpose_description(original_value: str, flow: Optional[Dict[str, Any]]) ->
     return f"This describes what the sensing system is trying to do with the collected data or shared output: {value}."
 
 
-def _display_value_override(original_label: str, value: Any, flow: Optional[Dict[str, Any]] = None) -> Any:
+def _display_value_override(original_label: str, value: Any, flow: Optional[Dict[str, Any]] = None, output_variant: Optional[Dict[str, Any]] = None) -> Any:
     if value is None:
         return value
     text = str(value)
@@ -1311,12 +1397,12 @@ def _display_value_override(original_label: str, value: Any, flow: Optional[Dict
     if original_label == "Purpose":
         return _purpose_display_value(text, flow)
 
-    contextual = _contextual_actor_value(original_label, text, flow)
+    contextual = _contextual_actor_value(original_label, text, flow, output_variant)
     if contextual:
         return contextual
 
     if text == "the smart-space app":
-        return _task_specific_app_label(flow)
+        return _app_recipient_value(flow)
 
     if text == "only when an event occurs":
         return f"data is collected or shared only after {_event_phrase(flow)} is detected"
@@ -1402,6 +1488,52 @@ def _readable_entry(flow: Optional[Dict[str, Any]], field: str) -> Dict[str, Any
     return readable.get(field) if isinstance(readable.get(field), dict) else {}
 
 
+
+def _context_space_example(flow: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Return a context-specific example for situation rows.
+
+    Some space values, especially "outdoor area", are intentionally reused
+    across contexts. A generic outdoor example such as "porch" or "driveway"
+    makes sense for a home or short-term rental, but not for a public-space
+    scenario. Keep the machine-readable context/space terms unchanged and tailor
+    only the participant-facing example to the context+space pair.
+    """
+    try:
+        params = scenario_ci_params(flow or {})
+    except Exception:
+        params = {}
+    context = str(params.get("context") or "").strip()
+    space = str(params.get("space") or "").strip()
+    pair_examples = {
+        ("home", "bathroom"): "a bathroom or restroom in a private home",
+        ("home", "bedroom"): "a bedroom in a private home or shared apartment",
+        ("home", "common_area"): "a shared hallway, lounge, or common room in a home",
+        ("home", "entrance"): "a front door, entryway, or lobby entrance of a home",
+        ("home", "kitchen"): "a kitchen or food-preparation area in a private home",
+        ("home", "living_room"): "a living room or shared living area in a private home",
+        ("home", "outdoor"): "a front porch, driveway, yard, garden, or home entrance",
+        ("short_term_rental", "bedroom"): "a bedroom in an Airbnb, Vrbo, or other short-term rental",
+        ("short_term_rental", "living_room"): "a living room or shared indoor area in an Airbnb, Vrbo, or other short-term rental",
+        ("short_term_rental", "outdoor"): "a rental porch, driveway, yard, exterior walkway, or outside entrance",
+        ("public_space", "outdoor"): "a park, sidewalk, public plaza, transit stop, public walkway, or outdoor public entrance",
+        ("workplace", "workspace"): "an office, desk area, shared workspace, shop floor, or work area",
+        ("workplace", "outdoor"): "an outdoor worksite, loading area, parking area, or workplace entrance",
+        ("school_or_classroom", "common_area"): "a school hallway, shared common area, classroom-adjacent area, or school lounge",
+        ("school_or_classroom", "outdoor"): "a school playground, courtyard, outdoor walkway, or school entrance",
+        ("long_term_care", "bedroom"): "a resident bedroom in an assisted-living or long-term care home",
+        ("long_term_care", "living_room"): "a shared living room or lounge in a long-term care home",
+        ("long_term_care", "outdoor"): "a care-home garden, courtyard, patio, or outdoor entrance",
+        ("hospital_or_clinic", "patient_room"): "a hospital or clinic patient room",
+        ("hospital_or_clinic", "outdoor"): "a hospital entrance, clinic entrance, ambulance bay, or outdoor walkway",
+        ("research_living_lab", "living_room"): "a smart-apartment living room used in a research study",
+        ("research_living_lab", "outdoor"): "an outdoor area associated with the research living-lab setting",
+    }
+    if (context, space) in pair_examples:
+        return pair_examples[(context, space)]
+    if space == "outdoor":
+        return "an outside area near the setting"
+    return None
+
 def _participant_example_for_field(original_label: str, row: Dict[str, Any], flow: Optional[Dict[str, Any]], original_value: str) -> Optional[str]:
     """Return only examples that add concrete context for a participant.
 
@@ -1411,6 +1543,9 @@ def _participant_example_for_field(original_label: str, row: Dict[str, Any], flo
     concrete.
     """
     if original_label == "Situation":
+        pair_example = _context_space_example(flow)
+        if pair_example:
+            return pair_example
         sit = _readable_entry(flow, "situation")
         context_ex = (((sit.get("context") or {}) if isinstance(sit, dict) else {}).get("example") or "").strip()
         space_ex = (((sit.get("space") or {}) if isinstance(sit, dict) else {}).get("example") or "").strip()
@@ -1465,20 +1600,20 @@ def _participant_example_for_field(original_label: str, row: Dict[str, Any], flo
     return None
 
 
-def _plain_field(row: Dict[str, Any], flow: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _plain_field(row: Dict[str, Any], flow: Optional[Dict[str, Any]] = None, output_variant: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Rename technical CI labels into participant-facing question prompts."""
     label = str(row.get("label") or "")
     mapping = {
         "Situation": "Where does this happen?",
-        "Sender": "Who or what collects or sends the data?",
+        "Sender": "Who owns or operates the sensing device?",
         "Data subject": "Who is the data about?",
-        "Recipient": "Who is the output being shared with?",
+        "Recipient": "Who would receive or use the shared output?",
         "Purpose": "What is the sensing system trying to do?",
         "Transmission principle": "Under what condition is data collected, processed, or shared?",
     }
     new_label = mapping.get(label, label)
     original_value = str(row.get("value") or "")
-    value = _display_value_override(label, row.get("value"), flow)
+    value = _display_value_override(label, row.get("value"), flow, output_variant)
     example = _participant_example_for_field(label, row, flow, original_value)
 
     # Keep the main cell focused on the value. Longer helper descriptions that only
@@ -1522,9 +1657,21 @@ def output_example(label: Any, description: Any = None) -> Optional[str]:
 
 def _task_overview_text(flow: Optional[Dict[str, Any]]) -> str:
     setting, space = _setting_parts(flow)
-    setting_phrase = f"In a {setting}" if setting else "In a smart-space setting"
-    if space:
-        setting_phrase += f", in the {space}"
+    try:
+        params = scenario_ci_params(flow or {})
+    except Exception:
+        params = {}
+    context = str(params.get("context") or "").strip()
+    space_term = str(params.get("space") or "").strip()
+
+    if space_term == "outdoor" and context == "public_space":
+        setting_phrase = "In a public outdoor area"
+    elif space_term == "outdoor" and setting:
+        setting_phrase = f"In an outdoor area of a {setting}"
+    else:
+        setting_phrase = f"In a {setting}" if setting else "In a smart-space setting"
+        if space:
+            setting_phrase += f", in the {space}"
     technical = _technical_task_description(flow)
     goal = _purpose_goal_description(_purpose_plain(flow), flow)
     return f"{setting_phrase}, the system {technical}. The overall goal is to {goal}."
@@ -1542,7 +1689,7 @@ def _scenario_overview_field(flow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def participant_display_fields(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    keep = {"Situation", "Sender", "Data subject", "Recipient", "Purpose", "Transmission principle"}
+    keep = {"Situation", "Sender", "Data subject", "Recipient", "Transmission principle"}
     fields = [_scenario_overview_field(flow)]
     if output_variant:
         output_desc = output_variant.get("output_variant_description") or "The data or output that would be sent to the stated recipient in this scenario."
@@ -1554,7 +1701,7 @@ def participant_display_fields(flow: Dict[str, Any], output_variant: Optional[Di
             "example": output_example(output_variant.get("output_variant_label"), output_desc),
             "ci_field_label": "Output",
         })
-    fields.extend(_plain_field(r, flow) for r in flow.get("participant_display_fields", []) if r.get("label") in keep)
+    fields.extend(_plain_field(r, flow, output_variant) for r in flow.get("participant_display_fields", []) if r.get("label") in keep)
     return fields
 
 
@@ -1589,7 +1736,7 @@ def plain_vignette(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]
     return (
         "Review the scenario overview and details below, then rate whether you personally think it is appropriate "
         "for this sensing system to share the listed data or output in this situation. "
-        "Answer from the perspective of the person the data is about, or someone responsible for that person."
+        "Try to answer from the perspective of the person the data is about (i.e. Who is the data about)."
     )
 
 
@@ -1824,7 +1971,7 @@ def build_question_preview(
                 "rating_prompt": "In your judgment, how appropriate is it for this system to share the listed data or output in this situation?",
                 "rating_scale": rating_scale,
                 "confidence_prompt": "How confident are you in this rating?",
-                "free_text_prompt": "Optional: What made this appropriate or inappropriate?",
+                "free_text_prompt": "Optional: Provide some insight on your reasoning on this scenario",
                 "attention_check": item.get("attention_check"),
             },
             "output_summary": {
