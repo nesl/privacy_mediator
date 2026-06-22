@@ -4,3 +4,5 @@ venv/
 yolo*
 runs/
 survey/outputs
+*.out
+*.log
