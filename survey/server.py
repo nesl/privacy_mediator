@@ -1674,7 +1674,7 @@ def _task_overview_text(flow: Optional[Dict[str, Any]]) -> str:
             setting_phrase += f", in the {space}"
     technical = _technical_task_description(flow)
     goal = _purpose_goal_description(_purpose_plain(flow), flow)
-    return f"{setting_phrase}, the system {technical}. The overall goal is to {goal}."
+    return f"{setting_phrase}, a sensing system {technical}. The overall goal is to {goal}."
 
 
 def _scenario_overview_field(flow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
