@@ -379,21 +379,21 @@ def is_audio_video_sample(final_cap: Dict[str, Any], row: Dict[str, Any]) -> boo
 def audio_video_output_label(final_cap: Dict[str, Any]) -> str:
     flags = av_component_flags(final_cap)
     if flags["redacted_visual"] and flags["speech_removed_audio"]:
-        return "Short audio-video clip with identifying details blurred and spoken words removed"
+        return "Audio-video stream with identifying details blurred and spoken words removed"
     if flags["redacted_visual"] and flags["raw_audio"]:
-        return "Short audio-video clip with identifying details blurred; audio may include speech"
+        return "Audio-video stream with identifying details blurred; audio may include speech"
     if flags["redacted_visual"]:
-        return "Short audio-video clip with identifying details blurred"
+        return "Audio-video stream with identifying details blurred"
     if flags["speech_removed_audio"] and flags["raw_visual"]:
-        return "Short audio-video clip with spoken words removed; video is not blurred"
+        return "Audio-video stream with spoken words removed; video is not blurred"
     if flags["speech_removed_audio"]:
-        return "Short audio-video clip with spoken words removed"
-    return "Short audio-video clip"
+        return "Audio-video stream with spoken words removed"
+    return "Audio-video stream"
 
 
 def audio_video_output_description(final_cap: Dict[str, Any]) -> str:
     flags = av_component_flags(final_cap)
-    parts = ["The app or recipient would receive a short synchronized clip containing both camera video and audio from the space."]
+    parts = ["The app or recipient would receive a synchronized camera/audio stream from the space."]
     if flags["redacted_visual"]:
         parts.append("The video has faces or other identifying details blurred or hidden.")
     elif flags["raw_visual"]:
@@ -419,20 +419,20 @@ def human_output_label(final_cap: Dict[str, Any], info_types: Dict[str, List[str
         return audio_video_output_label(final_cap)
     if t.startswith("image/"):
         if redacted:
-            return "Camera image with faces or identifying details blurred"
+            return "Camera image stream with faces or identifying details blurred"
         if fov_minimized:
-            return "Cropped camera image showing only the relevant area"
-        return "Camera image"
+            return "Cropped camera image stream showing only the relevant area"
+        return "Camera image stream"
     if t.startswith("video/"):
         if redacted:
-            return "Camera video with faces or identifying details blurred"
+            return "Camera video stream with faces or identifying details blurred"
         if fov_minimized:
-            return "Cropped camera video showing only the relevant area"
-        return "Video footage"
+            return "Cropped camera video stream showing only the relevant area"
+        return "Camera video stream"
     if speech_removed:
-        return "Audio after spoken words are removed"
+        return "Audio stream after spoken words are removed"
     if t.startswith("audio/"):
-        return "Audio recording"
+        return "Audio stream"
     if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
         return "Presence/occupancy estimate"
     if "decibel" in t or "decibel" in schema:
@@ -457,34 +457,34 @@ def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
         return audio_video_output_description(final_cap)
     if t.startswith(("image/", "video/")) and props.get("redacted"):
         if t.startswith("image/"):
-            return "The app or recipient would receive one camera image after faces or other identifying details, such as screens or background details, are blurred or hidden."
+            return "The app or recipient would receive camera image frames after faces or other identifying details, such as screens or background details, are blurred or hidden."
         if t.startswith("video/"):
-            return "The app or recipient would receive camera video after faces or other identifying details, such as screens or background details, are blurred or hidden."
+            return "The app or recipient would receive camera video stream after faces or other identifying details, such as screens or background details, are blurred or hidden."
         return "The app or recipient would receive camera media after faces or other identifying details, such as screens or background details, are blurred or hidden."
     if t.startswith(("image/", "video/")) and props.get("field_of_view_minimized"):
         if t.startswith("image/"):
-            return "The app or recipient would receive one cropped camera image showing only the relevant area, rather than the full scene."
+            return "The app or recipient would receive cropped camera image frames showing only the relevant area, rather than the full scene."
         if t.startswith("video/"):
-            return "The app or recipient would receive cropped camera video showing only the relevant area, rather than the full scene."
+            return "The app or recipient would receive cropped camera video stream showing only the relevant area, rather than the full scene."
         return "The app or recipient would receive only a cropped part of the camera view, rather than the full scene."
     if t.startswith("image/"):
-        return "The app or recipient would receive one camera image from the space, not video footage."
+        return "The app or recipient would receive camera image frames from the space, rather than full video footage."
     if t.startswith("video/"):
-        return "The app or recipient would receive camera video footage from the space."
+        return "The app or recipient would receive a camera video stream from the space."
     if t == "audio/x-filtered" or props.get("speech_content_removed"):
         return "The app or recipient would receive audio after spoken words or conversation content are removed; non-speech sounds such as footsteps, crashes, alarms, or background noises may remain."
     if t.startswith("audio/"):
-        return "The app or recipient would receive an audio recording from the space."
+        return "The app or recipient would receive an audio stream from the space."
     if "decibel" in t or "decibel" in schema:
-        return "The app or recipient would receive a sound-level measurement, not an audio recording."
+        return "The app or recipient would receive a sound-level measurement, not the original audio stream."
     if "sound" in t or "sound" in schema:
         return "The app or recipient would receive a label describing the type of sound, not the original audio."
     if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
-        return "The app or recipient would receive a presence or count estimate, not the original sensor recording."
+        return "The app or recipient would receive a presence or count estimate, not the original sensor stream."
     if "activity" in t or "activity" in schema:
-        return "The app or recipient would receive an activity category, not the original sensor recording."
+        return "The app or recipient would receive an activity category, not the original sensor stream."
     if "event" in t or "event" in schema:
-        return "The app or recipient would receive an event label or alert, not the original sensor recording."
+        return "The app or recipient would receive an event label or alert, not the original sensor stream."
     return "This is the data that would be sent out of the smart-space system for the stated purpose."
 
 
@@ -510,7 +510,7 @@ def privacy_class_from_output(final_cap: Dict[str, Any], row: Dict[str, Any]) ->
             return "redacted_audio_video"
         if flags["speech_removed_audio"]:
             return "speech_filtered_audio_video"
-        return "audio_video_clip"
+        return "audio_video_stream"
     if t.startswith("application/"):
         return "derived_or_semantic_output"
     return "output_data"
@@ -1156,6 +1156,49 @@ def _subject_plain(flow: Optional[Dict[str, Any]]) -> str:
     return _row_value_by_original_label(flow, "Data subject") or "person"
 
 
+def _subject_role_for_participant(subject: str, responsible: bool = False) -> str:
+    """Return a natural participant-perspective subject phrase."""
+    raw = str(subject or "person").strip()
+    lower = raw.lower()
+    if lower == "employee":
+        role = "an employee"
+    elif lower == "research participant":
+        role = "a research participant"
+    elif lower in {"guest", "visitor", "patient", "resident", "roommate", "child"}:
+        role = f"a {lower}"
+    elif lower.startswith(("a ", "an ")):
+        role = raw
+    elif lower.startswith("the "):
+        role = "a " + raw[4:]
+    else:
+        role = f"a {raw}"
+    if responsible and lower == "child":
+        return f"{role}, or someone responsible for the child"
+    return role
+
+
+def _participant_subject_value(flow: Optional[Dict[str, Any]]) -> str:
+    """Value for the displayed subject row, framed as a direct answer."""
+    subject = _subject_plain(flow)
+    setting = _setting_plain(flow)
+    role = _subject_role_for_participant(subject, responsible=False)
+    setting_suffix = f" in the {setting}" if setting else ""
+    if str(subject or "").strip().lower() == "child":
+        return f"The data is about a child{setting_suffix}. Answer as the child or someone responsible for the child."
+    return f"The data is about you, {role}{setting_suffix}."
+
+
+def _surveyed_user_sentence(flow: Optional[Dict[str, Any]]) -> str:
+    """Short overview sentence making the participant perspective explicit."""
+    subject = _subject_plain(flow)
+    setting = _setting_plain(flow)
+    role = _subject_role_for_participant(subject, responsible=False)
+    setting_suffix = f" in this {setting}" if setting else ""
+    if str(subject or "").strip().lower() == "child":
+        return f"For this scenario, answer as if the data is about a child{setting_suffix}, or as someone responsible for that child."
+    return f"For this scenario, answer as if the data is about you, {role}{setting_suffix}."
+
+
 def _purpose_plain(flow: Optional[Dict[str, Any]]) -> str:
     return _row_value_by_original_label(flow, "Purpose") or "the stated purpose"
 
@@ -1305,7 +1348,7 @@ def _contextual_actor_value(original_label: str, original_value: str, flow: Opti
         return sender_map.get(text)
 
     if original_label == "Data subject":
-        return f"{text} in the {setting_plain}"
+        return _participant_subject_value(flow)
 
     if original_label == "Recipient":
         recipient_map = {
@@ -1408,7 +1451,7 @@ def _display_value_override(original_label: str, value: Any, flow: Optional[Dict
         return f"data is collected or shared only after {_event_phrase(flow)} is detected"
 
     replacements = {
-        "continuous monitoring": "data collection continues without pause",
+        "continuous monitoring": "data collection is continuous; there is no event trigger limiting collection, processing, or sharing",
         "processed locally": "processed on the device or local hub, not in a third-party cloud",
         "not disclosed to the person": "data collection and sharing are not disclosed to the monitored person",
         "disclosed to people nearby": "people in this setting are told that data is being collected or shared",
@@ -1427,8 +1470,8 @@ def _transmission_help_and_example(original_value: str, flow: Optional[Dict[str,
     value_lower = str(original_value or "").lower()
     if original_value == "continuous monitoring" or "continuous" in value_lower or "ongoing" in value_lower:
         return (
-            "The sensing system keeps collecting sensor data in this setting without pause, rather than waiting for a specific event before collecting or analyzing data.",
-            "The sensor stays on throughout the day or night and keeps collecting data continuously.",
+            "Data collection is continuous: the sensing system does not wait for a specific event before collecting, processing, or sharing the listed output.",
+            "The sensing system stays on and continues collecting data, rather than activating only after a particular event is detected.",
         )
     if original_value == "only when an event occurs" or ("event" in value_lower and "only" in value_lower):
         return (
@@ -1638,7 +1681,7 @@ def output_example(label: Any, description: Any = None) -> Optional[str]:
     """Short optional example text for less-obvious shared-output rows."""
     text = f"{label or ''} {description or ''}".lower()
     # Do not add examples for obvious sensor primitives such as camera image,
-    # camera/video footage, raw audio, or audio-video clips.
+    # camera/video footage, raw audio, or audio-video streams.
     if "pose" in text or "stick-figure" in text:
         return "a stick-figure skeleton showing body joint positions"
     if "spoken words" in text or "speech" in text:
@@ -1674,7 +1717,8 @@ def _task_overview_text(flow: Optional[Dict[str, Any]]) -> str:
             setting_phrase += f", in the {space}"
     technical = _technical_task_description(flow)
     goal = _purpose_goal_description(_purpose_plain(flow), flow)
-    return f"{setting_phrase}, a sensing system {technical}. The overall goal is to {goal}."
+    surveyed_user = _surveyed_user_sentence(flow)
+    return f"{setting_phrase}, a sensing system {technical}. {surveyed_user} The overall goal is to {goal}."
 
 
 def _scenario_overview_field(flow: Optional[Dict[str, Any]]) -> Dict[str, Any]:

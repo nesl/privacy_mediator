@@ -219,6 +219,11 @@ function renderItem(item) {
       pill.className = 'changed-pill';
       pill.textContent = 'changed';
       tdLabel.appendChild(pill);
+      window.setTimeout(() => {
+        tr.classList.remove('changed-field');
+        const existingPill = tr.querySelector('.changed-pill');
+        if (existingPill) existingPill.remove();
+      }, 3200);
     }
 
     const main = document.createElement('div');
