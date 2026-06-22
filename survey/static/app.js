@@ -3,6 +3,7 @@ let currentIndex = 0;
 let currentItem = null;
 let itemStartedAt = null;
 let k = 25;
+let previousRenderedFieldValues = null;
 
 const startCard = document.getElementById('start-card');
 const surveyCard = document.getElementById('survey-card');
@@ -44,12 +45,13 @@ startBtn.addEventListener('click', async () => {
   try {
     const participantCode = document.getElementById('participant-code').value.trim();
     if (!participantCode) {
-      throw new Error('Please enter your participant code before starting.');
+      throw new Error('Please enter your participant code/number before starting.');
     }
     const data = await postJSON('/api/start', {participant_code: participantCode});
     sessionId = data.session_id;
     k = data.k;
     currentIndex = 0;
+    previousRenderedFieldValues = null;
     hide(startCard);
     show(surveyCard);
     await loadItem(currentIndex);
@@ -176,20 +178,43 @@ function renderItem(item) {
 
   const flow = item.flow || {};
   const participantVisible = item.participant_visible || {};
-  document.getElementById('task-title').textContent = flow.task_label || participantVisible.task_title || flow.task || 'Smart-space scenario';
+  const taskTitle = document.getElementById('task-title');
+  if (taskTitle) taskTitle.textContent = '';
   document.getElementById('vignette').textContent = item.vignette || participantVisible.vignette || '';
 
   const table = document.getElementById('ci-table');
   table.innerHTML = '';
   const fields = item.display_fields || participantVisible.display_fields || [];
+  const currentFieldValues = {};
   for (const row of fields) {
+    const rowLabel = String(row.label || '');
+    const rowValue = String(row.value || '');
+    currentFieldValues[rowLabel] = rowValue;
+
     const tr = document.createElement('tr');
     const tdLabel = document.createElement('td');
     const tdValue = document.createElement('td');
-    tdLabel.textContent = row.label || '';
+    tdLabel.textContent = rowLabel;
+
+    const changedFromPrevious = previousRenderedFieldValues !== null && previousRenderedFieldValues[rowLabel] !== undefined && previousRenderedFieldValues[rowLabel] !== rowValue;
+    if (changedFromPrevious) {
+      tr.classList.add('changed-field');
+      tr.setAttribute('aria-label', `${rowLabel} changed from the previous question`);
+    }
 
     const main = document.createElement('div');
-    main.textContent = row.value || '';
+    main.textContent = rowValue;
+    if (changedFromPrevious) {
+      const pill = document.createElement('span');
+      pill.className = 'changed-pill';
+      pill.textContent = 'changed';
+      main.appendChild(pill);
+      window.setTimeout(() => {
+        tr.classList.remove('changed-field');
+        pill.remove();
+        tr.removeAttribute('aria-label');
+      }, 2800);
+    }
     tdValue.appendChild(main);
 
     const helpText = row.help || row.description || '';
@@ -213,6 +238,7 @@ function renderItem(item) {
     table.appendChild(tr);
   }
 
+  previousRenderedFieldValues = currentFieldValues;
   renderAttentionCheck(item, table);
 
   document.querySelectorAll('input[name="rating"]').forEach(input => {
