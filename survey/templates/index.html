@@ -7,37 +7,38 @@
   <link rel="stylesheet" href="/static/style.css" />
 
   <style>
-    .changed-field {
-      animation: changed-field-fade 2.8s ease-out;
-    }
     .scenario-var {
       font-weight: 700;
       background: rgba(255, 214, 102, 0.32);
       padding: 0 0.08rem;
       border-radius: 0.15rem;
     }
+
+    .key-detail-row {
+      background: rgba(40, 120, 255, 0.08);
+      box-shadow: inset 4px 0 0 rgba(40, 120, 255, 0.38);
+    }
+    .key-detail-row td:first-child {
+      font-weight: 700;
+    }
     .changed-pill {
       display: inline-block;
       margin-left: 0.5rem;
-      padding: 0.1rem 0.4rem;
+      padding: 0.1rem 0.45rem;
       border-radius: 999px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      background: rgba(40, 120, 255, 0.14);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      background: rgba(40, 120, 255, 0.16);
+      color: #174a9c;
+      vertical-align: middle;
     }
-    @keyframes changed-field-fade {
-      0% {
-        background: rgba(40, 120, 255, 0.22);
-        box-shadow: inset 4px 0 0 rgba(40, 120, 255, 0.55);
-      }
-      75% {
-        background: rgba(40, 120, 255, 0.08);
-        box-shadow: inset 4px 0 0 rgba(40, 120, 255, 0.35);
-      }
-      100% {
-        background: transparent;
-        box-shadow: none;
-      }
+    .quality-check-row {
+      background: rgba(245, 245, 245, 0.75);
+    }
+    .quality-check-question {
+      font-weight: 600;
+      margin-bottom: 0.45rem;
     }
   </style>
 </head>
@@ -46,16 +47,16 @@
     <section id="start-card" class="card">
       <h1>Smart-Space Data Sharing Survey</h1>
       <p>
-        You will review short smart-space scenarios. In this survey, a smart-space system means a sensing system used in a home, rental, workplace, school, care setting, public area, or research living space.
+        You will review short smart-space scenarios. In this survey, a smart-space system means a monitoring device used in a home, rental, workplace, school, care setting, public area, or research living space.
       </p>
       <p class="muted">
-        Each scenario describes a setting, a sensing system, and the kind of data or output that would be shared with an app, software service, or person. Scenario details list what data is shared, where sensing happens, who the data is about, who receives the output, why it is shared, and any notice, consent, access, or processing condition. Some situations may look similar, but the type of data shared may differ.
+        Some questions may belong to the same general scenario, such as a particular task in a particular setting, but show different details. When a row is marked <strong>Changed</strong>, it means that row differs from the previous question. For each question, rate the version shown on that page as its own complete situation.
       </p>
       <p class="muted">
-        Your task is to rate how appropriate it is for the listed data or output to be shared in each situation. Please rate each scenario separately.
+        Your task is to rate how appropriate it is for the listed data to be shared in each version. Assume that only the listed data is saved or shared, and that only the named receiver gets it unless another party is explicitly stated.
       </p>
       <p class="muted">
-        Give your own personal judgment from the perspective of the person the data is about, or someone responsible for that person.
+        Give your own personal judgment from the perspective of the person the data is about.
       </p>
       <p class="muted">
         This study was reviewed by the UCLA Institutional Review Board and certified as exempt from IRB review under 45 CFR 46.104(d)(2) (Exempt Category 2).
@@ -83,7 +84,7 @@
 
       <div class="rating-card">
         <h3>Appropriateness rating</h3>
-        <p class="muted">In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation? Answer from the perspective of the person the data is about, or someone responsible for that person. Here, appropriate means the sharing seems acceptable and justified for this specific setting, person, recipient, purpose, handling condition, and type of data shared.</p>
+        <p class="muted">In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation? Answer from the role shown on the page. Here, appropriate means the sharing seems acceptable and justified for this specific setting, person, receiver, purpose, rule or condition, and type of data shared.</p>
         <div id="rating-options" class="rating-options">
           <label><input type="radio" name="rating" value="1"> 1<br><span>Completely inappropriate</span></label>
           <label><input type="radio" name="rating" value="2"> 2<br><span>Somewhat inappropriate</span></label>

@@ -2,7 +2,6 @@ let sessionId = null;
 let currentIndex = 0;
 let currentItem = null;
 let itemStartedAt = null;
-let previousRenderedFields = null;
 let k = 25;
 
 const startCard = document.getElementById('start-card');
@@ -84,6 +83,18 @@ submitBtn.addEventListener('click', async () => {
       return;
     }
   }
+
+  const comprehension = currentItem && currentItem.comprehension_check;
+  let comprehensionAnswer = '';
+  if (comprehension && comprehension.required) {
+    const comprehensionSelect = document.getElementById('comprehension-check-answer');
+    comprehensionAnswer = comprehensionSelect ? comprehensionSelect.value : '';
+    if (!comprehensionAnswer) {
+      setError('submit-error', 'Please answer the scenario-check question before continuing.');
+      return;
+    }
+  }
+
   submitBtn.disabled = true;
   try {
     const elapsed = itemStartedAt ? Date.now() - itemStartedAt : null;
@@ -93,7 +104,8 @@ submitBtn.addEventListener('click', async () => {
       confidence: document.getElementById('confidence').value,
       free_text: document.getElementById('free-text').value,
       elapsed_ms: elapsed,
-      attention_check_answer: attentionAnswer
+      attention_check_answer: attentionAnswer,
+      comprehension_check_answer: comprehensionAnswer
     });
     if (currentIndex + 1 >= k) {
       hide(surveyCard);
@@ -122,20 +134,19 @@ function formatExample(example) {
   return /^example\s*:/i.test(text) ? text : `Example: ${text}`;
 }
 
-function renderAttentionCheck(item, table) {
-  const check = item.attention_check;
+function renderQualityCheck(check, table, idPrefix, existingAnswer) {
   if (!check || !table) return;
 
   const tr = document.createElement('tr');
-  tr.className = 'attention-check-row';
+  tr.className = `${idPrefix}-row quality-check-row`;
 
   const tdLabel = document.createElement('td');
-  tdLabel.textContent = check.field_label || 'Reading check';
+  tdLabel.textContent = check.field_label || 'Check question';
 
   const tdValue = document.createElement('td');
   const question = document.createElement('div');
-  question.className = 'attention-check-question';
-  question.textContent = check.question || 'Which value is shown in the scenario details above?';
+  question.className = 'quality-check-question';
+  question.textContent = check.question || 'Please choose the requested answer.';
   tdValue.appendChild(question);
 
   const helpText = check.note || '';
@@ -147,12 +158,12 @@ function renderAttentionCheck(item, table) {
   }
 
   const select = document.createElement('select');
-  select.id = 'attention-check-answer';
-  select.name = 'attention_check_answer';
+  select.id = `${idPrefix}-answer`;
+  select.name = `${idPrefix}_answer`;
   select.required = true;
   const blank = document.createElement('option');
   blank.value = '';
-  blank.textContent = 'Select an answer';
+  blank.textContent = check.placeholder || 'Select an answer';
   select.appendChild(blank);
 
   const options = check.options || [];
@@ -162,8 +173,7 @@ function renderAttentionCheck(item, table) {
     option.textContent = String(opt);
     select.appendChild(option);
   }
-  const existing = item.existing_response && item.existing_response.attention_check_answer;
-  if (existing) select.value = String(existing);
+  if (existingAnswer) select.value = String(existingAnswer);
   tdValue.appendChild(select);
 
   tr.appendChild(tdLabel);
@@ -171,23 +181,15 @@ function renderAttentionCheck(item, table) {
   table.appendChild(tr);
 }
 
-function fieldChangeKey(row) {
-  return String((row && (row.ci_field_label || row.label)) || '');
+function renderAttentionCheck(item, table) {
+  const existing = item.existing_response && item.existing_response.attention_check_answer;
+  renderQualityCheck(item.attention_check, table, 'attention-check', existing);
 }
 
-function fieldChangeValue(row) {
-  return String((row && row.value) || '').trim();
+function renderComprehensionCheck(item, table) {
+  const existing = item.existing_response && item.existing_response.comprehension_check_answer;
+  renderQualityCheck(item.comprehension_check, table, 'comprehension-check', existing);
 }
-
-function previousFieldMap(fields) {
-  const out = {};
-  for (const row of fields || []) {
-    const key = fieldChangeKey(row);
-    if (key) out[key] = fieldChangeValue(row);
-  }
-  return out;
-}
-
 function renderItem(item) {
   document.getElementById('progress-text').textContent = `Question ${item.index + 1} of ${item.total}`;
   document.getElementById('progress-fill').style.width = `${((item.index + 1) / item.total) * 100}%`;
@@ -203,27 +205,19 @@ function renderItem(item) {
   const table = document.getElementById('ci-table');
   table.innerHTML = '';
   const fields = item.display_fields || participantVisible.display_fields || [];
-  const prevMap = previousFieldMap(previousRenderedFields);
-  const showChanges = previousRenderedFields && item.index !== 0;
   for (const row of fields) {
     const tr = document.createElement('tr');
+    if (row.emphasis === 'primary' || row.emphasis === 'variable' || row.emphasis === 'changed') tr.classList.add('key-detail-row');
+    if (row.emphasis === 'changed') tr.classList.add('changed-row');
+    if (row.ci_field_label === 'Output') tr.classList.add('data-shared-row');
     const tdLabel = document.createElement('td');
     const tdValue = document.createElement('td');
     tdLabel.textContent = row.label || '';
-
-    const key = fieldChangeKey(row);
-    const changed = showChanges && key && prevMap[key] !== undefined && prevMap[key] !== fieldChangeValue(row);
-    if (changed && row.label !== 'Scenario overview') {
-      tr.classList.add('changed-field');
+    if (row.change_label) {
       const pill = document.createElement('span');
       pill.className = 'changed-pill';
-      pill.textContent = 'changed';
+      pill.textContent = row.change_label;
       tdLabel.appendChild(pill);
-      window.setTimeout(() => {
-        tr.classList.remove('changed-field');
-        const existingPill = tr.querySelector('.changed-pill');
-        if (existingPill) existingPill.remove();
-      }, 3200);
     }
 
     const main = document.createElement('div');
@@ -258,7 +252,7 @@ function renderItem(item) {
   }
 
   renderAttentionCheck(item, table);
-  previousRenderedFields = fields.map(row => ({...row}));
+  renderComprehensionCheck(item, table);
 
   document.querySelectorAll('input[name="rating"]').forEach(input => {
     input.checked = false;

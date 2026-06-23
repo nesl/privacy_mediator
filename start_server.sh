@@ -1,5 +1,6 @@
 source venv/bin/activate
 PATH=~/bin:$PATH
-nohup zrok2 share public 5000 --headless &> zrok_output.log &
+nohup zrok2 create name -n public privmediator
+nohup zrok2 share public 5000 -n public:privmediator --headless &> zrok_output.log &
 nohup python survey/server.py   --k 25   --pipeline-output-dir runs/context_pipeline_generation
  &> output.log &

@@ -56,6 +56,7 @@ class Config:
     k: int
     seed: int
     assignment_mode: str
+    max_per_scenario_group: int
     pipeline_output_dir: Optional[Path]
     include_pipeline_outputs: bool
     include_no_output_variants: bool
@@ -120,6 +121,38 @@ def scenario_ci_params(flow: Dict[str, Any]) -> Dict[str, Any]:
         "purpose": first_scalar(mf.get("purpose")),
         "transmission_principle": first_scalar(mf.get("transmissionPrinciple")),
     }
+
+
+def is_child_related_flow(flow: Dict[str, Any]) -> bool:
+    """Return True for scenarios removed from the participant-facing survey.
+
+    Pilot feedback showed that parent/guardian and school-child scenarios
+    introduce a separate perspective-taking problem. This survey version keeps
+    the adult/self-perspective scenarios and excludes child/school cases.
+    """
+    params = scenario_ci_params(flow)
+    subject = str(params.get("subject") or "").strip().lower()
+    context = str(params.get("context") or "").strip().lower()
+    sender = str(params.get("sender") or "").strip().lower()
+    recipient = str(params.get("recipient") or "").strip().lower()
+    family = str(flow.get("context_family") or "").strip().lower()
+    text = json.dumps({
+        "family_id": flow.get("family_id"),
+        "context_bundle_id": flow.get("context_bundle_id"),
+        "context_bundle_label": flow.get("context_bundle_label"),
+        "participant_vignette": flow.get("participant_vignette"),
+        "participant_display_fields": flow.get("participant_display_fields"),
+    }, ensure_ascii=False).lower()
+    return (
+        subject == "child"
+        or context == "school_or_classroom"
+        or family == "child_or_school"
+        or sender == "school_monitoring_system"
+        or recipient == "teacher_or_school_official"
+        or "child" in text
+        or "school" in text
+        or "classroom" in text
+    )
 
 
 def first_scalar(x: Any) -> Optional[str]:
@@ -378,33 +411,33 @@ def is_audio_video_sample(final_cap: Dict[str, Any], row: Dict[str, Any]) -> boo
 
 
 def audio_video_output_label(final_cap: Dict[str, Any]) -> str:
-    """Participant-facing sentence for synchronized camera/audio outputs."""
+    """Participant-facing sentence for video-with-audio outputs."""
     flags = av_component_flags(final_cap)
     if flags["redacted_visual"] and flags["speech_removed_audio"]:
-        return "The shared output is synchronized camera video and audio. Faces and visible personal identifiers are blurred or obscured, and spoken words are removed from the audio."
+        return "The shared data is video with sound; faces and identifying details are blurred, and spoken words are removed."
     if flags["redacted_visual"] and flags["raw_audio"]:
-        return "The shared output is synchronized camera video and audio. Faces and visible personal identifiers are blurred or obscured."
+        return "The shared data is video with sound; faces and identifying details are blurred."
     if flags["redacted_visual"]:
-        return "The shared output is synchronized camera video and audio, with faces and visible personal identifiers blurred or obscured."
+        return "The shared data is video with sound; faces and identifying details are blurred."
     if flags["speech_removed_audio"] and flags["raw_visual"]:
-        return "The shared output is synchronized camera video and audio. Spoken words are removed from the audio, but the camera video is not blurred."
+        return "The shared data is video with sound; spoken words are removed, but the video is not blurred."
     if flags["speech_removed_audio"]:
-        return "The shared output is synchronized camera video and audio, with spoken words removed from the audio."
-    return "The shared output is synchronized camera video and audio from the sensing device."
+        return "The shared data is video with sound; spoken words are removed."
+    return "The shared data is video with sound from the monitoring device."
 
 
 def audio_video_output_description(final_cap: Dict[str, Any]) -> str:
-    """Lay explanation for synchronized camera/audio outputs."""
+    """Lay explanation for video-with-audio outputs that avoids repeating the main value."""
     flags = av_component_flags(final_cap)
-    parts = ["This means the recipient receives camera video together with audio from the same sensing system."]
+    parts = []
     if flags["redacted_visual"]:
-        parts.append("Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured. This does not necessarily remove all contextual clues, such as clothing, posture, or room layout.")
+        parts.append("Faces, tattoos, and readable personal text are blurred out. Clothing, posture, and room layout may still be visible.")
     elif flags["raw_visual"]:
-        parts.append("The camera video may show people and the surrounding scene without visual blurring.")
+        parts.append("The video may show people and the surrounding scene without visual blurring.")
     if flags["speech_removed_audio"]:
-        parts.append("Spoken words are removed from the audio. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number.")
+        parts.append("Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds may still be heard.")
     elif flags["raw_audio"]:
-        parts.append("The audio track is shared as part of the output and may include speech or conversation if people are talking.")
+        parts.append("The sound may include speech or conversation if people are talking.")
     return " ".join(parts)
 
 
@@ -418,37 +451,37 @@ def human_output_label(final_cap: Dict[str, Any], info_types: Dict[str, List[str
     fov_minimized = bool(props.get("field_of_view_minimized"))
 
     if t == "application/x-pose-keypoints" or "pose" in schema:
-        return "The shared output is body pose points, such as stick-figure joint locations, not the original photo or video."
+        return "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown."
     if is_audio_video_sample(final_cap, row):
         return audio_video_output_label(final_cap)
     if t.startswith("image/"):
         if redacted:
-            return "The shared output is individual camera frames from a camera feed, with faces and visible personal identifiers blurred or obscured."
+            return "The shared data is camera images with faces and identifying details blurred."
         if fov_minimized:
-            return "The shared output is cropped still frames sampled from a camera feed, showing only the relevant area."
-        return "The shared output is individual still frames sampled from a camera feed, not continuous video."
+            return "The shared data is cropped camera images showing only the relevant area."
+        return "The shared data is camera images, not video or audio."
     if t.startswith("video/"):
         if redacted:
-            return "The shared output is continuous camera video, with faces and visible personal identifiers blurred or obscured."
+            return "The shared data is continuous camera video without sound, with faces and identifying details blurred."
         if fov_minimized:
-            return "The shared output is continuous camera video cropped to the relevant area."
-        return "The shared output is continuous camera video."
+            return "The shared data is continuous camera video without sound, cropped to the relevant area."
+        return "The shared data is continuous camera video without sound."
     if speech_removed:
-        return "The shared output is audio from a microphone stream after spoken words are removed."
+        return "The shared data is an audio recording with spoken words removed."
     if t.startswith("audio/"):
-        return "The shared output is audio from a microphone. It may include speech or conversation if people are talking."
+        return "The shared data is an audio recording from a microphone. It may include speech or conversation if people are talking."
     if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
-        return "The shared output is a presence or occupancy estimate, such as whether someone is present or how many people are there."
+        return "The shared data is a presence or occupancy estimate, such as whether someone is present or how many people are there."
     if "decibel" in t or "decibel" in schema:
-        return "The shared output is a sound-level measurement, not the original audio."
+        return "The shared data is a sound-level measurement, not the original audio."
     if "sound" in t or "sound" in schema or "noise_event" in schema:
-        return "The shared output is a sound-event label, such as alarm, glass breaking, footsteps, or another noise category."
+        return "The shared data is a sound-event label, such as alarm, glass breaking, footsteps, or another noise category."
     if "activity" in t or "activity" in schema:
-        return "The shared output is an activity label, such as walking, cooking, sitting, or lying down."
+        return "The shared data is an activity label, such as walking, cooking, sitting, or lying down."
     if "event" in t or "event" in schema:
-        return "The shared output is an event alert or event label for the scenario task."
-    fallback = first_present(row.get("matched_output_cap"), schema, t, "data from the smart-space system") or "data from the smart-space system"
-    return f"The shared output is {fallback}."
+        return "The shared data is an event alert or event label for the scenario task."
+    fallback = first_present(row.get("matched_output_cap"), schema, t, "data from the smart-space monitoring device") or "data from the smart-space monitoring device"
+    return f"The shared data is {fallback}."
 
 
 def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
@@ -457,40 +490,40 @@ def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
     schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
     props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
     if t == "application/x-pose-keypoints" or "pose" in schema:
-        return "The recipient receives body joint locations, like a stick-figure skeleton. They do not receive the original image or video."
+        return ""
     if is_audio_video_sample(final_cap, row):
         return audio_video_output_description(final_cap)
     if t.startswith(("image/", "video/")) and props.get("redacted"):
         if t.startswith("image/"):
-            return "This means the recipient receives still camera frames from a camera feed. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured before sharing. This does not necessarily remove all contextual clues such as clothing, posture, or room layout."
+            return "These are separate camera images, not continuous video or audio. Faces, tattoos, and readable personal text are blurred out; clothing and room layout may still be visible."
         if t.startswith("video/"):
-            return "This means the recipient receives continuous camera video. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured before sharing. This does not necessarily remove all contextual clues such as clothing, posture, or room layout."
-        return "This means visual media is shared after facial features and other identifying visual details are blurred or obscured."
+            return "This is video only; audio is not included. Faces, tattoos, and readable personal text are blurred out; clothing and room layout may still be visible."
+        return "Faces and other identifying visual details are blurred or obscured."
     if t.startswith(("image/", "video/")) and props.get("field_of_view_minimized"):
         if t.startswith("image/"):
-            return "This means the recipient receives still camera frames cropped to the relevant area, rather than the full camera view."
+            return "These are separate camera images cropped to the relevant area, rather than the full camera view."
         if t.startswith("video/"):
-            return "This means the recipient receives continuous camera video cropped to the relevant area, rather than the full camera view."
-        return "This means only a cropped part of the camera view is shared, rather than the full scene."
+            return "This is video only; audio is not included. The camera view is cropped to the relevant area."
+        return "Only a cropped part of the camera view is shared, rather than the full scene."
     if t.startswith("image/"):
-        return "This means the recipient receives still frames from a camera feed, not continuous video."
+        return "These are separate snapshots or low-frame-rate images, not a continuous recording."
     if t.startswith("video/"):
-        return "This means the recipient receives continuous video from a camera feed, rather than isolated still frames."
+        return "This is video only; audio is not included."
     if t == "audio/x-filtered" or props.get("speech_content_removed"):
-        return "This means spoken words or conversation content are removed before sharing. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number."
+        return "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
     if t.startswith("audio/"):
-        return "This means the recipient receives audio from a microphone. It may include speech, conversation, and other sounds in the area."
+        return "This means the named receiver gets an audio recording from a microphone. It may include speech, conversation, and other sounds in the area."
     if "decibel" in t or "decibel" in schema:
-        return "This means the recipient receives a sound-level number, such as a decibel value, rather than the original audio."
+        return "This means the named receiver gets a sound-level number, such as a decibel value, rather than the original audio."
     if "sound" in t or "sound" in schema:
-        return "This means the recipient receives a label describing the type of sound, rather than the original audio."
+        return "This means the named receiver gets a label describing the type of sound, rather than the original audio."
     if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
-        return "This means the recipient receives a presence or count estimate, rather than the original sensor stream."
+        return "This means the named receiver gets a presence or count estimate, rather than the original audio, video, or sensor data."
     if "activity" in t or "activity" in schema:
-        return "This means the recipient receives a category describing an activity, rather than the original sensor stream."
+        return "This means the named receiver gets a category describing an activity, rather than the original audio, video, or sensor data."
     if "event" in t or "event" in schema:
-        return "This means the recipient receives a short alert or label saying that a relevant event was detected."
-    return "This is the data or output that would be sent out of the smart-space system for the stated purpose."
+        return "This means the named receiver gets a short alert or label saying that a relevant event was detected."
+    return "This is the data or output that would be sent out of the smart-space monitoring device for the stated purpose."
 
 def privacy_class_from_output(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
     t = cap_type(final_cap) or str(row.get("final_output_type") or "")
@@ -751,9 +784,11 @@ class SurveyState:
     def __init__(self, config: Config):
         self.config = config
         self.flow_data = load_json(config.flow_file)
-        self.flows = self.flow_data.get("generated_information_flows") or self.flow_data.get("context_scenarios", [])
+        raw_flows = self.flow_data.get("generated_information_flows") or self.flow_data.get("context_scenarios", [])
+        self.excluded_child_related_flows = [f for f in raw_flows if is_child_related_flow(f)]
+        self.flows = [f for f in raw_flows if not is_child_related_flow(f)]
         if not self.flows:
-            raise ValueError(f"No generated_information_flows or context_scenarios found in {config.flow_file}")
+            raise ValueError(f"No non-child generated_information_flows or context_scenarios found in {config.flow_file}")
 
         self.pipeline_rows: List[Dict[str, Any]] = []
         self.pipeline_load_info: Dict[str, Any] = {"status": "disabled"}
@@ -767,9 +802,11 @@ class SurveyState:
             include_pipeline_outputs=config.include_pipeline_outputs,
             include_no_output_variants=config.include_no_output_variants,
         )
+        self.item_pool_summary["excluded_child_related_context_count"] = len(self.excluded_child_related_flows)
+        self.item_pool_summary["excluded_child_related_context_ids"] = [get_scenario_id(f) for f in self.excluded_child_related_flows]
         if not self.items:
             raise ValueError(
-                "Survey item pool is empty. Check --pipeline-output-dir, or run with --no-pipeline-outputs "
+                "Survey item pool is empty after child-related scenarios are excluded. Check --pipeline-output-dir, or run with --no-pipeline-outputs "
                 "to fall back to context-only items."
             )
         init_db(config.db_path)
@@ -840,6 +877,11 @@ def init_db(db_path: Path) -> None:
         ensure_column(conn, "responses", "attention_check_expected", "TEXT")
         ensure_column(conn, "responses", "attention_check_answer", "TEXT")
         ensure_column(conn, "responses", "attention_check_correct", "INTEGER")
+        ensure_column(conn, "responses", "comprehension_check_field", "TEXT")
+        ensure_column(conn, "responses", "comprehension_check_prompt", "TEXT")
+        ensure_column(conn, "responses", "comprehension_check_expected", "TEXT")
+        ensure_column(conn, "responses", "comprehension_check_answer", "TEXT")
+        ensure_column(conn, "responses", "comprehension_check_correct", "INTEGER")
         conn.commit()
 
 
@@ -873,7 +915,8 @@ def get_response(db_path: Path, session_id: str, index: int) -> Optional[Dict[st
         row = conn.execute(
             """
             SELECT rating, confidence, free_text, elapsed_ms,
-                   attention_check_answer, attention_check_correct
+                   attention_check_answer, attention_check_correct,
+                   comprehension_check_answer, comprehension_check_correct
             FROM responses WHERE session_id=? AND item_index=?
             """,
             (session_id, index),
@@ -907,6 +950,13 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
     attention_correct = None
     if attention:
         attention_correct = 1 if attention_check_is_correct(attention_expected, attention_answer) else 0
+
+    comprehension = item.get("comprehension_check") or {}
+    comprehension_answer = raw_payload.get("comprehension_check_answer")
+    comprehension_expected = comprehension.get("expected_value")
+    comprehension_correct = None
+    if comprehension:
+        comprehension_correct = 1 if attention_check_is_correct(comprehension_expected, comprehension_answer) else 0
     try:
         confidence_int = int(confidence) if confidence not in (None, "") else None
     except Exception:
@@ -936,8 +986,10 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
                 output_variant_label, output_variant_description, variant_privacy_class, final_output_type,
                 final_output_schema, information_types_json,
                 attention_check_field, attention_check_prompt, attention_check_expected,
-                attention_check_answer, attention_check_correct
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                attention_check_answer, attention_check_correct,
+                comprehension_check_field, comprehension_check_prompt, comprehension_check_expected,
+                comprehension_check_answer, comprehension_check_correct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             participant_id,
@@ -974,6 +1026,11 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
             attention_expected,
             attention_answer,
             attention_correct,
+            comprehension.get("field_label"),
+            comprehension.get("question"),
+            comprehension_expected,
+            comprehension_answer,
+            comprehension_correct,
         ))
         conn.commit()
 
@@ -1018,22 +1075,89 @@ def update_session_progress(db_path: Path, session_id: str, total_assigned: int)
     }
 
 
-def assign_items(items: List[Dict[str, Any]], k: int, seed: int, participant_id: str, session_id: str, mode: str, db_path: Path) -> List[Dict[str, Any]]:
+def assign_items(
+    items: List[Dict[str, Any]],
+    k: int,
+    seed: int,
+    participant_id: str,
+    session_id: str,
+    mode: str,
+    db_path: Path,
+    max_per_scenario_group: int = 2,
+) -> List[Dict[str, Any]]:
     rng = random.Random(seed + stable_int(participant_id) + stable_int(session_id))
     indexed = list(enumerate(items))
     if not indexed:
         return []
+
+    def _assignment_record(idx: int, item: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "item_index": idx,
+            "item_id": item.get("item_id"),
+            "flow_id": item.get("flow_id"),
+            "output_variant_id": (item.get("output_variant") or {}).get("output_variant_id"),
+        }
+
+    def _participant_visible_signature(item: Dict[str, Any]) -> str:
+        """Hash the text a participant would actually see for this item.
+
+        Different backend pipelines can occasionally collapse to the same
+        participant-facing wording after plain-language simplification. Without
+        this second dedupe pass, a participant may see two word-for-word
+        identical pages even though the hidden item IDs differ.
+        """
+        try:
+            visible_fields = participant_display_fields(item.get("flow") or {}, item.get("output_variant"))
+            simplified = []
+            for f in visible_fields:
+                simplified.append({
+                    "label": f.get("label") or "",
+                    "value": f.get("value") or "",
+                    "description": f.get("description") or f.get("help") or "",
+                    "example": f.get("example") or "",
+                })
+            return stable_hash_obj(simplified)
+        except Exception:
+            return stable_hash_obj({
+                "flow_id": item.get("flow_id"),
+                "output": (item.get("output_variant") or {}).get("output_variant_label"),
+                "privacy": (item.get("output_variant") or {}).get("variant_privacy_class"),
+            })
+
+    def _item_scenario_group_key(item: Dict[str, Any]) -> Tuple[str, str, str, str, str, str]:
+        """Group cases so the scenario usually stays constant while parameters vary.
+
+        A flow/context scenario fixes the broad setting, room, task, subject, and
+        purpose. The different output variants within that flow then change the
+        parameters participants are rating, such as the shared data type. Keeping
+        those variants adjacent reduces role/setting whiplash for Prolific users.
+        """
+        flow = item.get("flow") or {}
+        params = scenario_ci_params(flow)
+        return (
+            str(params.get("context") or ""),
+            str(params.get("space") or ""),
+            str(flow.get("task") or ""),
+            str(params.get("subject") or ""),
+            str(params.get("purpose") or ""),
+            str(item.get("flow_id") or ""),
+        )
+
+    def _item_parameter_sort_key(item: Dict[str, Any]) -> Tuple[str, str, str]:
+        flow = item.get("flow") or {}
+        params = scenario_ci_params(flow)
+        variant = item.get("output_variant") or {}
+        return (
+            str(variant.get("variant_privacy_class") or ""),
+            str(variant.get("output_variant_label") or ""),
+            str(params.get("transmission_principle") or ""),
+        )
+
     if mode == "sequential":
-        offset = stable_int(session_id) % len(indexed)
-        return [
-            {
-                "item_index": indexed[(offset+j) % len(indexed)][0],
-                "item_id": indexed[(offset+j) % len(indexed)][1].get("item_id"),
-                "flow_id": indexed[(offset+j) % len(indexed)][1].get("flow_id"),
-                "output_variant_id": (indexed[(offset+j) % len(indexed)][1].get("output_variant") or {}).get("output_variant_id"),
-            }
-            for j in range(k)
-        ]
+        # Sequential mode still shows scenario blocks rather than a fully raw order.
+        ordered = sorted(indexed, key=lambda x: (_item_scenario_group_key(x[1]), _item_parameter_sort_key(x[1])))
+        offset = stable_int(session_id) % len(ordered)
+        return [_assignment_record(*ordered[(offset + j) % len(ordered)]) for j in range(k)]
 
     prior_counts: Dict[str, int] = {}
     with sqlite3.connect(db_path) as conn:
@@ -1046,57 +1170,148 @@ def assign_items(items: List[Dict[str, Any]], k: int, seed: int, participant_id:
             except Exception:
                 pass
 
-    by_task: Dict[str, List[Tuple[int, Dict[str, Any]]]] = {}
+    # Build scenario blocks first, then choose output variants inside each block.
+    # This changes the user experience from "25 unrelated vignettes" to "several
+    # coherent scenarios where the parameters change."
+    by_scenario: Dict[Tuple[str, str, str, str, str, str], List[Tuple[int, Dict[str, Any]]]] = {}
     for idx, item in indexed:
-        flow = item.get("flow") or {}
-        by_task.setdefault(str(flow.get("task") or "unknown"), []).append((idx, item))
+        by_scenario.setdefault(_item_scenario_group_key(item), []).append((idx, item))
 
-    tasks = sorted(by_task)
-    chosen: List[Dict[str, Any]] = []
-    used = set()
     target_n = min(k, len(items))
-    while len(chosen) < target_n:
-        any_added = False
-        for task in tasks:
+    scenario_blocks = list(by_scenario.items())
+
+    def _block_score(block: Tuple[Tuple[str, str, str, str, str, str], List[Tuple[int, Dict[str, Any]]]]) -> Tuple[int, float, float]:
+        _, group_items = block
+        counts = [prior_counts.get(str(item.get("item_id")), 0) for _, item in group_items]
+        min_count = min(counts) if counts else 0
+        mean_count = sum(counts) / max(1, len(counts))
+        return (min_count, mean_count, rng.random())
+
+    scenario_blocks.sort(key=_block_score)
+
+    chosen: List[Dict[str, Any]] = []
+    group_order: Dict[str, int] = {}
+    group_counts: Dict[Tuple[str, str, str, str, str, str], int] = {}
+    used: Set[int] = set()
+    selected_visible_keys: Set[str] = set()
+    per_group_cap = int(max_per_scenario_group or 0)
+    for block_idx, (scenario_key, group_items) in enumerate(scenario_blocks):
+        if len(chosen) >= target_n:
+            break
+        shuffled = list(group_items)
+        rng.shuffle(shuffled)
+        shuffled.sort(key=lambda x: (prior_counts.get(str(x[1].get("item_id")), 0), _item_parameter_sort_key(x[1]), rng.random()))
+        for idx, item in shuffled:
             if len(chosen) >= target_n:
                 break
-            candidates = [x for x in by_task[task] if x[0] not in used]
-            if not candidates:
+            if per_group_cap > 0 and group_counts.get(scenario_key, 0) >= per_group_cap:
+                break
+            if idx in used:
                 continue
-            rng.shuffle(candidates)
-            candidates.sort(key=lambda x: (prior_counts.get(str(x[1].get("item_id")), 0), rng.random()))
-            idx, item = candidates[0]
-            chosen.append({
-                "item_index": idx,
-                "item_id": item.get("item_id"),
-                "flow_id": item.get("flow_id"),
-                "output_variant_id": (item.get("output_variant") or {}).get("output_variant_id"),
-            })
+            visible_key = _participant_visible_signature(item)
+            if visible_key in selected_visible_keys:
+                continue
+            rec = _assignment_record(idx, item)
+            chosen.append(rec)
+            selected_visible_keys.add(visible_key)
             used.add(idx)
-            any_added = True
-        if not any_added:
-            break
-    # Reduce respondent fatigue by grouping selected items into blocks with the
-    # same broad setting and task. The room/space and output still vary within
-    # a block, and changed rows are highlighted in the UI.
-    def _assignment_block_key(a: Dict[str, Any]) -> Tuple[str, str, str, str]:
+            group_counts[scenario_key] = group_counts.get(scenario_key, 0) + 1
+            group_order[str(item.get("flow_id") or idx)] = block_idx
+
+    # If some unusual item pool left gaps, fill from the least-used leftovers,
+    # still respecting the per-scenario cap when possible. If the cap would make
+    # the survey too short, relax it only as a last resort.
+    if len(chosen) < target_n:
+        leftovers = [(idx, item) for idx, item in indexed if idx not in used]
+        rng.shuffle(leftovers)
+        leftovers.sort(key=lambda x: (prior_counts.get(str(x[1].get("item_id")), 0), _item_scenario_group_key(x[1]), _item_parameter_sort_key(x[1]), rng.random()))
+        for relax_cap in [False, True]:
+            for idx, item in leftovers:
+                if len(chosen) >= target_n:
+                    break
+                if idx in used:
+                    continue
+                scenario_key = _item_scenario_group_key(item)
+                if not relax_cap and per_group_cap > 0 and group_counts.get(scenario_key, 0) >= per_group_cap:
+                    continue
+                visible_key = _participant_visible_signature(item)
+                if visible_key in selected_visible_keys:
+                    continue
+                rec = _assignment_record(idx, item)
+                chosen.append(rec)
+                selected_visible_keys.add(visible_key)
+                group_counts[scenario_key] = group_counts.get(scenario_key, 0) + 1
+                group_order.setdefault(str(item.get("flow_id") or idx), len(group_order))
+                used.add(idx)
+            if len(chosen) >= target_n:
+                break
+
+    def _persona_order(item: Dict[str, Any]) -> Tuple[str, str, str, str, str]:
+        flow = item.get("flow") or {}
+        params = scenario_ci_params(flow)
+        return (
+            str(params.get("subject") or ""),
+            str(params.get("context") or ""),
+            str(params.get("space") or ""),
+            str(flow.get("task") or ""),
+            str(params.get("purpose") or ""),
+        )
+
+    def _final_order_key(a: Dict[str, Any]) -> Tuple[Tuple[str, str, str, str, str], int, Tuple[str, str, str]]:
         try:
             item = items[int(a["item_index"])]
-            flow = item.get("flow") or {}
-            params = scenario_ci_params(flow)
-            # Put the respondent role first, then the broad setting, then task.
-            # This keeps “you are a guest,” “you are a patient,” and
-            # parent/guardian child scenarios in coherent blocks, reducing
-            # perspective whiplash without changing the underlying item pool.
-            return (
-                str(params.get("subject") or ""),
-                str(params.get("context") or ""),
-                str(flow.get("task") or ""),
-                str(params.get("space") or ""),
-            )
+            return (_persona_order(item), group_order.get(str(item.get("flow_id") or a["item_index"]), 10**9), _item_parameter_sort_key(item))
         except Exception:
-            return ("", "", "", "")
-    chosen.sort(key=lambda a: (_assignment_block_key(a), rng.random()))
+            return (("", "", "", "", ""), 10**9, ("", "", ""))
+
+    chosen.sort(key=_final_order_key)
+
+    # Mark rows that actually changed from the immediately previous page.
+    # This keeps the explicit “Changed” cue for repeated scenario versions, while
+    # avoiding false positives on the first assigned page.
+    comparable_labels = {
+        "What is the scenario?",
+        "What is your role in this scenario?",
+        "What data would be shared?",
+        "Who controls the monitoring device?",
+        "Who receives or uses the shared data?",
+        "What notice or permission is given?",
+        "When is data collected or shared?",
+        "Where is the data processed?",
+        "Who is allowed to access the shared data?",
+        "What audio filtering happens before sharing?",
+        "What rule applies to the data?",
+    }
+
+    def _visible_field_map_for_record(rec: Dict[str, Any]) -> Dict[str, str]:
+        try:
+            item = items[int(rec["item_index"])]
+            out: Dict[str, str] = {}
+            for f in participant_display_fields(item.get("flow") or {}, item.get("output_variant")):
+                label = str(f.get("label") or "")
+                if label not in comparable_labels:
+                    continue
+                out[label] = "\n".join([
+                    str(f.get("value") or ""),
+                    str(f.get("description") or f.get("help") or ""),
+                    str(f.get("example") or ""),
+                ]).strip()
+            return out
+        except Exception:
+            return {}
+
+    previous_map: Optional[Dict[str, str]] = None
+    for rec in chosen:
+        current_map = _visible_field_map_for_record(rec)
+        if previous_map is not None:
+            changed_labels = sorted(
+                label for label, value in current_map.items()
+                if previous_map.get(label) != value
+            )
+            if changed_labels:
+                rec["changed_field_labels"] = changed_labels
+        previous_map = current_map
+
     return chosen[:target_n]
 
 
@@ -1197,6 +1412,8 @@ def _location_phrase(flow: Optional[Dict[str, Any]], demonstrative: bool = False
 
     if space_term == "outdoor" and context == "public_space":
         return "this public outdoor area" if demonstrative else "a public outdoor area"
+    if context == "workplace" and space_term == "workspace":
+        return "the main office floor of this workplace" if demonstrative else "the main office floor of a workplace"
     if context == "research_living_lab":
         if space:
             return f"the {space} of this research smart-home lab" if demonstrative else f"the {space} of a research smart-home lab"
@@ -1247,14 +1464,22 @@ def _subject_role_for_participant(subject: str, responsible: bool = False) -> st
 
 
 
+def _place_preposition_for_phrase(phrase: str) -> str:
+    text = str(phrase or "").lower()
+    if "office floor" in text or "shop floor" in text:
+        return "on"
+    return "in"
+
+
 def _participant_subject_value(flow: Optional[Dict[str, Any]]) -> str:
     """Value for the displayed subject row, framed as a direct answer."""
     subject = _subject_plain(flow)
     role = _subject_role_for_participant(subject, responsible=False)
     setting_phrase = _location_phrase(flow, demonstrative=True)
+    prep = _place_preposition_for_phrase(setting_phrase)
     if str(subject or "").strip().lower() == "child":
-        return f"The data is about a child in {setting_phrase}. Answer from the perspective of a parent, guardian, or responsible adult."
-    return f"The data is about you as {role} in {setting_phrase}."
+        return f"The data is about a child {prep} {setting_phrase}. Answer from the perspective of a parent, guardian, or responsible adult."
+    return f"The data is about you as {role} {prep} {setting_phrase}."
 
 
 def _surveyed_user_sentence(flow: Optional[Dict[str, Any]]) -> str:
@@ -1262,9 +1487,10 @@ def _surveyed_user_sentence(flow: Optional[Dict[str, Any]]) -> str:
     subject = _subject_plain(flow)
     role = _subject_role_for_participant(subject, responsible=False)
     setting_phrase = _location_phrase(flow, demonstrative=True)
+    prep = _place_preposition_for_phrase(setting_phrase)
     if str(subject or "").strip().lower() == "child":
-        return f"For this scenario, answer from the perspective of a parent, guardian, or responsible adult for a child in {setting_phrase}."
-    return f"For this scenario, answer as if the data is about you as {role} in {setting_phrase}."
+        return f"For this scenario, answer from the perspective of a parent, guardian, or responsible adult for a child {prep} {setting_phrase}."
+    return f"For this scenario, answer as if the data is about you as {role} {prep} {setting_phrase}."
 
 def _purpose_plain(flow: Optional[Dict[str, Any]]) -> str:
     return _row_value_by_original_label(flow, "Purpose") or "the stated purpose"
@@ -1316,6 +1542,8 @@ def _responsible_recipient_phrase(flow: Optional[Dict[str, Any]]) -> str:
         "school_or_classroom": "a teacher or school official",
         "research_living_lab": "the researcher running the study",
     }
+    if context == "public_space" and sender == "owner_controlled_device":
+        return "nearby shop owner using the device"
     if context in mapping:
         return mapping[context]
     if sender == "host_controlled_device":
@@ -1328,10 +1556,40 @@ def _responsible_recipient_phrase(flow: Optional[Dict[str, Any]]) -> str:
 
 
 
+def _flow_processing_mode(flow: Optional[Dict[str, Any]]) -> str:
+    """Return local/cloud/other for participant-facing app storage wording."""
+    try:
+        params = scenario_ci_params(flow or {})
+    except Exception:
+        params = {}
+    tp = str(params.get("transmission_principle") or "").lower()
+    if "cloud" in tp:
+        return "cloud"
+    if "local" in tp:
+        return "local"
+    return "other"
+
+
+
 def _app_recipient_value(flow: Optional[Dict[str, Any]]) -> str:
     app = _task_specific_app_label(flow)
     responsible = _responsible_recipient_phrase(flow)
-    return f"The shared output would be used by the {app} for {responsible}."
+    if responsible.startswith(("the ", "a ", "an ")):
+        who = responsible[0].upper() + responsible[1:]
+    else:
+        who = f"The {responsible}"
+    who_lower = who.lower()
+
+    # Keep this row about people/organizations, not backend storage. The processing
+    # row separately explains whether data stays local or goes to a cloud server.
+    if "home resident" in who_lower or "homeowner" in who_lower:
+        return f"{who} receives the data through the {app} on their personal phone or home device."
+
+    if _flow_processing_mode(flow) == "cloud":
+        return f"{who} receives the data through the {app}."
+
+    return f"{who} receives the data through the {app}. The app creator does not receive or store this data."
+
 
 def _event_phrase(flow: Optional[Dict[str, Any]]) -> str:
     purpose = _purpose_plain(flow).lower()
@@ -1341,14 +1599,71 @@ def _event_phrase(flow: Optional[Dict[str, Any]]) -> str:
     if "sound" in task or "communication" in purpose:
         return "a relevant sound event, such as an alarm, glass breaking, footsteps, a loud noise, or another non-speech sound pattern"
     if "activity" in task or "adl" in task or "routine" in purpose:
-        return "a daily-activity event, such as cooking, sitting, lying down, or room use"
+        return "a daily-activity event, such as cooking, sitting, walking, or resting"
     if "visitor" in task or "security" in purpose:
         return "a visitor, presence, or intrusion event"
     if "energy" in purpose or "lighting" in purpose:
-        return "an occupancy or room-use event"
+        return "an occupancy or activity event"
     if "safety" in purpose:
         return "a safety-relevant event, such as a possible fall, alarm, or dangerous sound"
     return "a relevant event for the stated purpose"
+
+
+def _purpose_for_recipient_phrase(flow: Optional[Dict[str, Any]]) -> str:
+    """Short purpose phrase for the receiver row."""
+    purpose = _purpose_plain(flow).lower()
+    task = str((flow or {}).get("task") or "").lower()
+    if "fall" in purpose or "fall" in task:
+        return "fall detection or safety response"
+    if "work" in purpose or "employee" in purpose:
+        return "employee activity or presence monitoring"
+    if "clinical" in purpose:
+        return "clinical care"
+    if "research" in purpose:
+        return "the research study"
+    if "personalization" in purpose:
+        return "home personalization"
+    if "energy" in purpose or "lighting" in purpose:
+        return "energy or lighting automation"
+    if "security" in purpose or "visitor" in purpose:
+        return "visitor or security monitoring"
+    if "sound" in task or "sound" in purpose or "communication" in purpose:
+        return "sound monitoring"
+    if "activity" in task or "adl" in task or "routine" in purpose:
+        return "daily activity monitoring"
+    if "safety" in purpose:
+        return "safety monitoring"
+    if "training" in purpose or "supervision" in purpose:
+        return "training or supervision"
+    return "the stated purpose"
+
+
+def _area_for_recipient_phrase(flow: Optional[Dict[str, Any]]) -> str:
+    try:
+        params = scenario_ci_params(flow or {})
+    except Exception:
+        params = {}
+    context = str(params.get("context") or "").lower()
+    if context == "short_term_rental":
+        return "at the rental"
+    if context == "workplace":
+        return "in the workplace"
+    if context == "hospital_or_clinic":
+        return "in the hospital or clinic"
+    if context == "long_term_care":
+        return "in the care home"
+    if context == "research_living_lab":
+        return "in the study"
+    if context == "public_space":
+        return "in the public area"
+    if context == "home":
+        return "in the home"
+    return "in this setting"
+
+
+def _uses_app_recipient(flow: Optional[Dict[str, Any]]) -> bool:
+    recipient = (_row_value_by_original_label(flow, "Recipient") or "").lower()
+    return "app" in recipient or "software" in recipient or recipient == "the smart-space app" or recipient == "task-specific app"
 
 
 def _sensor_device_description(flow: Optional[Dict[str, Any]], output_variant: Optional[Dict[str, Any]] = None) -> str:
@@ -1364,8 +1679,25 @@ def _sensor_device_description(flow: Optional[Dict[str, Any]], output_variant: O
     media = str(final_cap.get("media_type") or final_cap.get("semantic_type") or "").lower()
     schema = str(final_cap.get("schema") or "").lower()
     combined = " ".join([label, desc, media, schema])
+    flags = av_component_flags(final_cap) if isinstance(final_cap, dict) else {"has_visual": False, "has_audio": False}
 
-    if "audio-video" in combined or ("audio" in combined and ("video" in combined or "camera" in combined)):
+    # Text such as "camera images, not video or audio" contains the word
+    # "audio" only to say audio is absent. Check camera-only phrases before
+    # component flags, because generated caps can preserve upstream components
+    # even when the released output excludes audio.
+    if any(x in combined for x in ["not video or audio", "without sound", "audio is not included", "stick-figure", "skeleton", "camera images"]):
+        return "camera"
+
+    # Keep the device row aligned with what is actually shared. If the output is
+    # camera-only image/video/pose data, do not mention a microphone merely
+    # because another variant in the same task can include audio.
+    if flags.get("has_visual") and not flags.get("has_audio"):
+        return "camera"
+    if flags.get("has_audio") and not flags.get("has_visual"):
+        return "microphone"
+    if flags.get("has_visual") and flags.get("has_audio"):
+        return "camera and microphone"
+    if "audio-video" in combined or ("video with sound" in combined) or ("audio" in combined and ("video" in combined or "camera" in combined)):
         return "camera and microphone"
     if any(x in combined for x in ["video", "image", "camera", "pose", "stick-figure", "skeleton"]):
         return "camera"
@@ -1403,15 +1735,23 @@ def _contextual_actor_value(original_label: str, original_value: str, flow: Opti
         context = str(params.get("context") or "").strip()
         if text == "resident-owned device":
             if context == "public_space":
-                return f"The device is a privately owned {device} used in the public area."
-            return f"The device is a {device} owned and operated by the resident."
+                return f"The device is a {device} owned and controlled by a nearby shop owner, not by the city or local government."
+            subject_lower = str(subject or "").lower().strip()
+            if subject_lower == "child":
+                return f"The device is a {device} controlled by another adult in the household, not by the child or the parent/guardian you are roleplaying as."
+            if subject_lower in {"guest", "visitor", "roommate"}:
+                role_phrase = "co-resident or roommate" if subject_lower == "roommate" else subject_lower
+                return f"The device is a {device} controlled by a household resident, not by you as the {role_phrase}."
+            if subject_lower == "resident":
+                return f"The device is a {device} controlled by you or another resident of the home."
+            return f"The device is a {device} controlled by a household resident."
         sender_map = {
-            "rental host’s device": f"The device is a {device} owned or operated by the rental host.",
-            "organization-operated system": f"The device is a {device} operated by the organization responsible for the {setting_plain}.",
-            "hospital monitoring system": f"The device is a {device} operated by the hospital or clinic.",
+            "rental host’s device": f"The device is a {device} controlled by the rental host.",
+            "organization-operated system": f"The device is a {device} controlled by the organization responsible for the {setting_plain}.",
+            "hospital monitoring system": f"The device is a {device} controlled by the hospital or clinic.",
             "patient/family device": f"The device is a {device} managed by the patient, resident, or family.",
-            "research sensor system": f"The device is a {device} operated by the researchers conducting the smart-home study.",
-            "school monitoring system": f"The device is a {device} operated by the school.",
+            "research sensor system": f"The device is a {device} controlled by the researchers conducting the smart-home study.",
+            "school monitoring system": f"The device is a {device} controlled by the school.",
         }
         return sender_map.get(text)
 
@@ -1420,16 +1760,18 @@ def _contextual_actor_value(original_label: str, original_value: str, flow: Opti
 
     if original_label == "Recipient":
         if text == "caregiver" and str(subject).lower().strip() == "roommate":
-            return f"The shared output would be received or used by a caregiver responsible for supporting you as a co-resident in the {setting_plain}."
+            return f"A caregiver receives the data to support you as a co-resident { _area_for_recipient_phrase(flow) }."
+        purpose_phrase = _purpose_for_recipient_phrase(flow)
+        area_phrase = _area_for_recipient_phrase(flow)
         recipient_map = {
-            "home resident": f"The shared output would be received or used by the home resident for the {setting_plain}.",
-            "homeowner/resident": f"The shared output would be received or used by the home resident for the {setting_plain}.",
-            "rental host": f"The shared output would be received or used by the rental host for the {setting_plain}.",
-            "authorized staff": f"The shared output would be received or used by authorized staff responsible for the {setting_plain}.",
-            "caregiver": f"The shared output would be received or used by a caregiver for the {subject} in the {setting_plain}.",
-            "clinician": f"The shared output would be received or used by a clinician caring for the {subject} in the {setting_plain}.",
-            "researcher": f"The shared output would be received or used by researchers conducting the smart-home study.",
-            "teacher or school official": f"The shared output would be received or used by a teacher or school official responsible for the {setting_plain}.",
+            "home resident": f"The home resident receives the data for {purpose_phrase} {area_phrase}.",
+            "homeowner/resident": f"The home resident receives the data for {purpose_phrase} {area_phrase}.",
+            "rental host": f"The rental host receives the data for {purpose_phrase} {area_phrase}.",
+            "authorized staff": f"Authorized staff receive the data for {purpose_phrase} {area_phrase}.",
+            "caregiver": f"A caregiver receives the data for {purpose_phrase} {area_phrase}.",
+            "clinician": f"A clinician or care team receives the data for {purpose_phrase} {area_phrase}.",
+            "researcher": f"Researchers receive the data for {purpose_phrase}.",
+            "teacher or school official": f"School staff receive the data for {purpose_phrase} {area_phrase}.",
             "the smart-space app": _app_recipient_value(flow),
             "the app or software service": _app_recipient_value(flow),
             "task-specific app": _app_recipient_value(flow),
@@ -1447,21 +1789,21 @@ def _technical_task_description(flow: Optional[Dict[str, Any]]) -> str:
     context = str(params.get("context") or "").lower()
 
     if "visitor" in task or "presence" in task:
-        return "detects when a person enters, leaves, approaches, or is present in the area"
+        return "detects whether someone enters, leaves, approaches, or is present in the area"
     if "fall" in task:
         return "looks for signs that a person may have fallen and may need help"
     if "adl" in task or "activity" in task:
         if space == "bedroom":
-            return "detects bedroom activity patterns such as sleeping, resting, movement, getting in or out of bed, or room use"
+            return "tracks how the bedroom is used, such as sleeping, resting, or getting in and out of bed"
         if space == "kitchen":
-            return "detects kitchen activity patterns such as cooking, food preparation, eating, movement, or room use"
+            return "tracks how the kitchen is used, such as cooking, preparing food, eating, or moving around"
         if space == "bathroom":
-            return "detects bathroom activity patterns such as room use, movement, or possible safety-relevant activity"
+            return "tracks bathroom movement or possible safety-related activity"
         if space == "living_room":
-            return "detects living-room activity patterns such as sitting, standing, lying down, movement, or room use"
+            return "tracks how the living room is used, such as sitting, walking, resting, or moving around"
         if space == "common_area":
-            return "detects shared-area activity patterns such as movement, sitting, standing, or room use"
-        return "detects daily activity patterns such as movement, sitting, standing, lying down, or room use"
+            return "tracks how the shared area is used, such as sitting, walking, standing, or moving around"
+        return "tracks daily movement and activity patterns, such as sitting, walking, resting, or moving around"
     if "sound" in task:
         return "detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns"
     return "performs the sensing task described in this scenario"
@@ -1472,33 +1814,35 @@ def _purpose_goal_description(original_value: str, flow: Optional[Dict[str, Any]
     if "routine" in purpose or "activity or environmental sound" in purpose:
         if "sound" in task:
             return "monitor everyday sound patterns over time, such as noise levels, alarms, footsteps, or loud sounds"
-        return "monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use"
+        return "see how the room is being used throughout the day, such as sitting, walking, resting, or moving around"
     if "safety" in purpose:
+        if "visitor" in task or "presence" in task:
+            return "support safety by noticing when someone is present, entering, leaving, or approaching"
         if "sound" in task:
             return "support safety by detecting concerning sounds, such as alarms, breaking glass, yelling, or other urgent audio cues"
         if "fall" in task:
             return "support safety by detecting a possible fall or urgent safety event"
-        return "support safety by detecting a possible fall, alarm, dangerous sound, or other urgent event"
+        return "support safety by detecting a relevant urgent event"
     if "security" in purpose or "visitor" in purpose:
         return "support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area"
     if "energy" in purpose or "lighting" in purpose:
         return "support energy or lighting automation, such as turning lights or HVAC on/off when people enter, leave, or occupy the area"
     if "work performance" in purpose or "employee activity" in purpose or "employee presence" in purpose:
-        return "monitor employee activity or presence, such as whether employees are present, moving, or active in the work area"
+        return "monitor employee activity or presence, such as whether employees are present, moving, or active on the main office floor"
     if "clinical care" in purpose:
         if "sound" in task:
             return "support clinical care by alerting clinicians to patient-room sounds or sound patterns that may need attention"
         if "activity" in task or "adl" in task:
-            return "support clinical care by tracking patient movement, room use, or daily activities relevant to care"
+            return "support clinical care by tracking patient movement and daily activity relevant to care"
         return "support clinical care by helping clinicians monitor patient safety or care needs"
     if purpose == "fall detection":
         return "send help or an alert when a possible fall is detected"
     if "personalization" in purpose:
-        return "personalize a home service based on room use or daily activity patterns"
+        return "personalize a home service based on how the room is used throughout the day"
     if "research" in purpose:
         return "support a research study, such as studying daily activities or sensor behavior with participants"
     if "training" in purpose or "supervision" in purpose:
-        return "support training or supervision, such as school staff reviewing activity patterns or events for oversight"
+        return "support school staff supervision, such as reviewing activity patterns or events for oversight"
     if purpose in {"voice command or communication", "audio-event or sound-cue support"} or "audio-event" in purpose or "sound-cue" in purpose:
         return "support safety or security by detecting relevant sound events"
     return purpose or "serve the stated purpose"
@@ -1512,7 +1856,7 @@ def _purpose_display_value(original_value: str, flow: Optional[Dict[str, Any]]) 
 
 def _purpose_description(original_value: str, flow: Optional[Dict[str, Any]]) -> str:
     value = _purpose_display_value(original_value, flow)
-    return f"This describes what the sensing system is trying to do with the collected data or shared output: {value}."
+    return f"This describes what the monitoring device is trying to do with the collected data or shared output: {value}."
 
 
 
@@ -1535,16 +1879,20 @@ def _display_value_override(original_label: str, value: Any, flow: Optional[Dict
         return _app_recipient_value(flow)
 
     if text == "only when an event occurs":
-        return f"Data is collected, processed, or shared only after the sensing system detects {_event_phrase(flow)}."
+        return f"Data is collected, processed, or shared only after the monitoring device detects {_event_phrase(flow)}."
 
+    local_text = "Locally inside the home or building. The data is not sent over the internet for company analysis."
+    if _uses_app_recipient(flow):
+        local_text = "Locally inside the home or building. The data is never sent over the internet or shared with the app company."
     replacements = {
-        "continuous monitoring": "Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.",
-        "processed locally": "Sensor data is processed on the device or local hub, not in a third-party cloud.",
+        "continuous monitoring": "The device stays on continuously, rather than turning on only after motion, sound, or another event.",
+        "processed locally": local_text,
         "not disclosed to the person": "The monitored person is not told that data collection and sharing are happening.",
         "disclosed to people nearby": "People in this setting are told that data is being collected or shared.",
         "written notice is provided": "Affected people receive written notice about collection and sharing.",
-        "speech content is removed": "Spoken words and conversation content are removed before sharing. Non-word human vocal sounds may still remain unless the shared output is only a sound label or sound-level number.",
-        "sent to a cloud service": "Sensor data is sent to a cloud service for processing.",
+        "speech content is removed": "Speech-like parts of the audio are silenced before sharing, so words should not be understandable. Other sounds may remain.",
+        "sent to a cloud server": "The data is sent over the internet to a secure online server (cloud storage) for analysis before the listed output is shared.",
+        "sent to a cloud service": "The data is sent over the internet to a secure online server (cloud storage) for analysis before the listed output is shared.",
         "explicit consent is obtained": "The monitored person gives explicit consent for this collection and sharing.",
         "only authorized people can access it": "Only authorized staff can access the shared output.",
         "disclosed in the rental listing": "The rental listing discloses the device, its coverage area, and what data or output may be shared.",
@@ -1552,16 +1900,8 @@ def _display_value_override(original_label: str, value: Any, flow: Optional[Dict
     return replacements.get(text, text)
 
 def _hidden_device_example(flow: Optional[Dict[str, Any]]) -> str:
-    """Return a hidden-device example that matches the likely modality."""
-    device = _sensor_device_description(flow)
-    lower = device.lower()
-    if "microphone" in lower and "camera" in lower:
-        return "a hidden camera and microphone record or analyze video and audio without telling the monitored person"
-    if "microphone" in lower:
-        return "a hidden microphone records or analyzes audio without telling the monitored person"
-    if "camera" in lower:
-        return "a hidden camera records or analyzes images or video without telling the monitored person"
-    return "a hidden sensor collects or analyzes data without telling the monitored person"
+    """Return a hidden-device example without implying extra sensors."""
+    return "a hidden device collects or analyzes the listed data without telling the monitored person"
 
 
 def _transmission_help_and_example(original_value: str, flow: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
@@ -1569,13 +1909,13 @@ def _transmission_help_and_example(original_value: str, flow: Optional[Dict[str,
     value_lower = str(original_value or "").lower()
     if original_value == "continuous monitoring" or "continuous" in value_lower or "ongoing" in value_lower:
         return (
-            "Data collection is continuous: the sensing system does not wait for a specific event before collecting, processing, or sharing the listed output.",
-            "the sensing system stays on and continues collecting data, rather than activating only after a particular event is detected",
+            "The device stays on continuously, rather than turning on only after motion, sound, or another event.",
+            None,
         )
     if original_value == "only when an event occurs" or ("event" in value_lower and "only" in value_lower):
         return (
-            f"The sensing system waits until it detects {event_phrase} before collecting, analyzing, or sharing the listed output.",
-            f"the sensing system sends the listed output only when it detects {event_phrase}",
+            f"The monitoring device waits until it detects {event_phrase} before collecting, analyzing, or sharing the listed output.",
+            f"the monitoring device sends the listed output only when it detects {event_phrase}",
         )
     if original_value == "not disclosed to the person" or "not disclosed" in value_lower or "hidden" in value_lower:
         return (
@@ -1584,8 +1924,8 @@ def _transmission_help_and_example(original_value: str, flow: Optional[Dict[str,
         )
     if original_value == "processed locally" or "local" in value_lower:
         return (
-            "Sensor data is analyzed on the device or local hub and is not sent to a third-party cloud service for analysis. The listed output may still be shared with the stated recipient.",
-            "a local device or home hub detects the event before any listed output is shared",
+            "Locally inside the home or building. The data is not sent over the internet for company analysis.",
+            None,
         )
     if original_value == "disclosed to people nearby" or "people nearby" in value_lower:
         return (
@@ -1597,10 +1937,10 @@ def _transmission_help_and_example(original_value: str, flow: Optional[Dict[str,
             "Affected people receive written notice explaining the device, collection, recipient, and purpose. For children, this may mean parent/guardian notice or a school-required process.",
             "a written workplace, school, care, or study notice explains the monitoring and sharing",
         )
-    if original_value == "sent to a cloud service" or "cloud" in value_lower:
+    if original_value == "sent to a cloud server" or "cloud" in value_lower:
         return (
-            "Sensor data is sent to a remote cloud service for analysis or processing instead of being analyzed only on a local device or hub.",
-            "audio, video, or sensor data is sent to a vendor cloud service before the listed output is produced or shared",
+            "The data is sent over the internet to a secure online server (cloud storage) for analysis instead of staying on the device or a nearby device in the same home or building.",
+            "audio, video, or sensor data is sent over the internet to a secure online server before the listed output is produced or shared",
         )
     if original_value == "explicit consent is obtained" or "explicit consent" in value_lower:
         return (
@@ -1619,8 +1959,8 @@ def _transmission_help_and_example(original_value: str, flow: Optional[Dict[str,
         )
     if original_value == "speech content is removed" or "speech" in value_lower:
         return (
-            "Spoken words and conversation content are removed before the output is shared. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number.",
-            "the shared output may include an alarm, footsteps, a loud sound, or a sound level, but not the words someone said",
+            "Speech-like parts of the audio are silenced before sharing, so words should not be understandable. Other sounds may remain.",
+            None,
         )
     return None, None
 
@@ -1658,7 +1998,7 @@ def _context_space_example(flow: Optional[Dict[str, Any]]) -> Optional[str]:
         ("short_term_rental", "living_room"): "a living room or shared indoor area in an Airbnb, Vrbo, or other short-term rental",
         ("short_term_rental", "outdoor"): "a rental porch, driveway, yard, exterior walkway, or outside entrance",
         ("public_space", "outdoor"): "a park, sidewalk, public plaza, transit stop, public walkway, or outdoor public entrance",
-        ("workplace", "workspace"): "an office, desk area, shared workspace, shop floor, or work area",
+        ("workplace", "workspace"): "the main office floor, an office cubicle area, shared staff room, desk area, or shop floor",
         ("workplace", "outdoor"): "an outdoor worksite, loading area, parking area, or workplace entrance",
         ("school_or_classroom", "common_area"): "a school hallway, shared common area, classroom-adjacent area, or school lounge",
         ("school_or_classroom", "outdoor"): "a school playground, courtyard, outdoor walkway, or school entrance",
@@ -1750,7 +2090,7 @@ def _plain_field(row: Dict[str, Any], flow: Optional[Dict[str, Any]] = None, out
         "Sender": "Who owns or operates the device?",
         "Data subject": "Who is the data about?",
         "Recipient": "Who would receive or use the shared output?",
-        "Purpose": "What is the sensing system trying to do?",
+        "Purpose": "What is the monitoring device trying to do?",
         "Transmission principle": "Under what condition is data collected, processed, or shared?",
     }
     new_label = mapping.get(label, label)
@@ -1785,9 +2125,12 @@ def output_example(label: Any, description: Any = None) -> Optional[str]:
     """
     text = f"{label or ''} {description or ''}".lower()
     if "pose" in text or "stick-figure" in text:
-        return "a stick-figure skeleton showing body joint positions"
-    if ("spoken words" in text or "conversation content" in text) and ("removed" in text or "not the words" in text):
-        return "words are removed, but sounds like alarms, footsteps, crying, coughing, or laughter may remain"
+        return None
+    # Do not add examples for speech-filtered audio. The value and description
+    # already explain this concept, and repeated examples made the page feel
+    # redundant.
+    if ("spoken words" in text or "conversation content" in text or "speech" in text) and ("removed" in text or "not the words" in text or "cannot be understood" in text):
+        return None
     if "may include speech" in text or "may include speech or conversation" in text:
         return None
     if "presence" in text or "occupancy" in text:
@@ -1797,7 +2140,7 @@ def output_example(label: Any, description: Any = None) -> Optional[str]:
     if "sound-event label" in text or "sound category" in text or "noise category" in text:
         return "a label such as alarm, glass breaking, or footsteps"
     if "activity label" in text or "activity category" in text:
-        return "a label such as walking, sitting, lying down, or room use"
+        return "a label such as walking, sitting, resting, or moving around"
     if "event alert" in text or "event label" in text:
         return "an alert saying that a relevant event was detected"
     return None
@@ -1833,10 +2176,10 @@ def _task_overview_text(flow: Optional[Dict[str, Any]]) -> str:
     surveyed_user = _surveyed_user_sentence(flow)
 
     if context == "research_living_lab":
-        intro = f"Researchers are conducting a study on smart-home sensing. In {location}, a sensing system {technical}."
+        intro = f"Researchers are conducting a study on smart-home sensing. In {location}, a monitoring device {technical}."
     else:
-        intro = f"In {location}, a sensing system {technical}."
-    return f"{intro} {surveyed_user} The overall goal is to {goal}."
+        intro = f"In {location}, a monitoring device {technical}."
+    return f"{intro} The overall goal is to {goal}."
 
 def _role_anchor_text(flow: Optional[Dict[str, Any]]) -> str:
     subject = _subject_plain(flow).strip().lower()
@@ -1844,15 +2187,20 @@ def _role_anchor_text(flow: Optional[Dict[str, Any]]) -> str:
     if subject == "child":
         return f"You are answering as a parent, guardian, or responsible adult for a child in {setting_phrase}."
     role = _subject_role_for_participant(subject, responsible=False)
-    return f"For this scenario, imagine the data is about you as {role} in {setting_phrase}."
+    prep = _place_preposition_for_phrase(setting_phrase)
+    return f"For this scenario, imagine the data is about you as {role} {prep} {setting_phrase}."
 
 
 def _role_anchor_field(flow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     text = _role_anchor_text(flow)
-    subject = _subject_plain(flow)
-    value_html = _safe_emphasize_terms(text, [subject, "parent, guardian, or responsible adult"])
+    subject = _subject_plain(flow).strip().lower()
+    if subject == "child":
+        terms = ["parent, guardian, or responsible adult", "child"]
+    else:
+        terms = [_subject_role_for_participant(subject, responsible=False)]
+    value_html = _safe_emphasize_terms(text, terms)
     return {
-        "label": "Your role",
+        "label": "What is your role in this scenario?",
         "value": text,
         "value_html": value_html,
         "description": "",
@@ -1862,21 +2210,79 @@ def _role_anchor_field(flow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+
+def _scenario_group_title(flow: Optional[Dict[str, Any]]) -> str:
+    """Short stable label for a family of similar survey cases."""
+    family = _task_family_phrase(flow).lower()
+    location = _location_phrase(flow)
+    # Avoid awkward capitalization like "fall detection" at sentence start later.
+    return f"{family} in {location}"
+
+
+def _scenario_group_field(flow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    title = _scenario_group_title(flow)
+    value = (
+        f"This question is part of a group about {title}. "
+        "You may see more than one version of this same general scenario; rate this version based only on the details shown on this page."
+    )
+    value_html = _safe_emphasize_terms(value, [title, "this version"])
+    return {
+        "label": "What general scenario is this question about?",
+        "value": value,
+        "value_html": value_html,
+        "description": "",
+        "help": "",
+        "example": None,
+        "ci_field_label": "Scenario group",
+    }
+
+
 def _scenario_overview_field(flow: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     location = _location_phrase(flow)
-    technical = _technical_task_description(flow)
     goal = _purpose_goal_description(_purpose_plain(flow), flow)
+    task = str((flow or {}).get("task") or "").lower()
     try:
         params = scenario_ci_params(flow or {})
     except Exception:
         params = {}
-    if str(params.get("context") or "") == "research_living_lab":
-        overview = f"Researchers are conducting a study on smart-home sensing. In {location}, a sensing system {technical}. The goal is to {goal}."
+    context = str(params.get("context") or "").lower()
+    space = str(params.get("space") or "").lower()
+
+    # One concise narrative sentence. Avoid repeating the same activity phrase in
+    # both the task and the goal.
+    if "fall" in task:
+        overview = f"A monitoring device in {location} looks for possible falls so the named receiver can respond or send help."
+    elif "visitor" in task or "presence" in task:
+        if "energy" in goal or "lighting" in goal:
+            overview = f"A monitoring device in {location} checks whether someone is present so lights, HVAC, or other automation can respond."
+        elif context == "workplace":
+            overview = "A workplace device checks whether employees are present on the main office floor to monitor daily activity and presence."
+        else:
+            overview = f"A monitoring device in {location} checks whether someone is present, entering, leaving, or approaching for visitor or security monitoring."
+    elif "sound" in task:
+        overview = f"A monitoring device in {location} listens for sound events such as alarms, footsteps, or glass breaking to {goal}."
+    elif "adl" in task or "activity" in task:
+        if context == "workplace":
+            overview = "A workplace device tracks employee movement, such as sitting, walking, or resting, on the main office floor to monitor daily activity and presence."
+        elif space == "living_room":
+            overview = f"A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for {_purpose_for_recipient_phrase(flow)}."
+        elif space == "kitchen":
+            overview = f"A monitoring device tracks kitchen activity, such as cooking or moving around, for {_purpose_for_recipient_phrase(flow)}."
+        elif space == "bedroom":
+            overview = f"A monitoring device tracks bedroom activity, such as sleeping, resting, or getting in and out of bed, for {_purpose_for_recipient_phrase(flow)}."
+        else:
+            overview = f"A monitoring device in {location} tracks daily movement, such as sitting, walking, or resting, for {_purpose_for_recipient_phrase(flow)}."
     else:
-        overview = f"In {location}, a sensing system {technical}. The goal is to {goal}."
-    value_html = _safe_emphasize_terms(overview, [location])
+        technical = _technical_task_description(flow)
+        overview = f"A monitoring device in {location} {technical} to {goal}."
+
+    if context == "research_living_lab":
+        overview = "Researchers are conducting a smart-home study. " + overview
+
+    group_title = _scenario_group_title(flow)
+    value_html = _safe_emphasize_terms(overview, [group_title, location])
     return {
-        "label": "The scenario",
+        "label": "What is the scenario?",
         "value": overview,
         "value_html": value_html,
         "description": "",
@@ -1915,18 +2321,12 @@ def _output_text_for_flow(output_variant: Dict[str, Any], flow: Optional[Dict[st
     lower = f"{label} {desc}".lower()
     if _flow_has_speech_removed_condition(flow) and ("audio" in lower or "microphone" in lower or "speech" in lower):
         if "camera" in lower or "video" in lower:
-            label = "The shared output is synchronized camera video and audio, with spoken words removed from the audio."
-            desc = (
-                "This means the recipient receives camera video together with audio from the same sensing system. "
-                "Spoken words and conversation content are removed before sharing. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number."
-            )
+            label = "The shared data is video with sound; spoken words are removed."
+            desc = "The video remains visible. Speech-like parts of the audio are silenced, so words should not be understandable; other sounds may still be heard."
         else:
-            label = "The shared output is audio from a microphone after spoken words are removed."
-            desc = (
-                "This means spoken words and conversation content are removed before sharing. "
-                "Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number."
-            )
-    return label, desc or "The data or output that would be sent to the stated recipient in this scenario."
+            label = "The shared data is an audio recording with spoken words removed."
+            desc = "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
+    return label, desc if desc != "" else ""
 
 
 def _row_for_ci_label(flow: Optional[Dict[str, Any]], label: str) -> Optional[Dict[str, Any]]:
@@ -1945,47 +2345,95 @@ def _compact_fragment(text: Any, prefixes: Tuple[str, ...] = ()) -> str:
     return fragment.rstrip(".")
 
 
-def _system_and_sharing_field(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    sender_row = _row_for_ci_label(flow, "Sender") or {}
-    recipient_row = _row_for_ci_label(flow, "Recipient") or {}
-    condition_row = _row_for_ci_label(flow, "Transmission principle") or {}
-    device = _display_value_override("Sender", sender_row.get("value"), flow, output_variant)
-    recipient = _display_value_override("Recipient", recipient_row.get("value"), flow, output_variant)
-    condition = _display_value_override("Transmission principle", condition_row.get("value"), flow, output_variant)
-    device_short = _compact_fragment(device, ("The device is ",))
-    recipient_short = _compact_fragment(recipient, ("The shared output would be received or used by ", "The shared output would be used by "))
-    condition_short = _compact_fragment(condition)
-    value = f"Device: {device_short}. Recipient: {recipient_short}. Condition: {condition_short}."
-    value_html = (
-        f"<div><strong>Device:</strong> {_escape_html(device_short)}.</div>"
-        f"<div><strong>Recipient:</strong> {_escape_html(recipient_short)}.</div>"
-        f"<div><strong>Condition:</strong> {_escape_html(condition_short)}.</div>"
-    )
-    example = _participant_example_for_field("Transmission principle", condition_row, flow, str(condition_row.get("value") or "")) if condition_row else None
+def _device_owner_field(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    row = _row_for_ci_label(flow, "Sender") or {}
+    value = _display_value_override("Sender", row.get("value"), flow, output_variant)
+    if not str(value or "").strip().endswith("."):
+        value = f"{value}."
     return {
-        "label": "The system and sharing",
+        "label": "Who controls the monitoring device?",
         "value": value,
-        "value_html": value_html,
+        "description": "",
+        "help": "",
+        "example": None,
+        "ci_field_label": "Sender",
+    }
+
+
+def _recipient_field(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    row = _row_for_ci_label(flow, "Recipient") or {}
+    value = _display_value_override("Recipient", row.get("value"), flow, output_variant)
+    if not str(value or "").strip().endswith("."):
+        value = f"{value}."
+    return {
+        "label": "Who receives or uses the shared data?",
+        "value": value,
+        "description": "",
+        "help": "",
+        "example": None,
+        "ci_field_label": "Recipient",
+    }
+
+
+def _condition_label_for_value(original_value: str) -> str:
+    value_lower = str(original_value or "").lower()
+    if any(k in value_lower for k in ["hidden", "not disclosed", "disclosed", "notice", "consent", "listing"]):
+        return "What notice or permission is given?"
+    if any(k in value_lower for k in ["continuous", "event"]):
+        return "When is data collected or shared?"
+    if any(k in value_lower for k in ["local", "cloud"]):
+        return "Where is the data processed?"
+    if "authorized" in value_lower:
+        return "Who is allowed to access the shared data?"
+    if "speech" in value_lower:
+        return "What audio filtering happens before sharing?"
+    return "What rule applies to the data?"
+
+
+def _condition_field(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    row = _row_for_ci_label(flow, "Transmission principle") or {}
+    original_value = str(row.get("value") or "")
+    # If speech filtering is already incorporated into the data-shared row, do
+    # not repeat the same fact as a separate condition row.
+    if output_variant is not None and "speech" in original_value.lower():
+        return None
+    value = _display_value_override("Transmission principle", row.get("value"), flow, output_variant)
+    if not str(value or "").strip().endswith("."):
+        value = f"{value}."
+    example = _participant_example_for_field("Transmission principle", row, flow, original_value) if row else None
+    label = _condition_label_for_value(original_value)
+    return {
+        "label": label,
+        "value": value,
         "description": "",
         "help": "",
         "example": example,
-        "ci_field_label": "System and sharing",
+        "ci_field_label": "Transmission principle",
     }
 
 
 def participant_display_fields(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    fields = [_role_anchor_field(flow), _scenario_overview_field(flow)]
+    # Put the scenario first so participants see the stable vignette before the
+    # role and parameters. Each row label is a complete question in ordinary
+    # language rather than a CI/factorial-design term.
+    fields = [_scenario_overview_field(flow), _role_anchor_field(flow)]
     if output_variant:
         output_label, output_desc = _output_text_for_flow(output_variant, flow)
         fields.append({
-            "label": "The data shared",
+            "label": "What data would be shared?",
             "value": output_label,
             "description": output_desc,
             "help": output_desc,
             "example": output_example(output_label, output_desc),
             "ci_field_label": "Output",
         })
-    fields.append(_system_and_sharing_field(flow, output_variant))
+    for extra in [
+        _device_owner_field(flow, output_variant),
+        _recipient_field(flow, output_variant),
+        _condition_field(flow, output_variant),
+    ]:
+        if extra is not None:
+            fields.append(extra)
     return fields
 
 
@@ -2018,39 +2466,88 @@ def plain_vignette(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]
     task instead of repeating the same fields in paragraph form.
     """
     return (
-        "Review the role, scenario, system, and data shared. Then rate whether you personally think "
-        "the sharing is appropriate in this situation."
+        "Some questions are versions of the same general scenario. "
+        "If a row is marked Changed, that row differs from the previous question. "
+        "Please rate this page as its own complete situation. Assume only the listed data is saved or shared."
     )
 
 
 def build_attention_check(item_id: Any, flow_id: Any, index: int, display_fields: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Create a direct, low-friction attention check.
+    """Create a Prolific-style attention check.
 
-    Avoid asking participants to match long scenario strings. The check is
-    visible, unambiguous, and uses short options so it does not become a memory
-    or reading-speed trap.
+    This check explicitly tells the participant which answer to select for this
+    very question. It is not a memory check and does not depend on scenario
+    interpretation.
     """
-    # Keep checks infrequent to reduce fatigue: about two checks in a
-    # 25-question assignment, away from the first page. This provides a basic
-    # quality signal without making participants feel interrogated.
+    # Keep checks infrequent: about two checks in a 25-question assignment,
+    # away from the first page and separate from comprehension checks.
     if index not in {6, 17}:
         return None
-    expected = "I am reading this survey carefully"
+    expected = "Somewhat agree"
     options = [
-        expected,
-        "I prefer not to answer this check",
-        "I selected this by accident",
+        "Strongly disagree",
+        "Disagree",
+        "Somewhat agree",
+        "Agree",
+        "Strongly agree",
     ]
-    rng = random.Random(stable_int(f"attention::{item_id}::{flow_id}::{index}"))
-    rng.shuffle(options)
     return {
-        "field_label": "Reading check",
+        "field_label": "Attention check",
         "expected_value": expected,
-        "question": "To show that you are reading the survey, please select ‘I am reading this survey carefully.’",
+        "question": "To show that you are paying attention, please select ‘Somewhat agree’ for this question.",
         "input_type": "select",
         "options": options,
         "required": True,
-        "note": "This check is not about the scenario content.",
+        "note": "This check is not asking about the scenario.",
+    }
+
+
+def _comprehension_subject_expected(flow: Optional[Dict[str, Any]]) -> str:
+    subject = _subject_plain(flow).strip().lower()
+    if subject == "roommate":
+        return "You as a co-resident or roommate"
+    if subject == "research participant":
+        return "You as a research participant"
+    if subject == "employee":
+        return "You as an employee"
+    if subject in {"guest", "patient", "resident", "visitor"}:
+        return f"You as a {subject}"
+    return "The person named in the scenario"
+
+
+def build_comprehension_check(item_id: Any, flow_id: Any, index: int, flow: Dict[str, Any], display_fields: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Ask a short scenario comprehension question.
+
+    These are scenario-based checks, not attention checks. They appear only a
+    couple of times and use short answer choices drawn from the visible role row.
+    """
+    if index not in {11, 22}:
+        return None
+    expected = _comprehension_subject_expected(flow)
+    pool = [
+        "You as a guest",
+        "You as a resident",
+        "You as a patient",
+        "You as an employee",
+        "You as a visitor",
+        "You as a research participant",
+        "You as a co-resident or roommate",
+        "A rental host",
+        "A clinician",
+    ]
+    choices = [x for x in pool if normalize_attention_answer(x) != normalize_attention_answer(expected)]
+    rng = random.Random(stable_int(f"comprehension::{item_id}::{flow_id}::{index}"))
+    rng.shuffle(choices)
+    options = [expected] + choices[:4]
+    rng.shuffle(options)
+    return {
+        "field_label": "Scenario check",
+        "expected_value": expected,
+        "question": "According to this page, whose data is being described?",
+        "input_type": "select",
+        "options": options,
+        "required": True,
+        "note": "Please answer based on the scenario details shown above.",
     }
 
 def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, Any], index: int, total: int) -> Dict[str, Any]:
@@ -2062,7 +2559,13 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
     baseline_ids = list(base.get("baseline_ids") or method_ids)
     ablation_modes = list(base.get("ablation_modes") or [])
     display_fields = participant_display_fields(flow, output_variant)
+    changed_labels = set(assignment.get("changed_field_labels") or [])
+    for field in display_fields:
+        if field.get("label") in changed_labels:
+            field["emphasis"] = "changed"
+            field["change_label"] = "Changed"
     attention_check = build_attention_check(base.get("item_id"), base.get("flow_id"), index, display_fields)
+    comprehension_check = build_comprehension_check(base.get("item_id"), base.get("flow_id"), index, flow, display_fields)
     return {
         "index": index,
         "total": total,
@@ -2092,6 +2595,7 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
         "vignette": plain_vignette(flow, output_variant),
         "display_fields": display_fields,
         "attention_check": attention_check,
+        "comprehension_check": comprehension_check,
         "output_data_slot": {
             "status": "included_from_generated_pipeline_outputs" if output_variant else "not_included_in_context_only_survey",
             "output_data": (output_variant or {}).get("output_variant_label"),
@@ -2128,7 +2632,8 @@ def participant_counts(db_path: Path) -> List[Dict[str, Any]]:
             for r in conn.execute("""
                 SELECT session_id,
                        COUNT(*) AS answered_count,
-                       AVG(CASE WHEN attention_check_correct IS NOT NULL THEN attention_check_correct END) AS attention_check_accuracy
+                       AVG(CASE WHEN attention_check_correct IS NOT NULL THEN attention_check_correct END) AS attention_check_accuracy,
+                       AVG(CASE WHEN comprehension_check_correct IS NOT NULL THEN comprehension_check_correct END) AS comprehension_check_accuracy
                 FROM responses
                 GROUP BY session_id
             """).fetchall()
@@ -2153,6 +2658,7 @@ def participant_counts(db_path: Path) -> List[Dict[str, Any]]:
             "total_elapsed_ms": srow.get("total_elapsed_ms"),
             "total_active_elapsed_ms": srow.get("total_active_elapsed_ms"),
             "attention_check_accuracy": c.get("attention_check_accuracy"),
+            "comprehension_check_accuracy": c.get("comprehension_check_accuracy"),
         })
     return out
 
@@ -2166,9 +2672,15 @@ def summary(db_path: Path, state: SurveyState) -> Dict[str, Any]:
         by_task = [dict(r) for r in conn.execute("SELECT task, COUNT(*) AS n, AVG(rating) AS avg_rating FROM responses GROUP BY task").fetchall()]
         by_output = [dict(r) for r in conn.execute("SELECT output_variant_id, output_variant_label, COUNT(*) AS n, AVG(rating) AS avg_rating FROM responses GROUP BY output_variant_id, output_variant_label").fetchall()]
         attention = conn.execute("""
-            SELECT COUNT(*) AS n,
+            SELECT COUNT(attention_check_correct) AS n,
                    SUM(CASE WHEN attention_check_correct=1 THEN 1 ELSE 0 END) AS correct,
                    AVG(CASE WHEN attention_check_correct IS NOT NULL THEN attention_check_correct END) AS accuracy
+            FROM responses
+        """).fetchone()
+        comprehension = conn.execute("""
+            SELECT COUNT(comprehension_check_correct) AS n,
+                   SUM(CASE WHEN comprehension_check_correct=1 THEN 1 ELSE 0 END) AS correct,
+                   AVG(CASE WHEN comprehension_check_correct IS NOT NULL THEN comprehension_check_correct END) AS accuracy
             FROM responses
         """).fetchone()
         timing = conn.execute("""
@@ -2191,6 +2703,7 @@ def summary(db_path: Path, state: SurveyState) -> Dict[str, Any]:
         "rated_survey_item_count": len(rated_item_ids),
         "mean_ratings_per_rated_item": (response_count / len(rated_item_ids)) if rated_item_ids else 0,
         "attention_check": dict(attention) if attention else {},
+        "comprehension_check": dict(comprehension) if comprehension else {},
         "session_timing": dict(timing) if timing else {},
     }
     return out
@@ -2204,6 +2717,10 @@ def _preview_visible_field(field: Dict[str, Any]) -> Dict[str, Any]:
     }
     if field.get("value_html"):
         out["value_html"] = field.get("value_html")
+    if field.get("emphasis"):
+        out["emphasis"] = field.get("emphasis")
+    if field.get("change_label"):
+        out["change_label"] = field.get("change_label")
     help_text = field.get("help") or field.get("description") or ""
     if help_text:
         out["description"] = help_text
@@ -2226,13 +2743,28 @@ def _preview_visible_attention_check(attention: Optional[Dict[str, Any]]) -> Opt
     if not attention:
         return None
     return {
-        "label": attention.get("field_label") or "Reading check",
+        "label": attention.get("field_label") or "Attention check",
         "question": attention.get("question") or "Please choose the requested answer.",
         "note": attention.get("note") or "",
         "input_type": attention.get("input_type") or "select",
         "placeholder": "Select an answer",
         "options": list(attention.get("options") or []),
         "required": bool(attention.get("required")),
+    }
+
+
+def _preview_visible_comprehension_check(check: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Keep only the comprehension-check text/options visible to participants."""
+    if not check:
+        return None
+    return {
+        "label": check.get("field_label") or "Scenario check",
+        "question": check.get("question") or "Please answer based on this scenario.",
+        "note": check.get("note") or "",
+        "input_type": check.get("input_type") or "select",
+        "placeholder": "Select an answer",
+        "options": list(check.get("options") or []),
+        "required": bool(check.get("required")),
     }
 
 
@@ -2258,6 +2790,7 @@ def build_question_preview(
         session_id,
         state.config.assignment_mode,
         state.config.db_path,
+        state.config.max_per_scenario_group,
     )
     total = len(assignment)
     rating_scale = [
@@ -2277,7 +2810,7 @@ def build_question_preview(
             "vignette": item.get("vignette") or "",
             "scenario_details": visible_fields,
             "rating": {
-                "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+                "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
                 "scale": rating_scale,
             },
             "confidence_prompt": "How confident are you in this rating?",
@@ -2286,6 +2819,9 @@ def build_question_preview(
         visible_attention = _preview_visible_attention_check(item.get("attention_check"))
         if visible_attention:
             q["attention_check"] = visible_attention
+        visible_comprehension = _preview_visible_comprehension_check(item.get("comprehension_check"))
+        if visible_comprehension:
+            q["comprehension_check"] = visible_comprehension
         questions.append(q)
     # Keep preview.json intentionally minimal: only the question content a
     # participant would see on the webpage. Do not include hidden method,
@@ -2399,7 +2935,7 @@ def make_handler(state: SurveyState):
                 k = max(1, min(int(state.config.k), len(state.items)))
                 participant_id = participant_code
                 session_id = uuid.uuid4().hex
-                assignment = assign_items(state.items, k, state.config.seed, participant_id, session_id, state.config.assignment_mode, state.config.db_path)
+                assignment = assign_items(state.items, k, state.config.seed, participant_id, session_id, state.config.assignment_mode, state.config.db_path, state.config.max_per_scenario_group)
                 metadata = dict(payload)
                 metadata["requested_k_ignored"] = payload.get("k") if "k" in payload else None
                 metadata["assigned_k"] = len(assignment)
@@ -2449,6 +2985,9 @@ def make_handler(state: SurveyState):
             attention = item.get("attention_check") or {}
             if attention and attention.get("required") and not str(payload.get("attention_check_answer") or "").strip():
                 return json_response(self, {"error": "please answer the attention-check question before continuing"}, 400)
+            comprehension = item.get("comprehension_check") or {}
+            if comprehension and comprehension.get("required") and not str(payload.get("comprehension_check_answer") or "").strip():
+                return json_response(self, {"error": "please answer the scenario-check question before continuing"}, 400)
             save_response(state.config.db_path, session_id, session["participant_id"], index, item, rating, payload.get("confidence"), str(payload.get("free_text") or "").strip(), payload.get("elapsed_ms"), payload)
             progress = update_session_progress(state.config.db_path, session_id, len(assignment))
             return json_response(self, {"ok": True, "answered": progress.get("answered_count", 0), "k": len(assignment), "completed": progress.get("completed", False), "total_elapsed_ms": progress.get("total_elapsed_ms"), "total_active_elapsed_ms": progress.get("total_active_elapsed_ms")})
@@ -2478,6 +3017,8 @@ def make_handler(state: SurveyState):
                 "rating", "confidence", "free_text",
                 "attention_check_field", "attention_check_prompt", "attention_check_expected",
                 "attention_check_answer", "attention_check_correct",
+                "comprehension_check_field", "comprehension_check_prompt", "comprehension_check_expected",
+                "comprehension_check_answer", "comprehension_check_correct",
                 "elapsed_ms", "created_at_ms", "information_types_json",
             ]
             writer = csv.DictWriter(buf, fieldnames=header, extrasaction="ignore")
@@ -2499,11 +3040,12 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Run an output-augmented CI acceptability survey server.")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=5000)
-    p.add_argument("--k", type=int, default=25)
+    p.add_argument("--k", type=int, default=20)
     p.add_argument("--flow-file", default=str(DEFAULT_FLOW_FILE))
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument("--seed", type=int, default=13)
     p.add_argument("--assignment-mode", default="least_rated_balanced", choices=["least_rated_balanced", "sequential"])
+    p.add_argument("--max-per-scenario-group", type=int, default=2, help="Maximum number of versions from the same scenario family shown to one participant. Use 0 for no cap.")
     p.add_argument("--pipeline-output-dir", default=str(DEFAULT_PIPELINE_OUTPUT_DIR), help="Directory created by evaluation.generate_pipelines_for_all_contexts, containing index.json/summary.json.")
     p.add_argument("--no-pipeline-outputs", action="store_true", help="Fall back to context-only survey items.")
     p.add_argument("--include-no-output-variants", action="store_true", help="Also create survey cases for baselines that deny or produce no selected output.")
@@ -2534,6 +3076,7 @@ def main() -> int:
         args.k,
         args.seed,
         args.assignment_mode,
+        args.max_per_scenario_group,
         pipeline_dir,
         include_pipeline_outputs=not args.no_pipeline_outputs,
         include_no_output_variants=args.include_no_output_variants,
@@ -2551,7 +3094,9 @@ def main() -> int:
 
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state))
 
-    print(f"Serving {len(state.flows)} context scenarios from {state.config.flow_file}")
+    print(f"Serving {len(state.flows)} non-child context scenarios from {state.config.flow_file}")
+    if state.item_pool_summary.get("excluded_child_related_context_count"):
+        print(f"Excluded child-related scenarios: {state.item_pool_summary.get('excluded_child_related_context_ids')}")
     print(f"Survey item pool count: {len(state.items)}")
     if state.item_pool_summary.get("output_augmented"):
         print(f"Loaded generated pipeline outputs from: {state.pipeline_load_info.get('source') or state.pipeline_load_info.get('pipeline_output_dir')}")

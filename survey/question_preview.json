@@ -3,32 +3,38 @@
     {
       "question_number": 1,
       "progress_text": "Question 1 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "You are answering as a parent, guardian, or responsible adult for a child in the bedroom of this private home.",
-          "value_html": "You are answering as a <strong class=\"scenario-var\">parent, guardian, or responsible adult</strong> for a <strong class=\"scenario-var\">child</strong> in the bedroom of this private home."
+          "label": "What is the scenario?",
+          "value": "A workplace device tracks employee movement, such as sitting, walking, or resting, on the main office floor to monitor daily activity and presence.",
+          "value_html": "A workplace device tracks employee movement, such as sitting, walking, or resting, on the main office floor to monitor daily activity and presence."
         },
         {
-          "label": "The scenario",
-          "value": "In the bedroom of a private home, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to support safety by detecting concerning sounds, such as alarms, breaking glass, yelling, or other urgent audio cues.",
-          "value_html": "In <strong class=\"scenario-var\">the bedroom of a private home</strong>, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to support safety by detecting concerning sounds, such as alarms, breaking glass, yelling, or other urgent audio cues."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as an employee on the main office floor of this workplace.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">an employee</strong> on the main office floor of this workplace."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is audio from a microphone stream after spoken words are removed.",
-          "description": "This means spoken words or conversation content are removed before sharing. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number.",
-          "example": "Example: words are removed, but sounds like alarms, footsteps, crying, coughing, or laughter may remain"
+          "label": "What data would be shared?",
+          "value": "The shared data is an audio recording with spoken words removed.",
+          "description": "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a microphone owned and operated by the resident. Recipient: a caregiver for the child in the private home. Condition: Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.",
-          "value_html": "<div><strong>Device:</strong> a microphone owned and operated by the resident.</div><div><strong>Recipient:</strong> a caregiver for the child in the private home.</div><div><strong>Condition:</strong> Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a microphone controlled by the organization responsible for the workplace."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "Authorized staff receive the data for employee activity or presence monitoring in the workplace."
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "The data is sent over the internet to a secure online server (cloud storage) for analysis before the listed output is shared."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -58,31 +64,42 @@
     {
       "question_number": 2,
       "progress_text": "Question 2 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "You are answering as a parent, guardian, or responsible adult for a child in the bedroom of this private home.",
-          "value_html": "You are answering as a <strong class=\"scenario-var\">parent, guardian, or responsible adult</strong> for a <strong class=\"scenario-var\">child</strong> in the bedroom of this private home."
+          "label": "What is the scenario?",
+          "value": "A workplace device tracks employee movement, such as sitting, walking, or resting, on the main office floor to monitor daily activity and presence.",
+          "value_html": "A workplace device tracks employee movement, such as sitting, walking, or resting, on the main office floor to monitor daily activity and presence."
         },
         {
-          "label": "The scenario",
-          "value": "In the bedroom of a private home, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support safety by detecting a possible fall, alarm, dangerous sound, or other urgent event.",
-          "value_html": "In <strong class=\"scenario-var\">the bedroom of a private home</strong>, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support safety by detecting a possible fall, alarm, dangerous sound, or other urgent event."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as an employee on the main office floor of this workplace.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">an employee</strong> on the main office floor of this workplace."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is individual still frames sampled from a camera feed, not continuous video.",
-          "description": "This means the recipient receives still frames from a camera feed, not continuous video."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera owned and operated by the resident. Recipient: a caregiver for the child in the private home. Condition: Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.",
-          "value_html": "<div><strong>Device:</strong> a camera owned and operated by the resident.</div><div><strong>Recipient:</strong> a caregiver for the child in the private home.</div><div><strong>Condition:</strong> Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the organization responsible for the workplace.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "Authorized staff receive the data for employee activity or presence monitoring in the workplace."
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "The data is sent over the internet to a secure online server (cloud storage) for analysis before the listed output is shared."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -112,31 +129,51 @@
     {
       "question_number": 3,
       "progress_text": "Question 3 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as an employee in the work area of this workplace.",
-          "value_html": "For this scenario, imagine the data is about you as an <strong class=\"scenario-var\">employee</strong> in the work area of this workplace."
+          "label": "What is the scenario?",
+          "value": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for daily activity monitoring.",
+          "value_html": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for daily activity monitoring.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the work area of a workplace, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to monitor employee activity or presence, such as whether employees are present, moving, or active in the work area.",
-          "value_html": "In <strong class=\"scenario-var\">the work area of a workplace</strong>, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to monitor employee activity or presence, such as whether employees are present, moving, or active in the work area."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a guest in the living room of this short-term rental.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a guest</strong> in the living room of this short-term rental.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is individual camera frames from a camera feed, with faces and visible personal identifiers blurred or obscured.",
-          "description": "This means the recipient receives still camera frames from a camera feed. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured before sharing. This does not necessarily remove all contextual clues such as clothing, posture, or room layout."
+          "label": "What data would be shared?",
+          "value": "The shared data is an audio recording with spoken words removed.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera operated by the organization responsible for the workplace. Recipient: authorized staff responsible for the workplace. Condition: Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.",
-          "value_html": "<div><strong>Device:</strong> a camera operated by the organization responsible for the workplace.</div><div><strong>Recipient:</strong> authorized staff responsible for the workplace.</div><div><strong>Condition:</strong> Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a microphone controlled by the rental host.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "The rental host receives the data for daily activity monitoring at the rental.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "The monitored person is not told that data collection and sharing are happening.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "example": "Example: a hidden device collects or analyzes the listed data without telling the monitored person"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -166,32 +203,43 @@
     {
       "question_number": 4,
       "progress_text": "Question 4 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the living room of this private home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the living room of this private home."
+          "label": "What is the scenario?",
+          "value": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for daily activity monitoring.",
+          "value_html": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for daily activity monitoring."
         },
         {
-          "label": "The scenario",
-          "value": "In the living room of a private home, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to support safety by detecting concerning sounds, such as alarms, breaking glass, yelling, or other urgent audio cues.",
-          "value_html": "In <strong class=\"scenario-var\">the living room of a private home</strong>, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to support safety by detecting concerning sounds, such as alarms, breaking glass, yelling, or other urgent audio cues."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a guest in the living room of this short-term rental.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a guest</strong> in the living room of this short-term rental."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is audio from a microphone stream after spoken words are removed.",
-          "description": "This means spoken words or conversation content are removed before sharing. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number.",
-          "example": "Example: words are removed, but sounds like alarms, footsteps, crying, coughing, or laughter may remain"
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a microphone owned and operated by the resident. Recipient: the sound-monitoring app for the home resident or homeowner. Condition: People in this setting are told that data is being collected or shared.",
-          "value_html": "<div><strong>Device:</strong> a microphone owned and operated by the resident.</div><div><strong>Recipient:</strong> the sound-monitoring app for the home resident or homeowner.</div><div><strong>Condition:</strong> People in this setting are told that data is being collected or shared.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the rental host.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "The rental host receives the data for daily activity monitoring at the rental."
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "The monitored person is not told that data collection and sharing are happening.",
+          "example": "Example: a hidden device collects or analyzes the listed data without telling the monitored person"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -221,32 +269,49 @@
     {
       "question_number": 5,
       "progress_text": "Question 5 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the living room of this short-term rental.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the living room of this short-term rental."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the outdoor area of a short-term rental checks whether someone is present, entering, leaving, or approaching for visitor or security monitoring.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the outdoor area of a short-term rental</strong> checks whether someone is present, entering, leaving, or approaching for visitor or security monitoring.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the living room of a short-term rental, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use.",
-          "value_html": "In <strong class=\"scenario-var\">the living room of a short-term rental</strong>, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a guest in the outdoor area of this short-term rental.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a guest</strong> in the outdoor area of this short-term rental.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is synchronized camera video and audio. Faces and visible personal identifiers are blurred or obscured.",
-          "description": "This means the recipient receives camera video together with audio from the same sensing system. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured. This does not necessarily remove all contextual clues, such as clothing, posture, or room layout. The audio track is shared as part of the output and may include speech or conversation if people are talking."
+          "label": "What data would be shared?",
+          "value": "The shared data is camera images, not video or audio.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "These are separate snapshots or low-frame-rate images, not a continuous recording."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera and microphone owned or operated by the rental host. Recipient: the rental host for the short-term rental. Condition: The monitored person is not told that data collection and sharing are happening.",
-          "value_html": "<div><strong>Device:</strong> a camera and microphone owned or operated by the rental host.</div><div><strong>Recipient:</strong> the rental host for the short-term rental.</div><div><strong>Condition:</strong> The monitored person is not told that data collection and sharing are happening.</div>",
-          "example": "Example: a hidden camera and microphone record or analyze video and audio without telling the monitored person"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the rental host."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "The rental host receives the data for visitor or security monitoring at the rental.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "The rental listing discloses the device, its coverage area, and what data or output may be shared.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "example": "Example: the listing says an outdoor camera covers the entrance and explains what information the host may receive"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -276,31 +341,41 @@
     {
       "question_number": 6,
       "progress_text": "Question 6 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the bedroom of this short-term rental.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the bedroom of this short-term rental."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the outdoor area of a short-term rental checks whether someone is present, entering, leaving, or approaching for visitor or security monitoring.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the outdoor area of a short-term rental</strong> checks whether someone is present, entering, leaving, or approaching for visitor or security monitoring."
         },
         {
-          "label": "The scenario",
-          "value": "In the bedroom of a short-term rental, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to monitor everyday sound patterns over time, such as noise levels, alarms, footsteps, or loud sounds.",
-          "value_html": "In <strong class=\"scenario-var\">the bedroom of a short-term rental</strong>, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to monitor everyday sound patterns over time, such as noise levels, alarms, footsteps, or loud sounds."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a guest in the outdoor area of this short-term rental.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a guest</strong> in the outdoor area of this short-term rental."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is audio from a microphone. It may include speech or conversation if people are talking.",
-          "description": "This means the recipient receives audio from a microphone. It may include speech, conversation, and other sounds in the area."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a microphone owned or operated by the rental host. Recipient: the rental host for the short-term rental. Condition: People in this setting are told that data is being collected or shared.",
-          "value_html": "<div><strong>Device:</strong> a microphone owned or operated by the rental host.</div><div><strong>Recipient:</strong> the rental host for the short-term rental.</div><div><strong>Condition:</strong> People in this setting are told that data is being collected or shared.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the rental host."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "The rental host receives the data for visitor or security monitoring at the rental."
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "The rental listing discloses the device, its coverage area, and what data or output may be shared.",
+          "example": "Example: the listing says an outdoor camera covers the entrance and explains what information the host may receive"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -330,32 +405,49 @@
     {
       "question_number": 7,
       "progress_text": "Question 7 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the living room of this short-term rental.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the living room of this short-term rental."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the patient room of a hospital or clinic looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the patient room of a hospital or clinic</strong> looks for possible falls so the named receiver can respond or send help.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the living room of a short-term rental, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to monitor everyday sound patterns over time, such as noise levels, alarms, footsteps, or loud sounds.",
-          "value_html": "In <strong class=\"scenario-var\">the living room of a short-term rental</strong>, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to monitor everyday sound patterns over time, such as noise levels, alarms, footsteps, or loud sounds."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a patient in the patient room of this hospital or clinic.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a patient</strong> in the patient room of this hospital or clinic.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is audio from a microphone. It may include speech or conversation if people are talking.",
-          "description": "This means the recipient receives audio from a microphone. It may include speech, conversation, and other sounds in the area."
+          "label": "What data would be shared?",
+          "value": "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a microphone owned or operated by the rental host. Recipient: the rental host for the short-term rental. Condition: The monitored person is not told that data collection and sharing are happening.",
-          "value_html": "<div><strong>Device:</strong> a microphone owned or operated by the rental host.</div><div><strong>Recipient:</strong> the rental host for the short-term rental.</div><div><strong>Condition:</strong> The monitored person is not told that data collection and sharing are happening.</div>",
-          "example": "Example: a hidden microphone records or analyzes audio without telling the monitored person"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the hospital or clinic.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A clinician or care team receives the data for fall detection or safety response in the hospital or clinic.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who is allowed to access the shared data?",
+          "value": "Only authorized staff can access the shared output.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -382,15 +474,17 @@
       "confidence_prompt": "How confident are you in this rating?",
       "optional_note_prompt": "Optional: Explain your reasoning for this scenario",
       "attention_check": {
-        "label": "Reading check",
-        "question": "To show that you are reading the survey, please select \u2018I am reading this survey carefully.\u2019",
-        "note": "This check is not about the scenario content.",
+        "label": "Attention check",
+        "question": "To show that you are paying attention, please select \u2018Somewhat agree\u2019 for this question.",
+        "note": "This check is not asking about the scenario.",
         "input_type": "select",
         "placeholder": "Select an answer",
         "options": [
-          "I am reading this survey carefully",
-          "I prefer not to answer this check",
-          "I selected this by accident"
+          "Strongly disagree",
+          "Disagree",
+          "Somewhat agree",
+          "Agree",
+          "Strongly agree"
         ],
         "required": true
       }
@@ -398,31 +492,40 @@
     {
       "question_number": 8,
       "progress_text": "Question 8 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the living room of this short-term rental.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the living room of this short-term rental."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the patient room of a hospital or clinic looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the patient room of a hospital or clinic</strong> looks for possible falls so the named receiver can respond or send help."
         },
         {
-          "label": "The scenario",
-          "value": "In the living room of a short-term rental, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to monitor everyday sound patterns over time, such as noise levels, alarms, footsteps, or loud sounds.",
-          "value_html": "In <strong class=\"scenario-var\">the living room of a short-term rental</strong>, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to monitor everyday sound patterns over time, such as noise levels, alarms, footsteps, or loud sounds."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a patient in the patient room of this hospital or clinic.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a patient</strong> in the patient room of this hospital or clinic."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is audio from a microphone. It may include speech or conversation if people are talking.",
-          "description": "This means the recipient receives audio from a microphone. It may include speech, conversation, and other sounds in the area."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a microphone owned or operated by the rental host. Recipient: the rental host for the short-term rental. Condition: People in this setting are told that data is being collected or shared.",
-          "value_html": "<div><strong>Device:</strong> a microphone owned or operated by the rental host.</div><div><strong>Recipient:</strong> the rental host for the short-term rental.</div><div><strong>Condition:</strong> People in this setting are told that data is being collected or shared.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the hospital or clinic."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A clinician or care team receives the data for fall detection or safety response in the hospital or clinic."
+        },
+        {
+          "label": "Who is allowed to access the shared data?",
+          "value": "Only authorized staff can access the shared output."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -452,32 +555,50 @@
     {
       "question_number": 9,
       "progress_text": "Question 9 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the bedroom of this short-term rental.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the bedroom of this short-term rental."
+          "label": "What is the scenario?",
+          "value": "Researchers are conducting a smart-home study. A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for the research study.",
+          "value_html": "Researchers are conducting a smart-home study. A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for the research study.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the bedroom of a short-term rental, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support safety by detecting a possible fall or urgent safety event.",
-          "value_html": "In <strong class=\"scenario-var\">the bedroom of a short-term rental</strong>, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support safety by detecting a possible fall or urgent safety event."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a research participant in the living room of this research smart-home lab.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a research participant</strong> in the living room of this research smart-home lab.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is continuous camera video.",
-          "description": "This means the recipient receives continuous video from a camera feed, rather than isolated still frames."
+          "label": "What data would be shared?",
+          "value": "The shared data is video with sound from the monitoring device.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera owned or operated by the rental host. Recipient: the rental host for the short-term rental. Condition: The monitored person is not told that data collection and sharing are happening.",
-          "value_html": "<div><strong>Device:</strong> a camera owned or operated by the rental host.</div><div><strong>Recipient:</strong> the rental host for the short-term rental.</div><div><strong>Condition:</strong> The monitored person is not told that data collection and sharing are happening.</div>",
-          "example": "Example: a hidden camera records or analyzes images or video without telling the monitored person"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera and microphone controlled by the researchers conducting the smart-home study.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "Researchers receive the data for the research study.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "The monitored person gives explicit consent for this collection and sharing.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "example": "Example: a signed consent form or clear opt-in explains what data is collected, who receives it, and why"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -507,33 +628,41 @@
     {
       "question_number": 10,
       "progress_text": "Question 10 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the bedroom of this short-term rental.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the bedroom of this short-term rental."
+          "label": "What is the scenario?",
+          "value": "Researchers are conducting a smart-home study. A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for the research study.",
+          "value_html": "Researchers are conducting a smart-home study. A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for the research study."
         },
         {
-          "label": "The scenario",
-          "value": "In the bedroom of a short-term rental, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support safety by detecting a possible fall or urgent safety event.",
-          "value_html": "In <strong class=\"scenario-var\">the bedroom of a short-term rental</strong>, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support safety by detecting a possible fall or urgent safety event."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a research participant in the living room of this research smart-home lab.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a research participant</strong> in the living room of this research smart-home lab."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is body pose points, such as stick-figure joint locations, not the original photo or video.",
-          "description": "The recipient receives body joint locations, like a stick-figure skeleton. They do not receive the original image or video.",
-          "example": "Example: a stick-figure skeleton showing body joint positions"
+          "label": "What data would be shared?",
+          "value": "The shared data is video with sound; faces and identifying details are blurred.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "Faces, tattoos, and readable personal text are blurred out. Clothing, posture, and room layout may still be visible. The sound may include speech or conversation if people are talking."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera owned or operated by the rental host. Recipient: the rental host for the short-term rental. Condition: The monitored person is not told that data collection and sharing are happening.",
-          "value_html": "<div><strong>Device:</strong> a camera owned or operated by the rental host.</div><div><strong>Recipient:</strong> the rental host for the short-term rental.</div><div><strong>Condition:</strong> The monitored person is not told that data collection and sharing are happening.</div>",
-          "example": "Example: a hidden camera records or analyzes images or video without telling the monitored person"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera and microphone controlled by the researchers conducting the smart-home study."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "Researchers receive the data for the research study."
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "The monitored person gives explicit consent for this collection and sharing.",
+          "example": "Example: a signed consent form or clear opt-in explains what data is collected, who receives it, and why"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -563,32 +692,49 @@
     {
       "question_number": 11,
       "progress_text": "Question 11 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a guest in the outdoor area of this short-term rental.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">guest</strong> in the outdoor area of this short-term rental."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the bathroom of a private home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the bathroom of a private home</strong> looks for possible falls so the named receiver can respond or send help.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the outdoor area of a short-term rental, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area.",
-          "value_html": "In <strong class=\"scenario-var\">the outdoor area of a short-term rental</strong>, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the bathroom of this private home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the bathroom of this private home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is individual camera frames from a camera feed, with faces and visible personal identifiers blurred or obscured.",
-          "description": "This means the recipient receives still camera frames from a camera feed. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured before sharing. This does not necessarily remove all contextual clues such as clothing, posture, or room layout."
+          "label": "What data would be shared?",
+          "value": "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera owned or operated by the rental host. Recipient: the rental host for the short-term rental. Condition: The rental listing discloses the device, its coverage area, and what data or output may be shared.",
-          "value_html": "<div><strong>Device:</strong> a camera owned or operated by the rental host.</div><div><strong>Recipient:</strong> the rental host for the short-term rental.</div><div><strong>Condition:</strong> The rental listing discloses the device, its coverage area, and what data or output may be shared.</div>",
-          "example": "Example: the listing says an outdoor camera covers the entrance and explains what information the host may receive"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by you or another resident of the home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for fall detection or safety response in the home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is not sent over the internet for company analysis.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -618,32 +764,40 @@
     {
       "question_number": 12,
       "progress_text": "Question 12 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a patient in the patient room of this hospital or clinic.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">patient</strong> in the patient room of this hospital or clinic."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the bathroom of a private home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the bathroom of a private home</strong> looks for possible falls so the named receiver can respond or send help."
         },
         {
-          "label": "The scenario",
-          "value": "In the patient room of a hospital or clinic, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to support clinical care by alerting clinicians to patient-room sounds or sound patterns that may need attention.",
-          "value_html": "In <strong class=\"scenario-var\">the patient room of a hospital or clinic</strong>, a sensing system detects or classifies everyday sound events, such as alarms, glass breaking, footsteps, loud sounds, or other sound patterns. The goal is to support clinical care by alerting clinicians to patient-room sounds or sound patterns that may need attention."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the bathroom of this private home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the bathroom of this private home."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is audio from a microphone stream after spoken words are removed.",
-          "description": "This means spoken words or conversation content are removed before sharing. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number.",
-          "example": "Example: words are removed, but sounds like alarms, footsteps, crying, coughing, or laughter may remain"
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a microphone operated by the hospital or clinic. Recipient: a clinician caring for the patient in the hospital or clinic. Condition: Only authorized staff can access the shared output.",
-          "value_html": "<div><strong>Device:</strong> a microphone operated by the hospital or clinic.</div><div><strong>Recipient:</strong> a clinician caring for the patient in the hospital or clinic.</div><div><strong>Condition:</strong> Only authorized staff can access the shared output.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by you or another resident of the home."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for fall detection or safety response in the home."
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is not sent over the internet for company analysis."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -668,37 +822,64 @@
         ]
       },
       "confidence_prompt": "How confident are you in this rating?",
-      "optional_note_prompt": "Optional: Explain your reasoning for this scenario"
+      "optional_note_prompt": "Optional: Explain your reasoning for this scenario",
+      "comprehension_check": {
+        "label": "Scenario check",
+        "question": "According to this page, whose data is being described?",
+        "note": "Please answer based on the scenario details shown above.",
+        "input_type": "select",
+        "placeholder": "Select an answer",
+        "options": [
+          "You as a research participant",
+          "You as a resident",
+          "You as an employee",
+          "You as a visitor",
+          "You as a guest"
+        ],
+        "required": true
+      }
     },
     {
       "question_number": 13,
       "progress_text": "Question 13 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a patient in the patient room of this hospital or clinic.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">patient</strong> in the patient room of this hospital or clinic."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the kitchen of a private home listens for sound events such as alarms, footsteps, or glass breaking to support safety or security by detecting relevant sound events.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the kitchen of a private home</strong> listens for sound events such as alarms, footsteps, or glass breaking to support safety or security by detecting relevant sound events.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the patient room of a hospital or clinic, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support clinical care by helping clinicians monitor patient safety or care needs.",
-          "value_html": "In <strong class=\"scenario-var\">the patient room of a hospital or clinic</strong>, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support clinical care by helping clinicians monitor patient safety or care needs."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the kitchen of this private home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the kitchen of this private home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is body pose points, such as stick-figure joint locations, not the original photo or video.",
-          "description": "The recipient receives body joint locations, like a stick-figure skeleton. They do not receive the original image or video.",
-          "example": "Example: a stick-figure skeleton showing body joint positions"
+          "label": "What data would be shared?",
+          "value": "The shared data is an audio recording with spoken words removed.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera operated by the hospital or clinic. Recipient: a clinician caring for the patient in the hospital or clinic. Condition: Only authorized staff can access the shared output.",
-          "value_html": "<div><strong>Device:</strong> a camera operated by the hospital or clinic.</div><div><strong>Recipient:</strong> a clinician caring for the patient in the hospital or clinic.</div><div><strong>Condition:</strong> Only authorized staff can access the shared output.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a microphone controlled by you or another resident of the home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "The home resident or homeowner receives the data through the sound-monitoring app on their personal phone or home device.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -728,32 +909,49 @@
     {
       "question_number": 14,
       "progress_text": "Question 14 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a research participant in the living room of this research smart-home lab.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">research participant</strong> in the living room of this research smart-home lab."
+          "label": "What is the scenario?",
+          "value": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for home personalization.",
+          "value_html": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for home personalization.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "Researchers are conducting a study on smart-home sensing. In the living room of a research smart-home lab, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to support a research study, such as studying daily activities or sensor behavior with participants.",
-          "value_html": "Researchers are conducting a study on smart-home sensing. In <strong class=\"scenario-var\">the living room of a research smart-home lab</strong>, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to support a research study, such as studying daily activities or sensor behavior with participants."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the living room of this private home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the living room of this private home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is synchronized camera video and audio. Faces and visible personal identifiers are blurred or obscured.",
-          "description": "This means the recipient receives camera video together with audio from the same sensing system. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured. This does not necessarily remove all contextual clues, such as clothing, posture, or room layout. The audio track is shared as part of the output and may include speech or conversation if people are talking."
+          "label": "What data would be shared?",
+          "value": "The shared data is video with sound from the monitoring device.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera and microphone operated by the researchers conducting the smart-home study. Recipient: researchers conducting the smart-home study. Condition: The monitored person gives explicit consent for this collection and sharing.",
-          "value_html": "<div><strong>Device:</strong> a camera and microphone operated by the researchers conducting the smart-home study.</div><div><strong>Recipient:</strong> researchers conducting the smart-home study.</div><div><strong>Condition:</strong> The monitored person gives explicit consent for this collection and sharing.</div>",
-          "example": "Example: a signed consent form or clear opt-in explains what data is collected, who receives it, and why"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera and microphone controlled by you or another resident of the home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "The home resident or homeowner receives the data through the personalization app on their personal phone or home device.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is never sent over the internet or shared with the app company.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -783,33 +981,40 @@
     {
       "question_number": 15,
       "progress_text": "Question 15 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a research participant in the living room of this research smart-home lab.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">research participant</strong> in the living room of this research smart-home lab."
+          "label": "What is the scenario?",
+          "value": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for home personalization.",
+          "value_html": "A monitoring device tracks living-room activity throughout the day, such as sitting, walking, or resting, for home personalization."
         },
         {
-          "label": "The scenario",
-          "value": "Researchers are conducting a study on smart-home sensing. In the living room of a research smart-home lab, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to support a research study, such as studying daily activities or sensor behavior with participants.",
-          "value_html": "Researchers are conducting a study on smart-home sensing. In <strong class=\"scenario-var\">the living room of a research smart-home lab</strong>, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to support a research study, such as studying daily activities or sensor behavior with participants."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the living room of this private home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the living room of this private home."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is audio from a microphone stream after spoken words are removed.",
-          "description": "This means spoken words or conversation content are removed before sharing. Non-word human vocal sounds, such as crying, groaning, coughing, screaming, or laughter, may still remain unless the shared output is only a sound label or sound-level number.",
-          "example": "Example: words are removed, but sounds like alarms, footsteps, crying, coughing, or laughter may remain"
+          "label": "What data would be shared?",
+          "value": "The shared data is video with sound; faces and identifying details are blurred.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "Faces, tattoos, and readable personal text are blurred out. Clothing, posture, and room layout may still be visible. The sound may include speech or conversation if people are talking."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a microphone operated by the researchers conducting the smart-home study. Recipient: researchers conducting the smart-home study. Condition: The monitored person gives explicit consent for this collection and sharing.",
-          "value_html": "<div><strong>Device:</strong> a microphone operated by the researchers conducting the smart-home study.</div><div><strong>Recipient:</strong> researchers conducting the smart-home study.</div><div><strong>Condition:</strong> The monitored person gives explicit consent for this collection and sharing.</div>",
-          "example": "Example: a signed consent form or clear opt-in explains what data is collected, who receives it, and why"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera and microphone controlled by you or another resident of the home."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "The home resident or homeowner receives the data through the personalization app on their personal phone or home device."
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is never sent over the internet or shared with the app company."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -839,32 +1044,50 @@
     {
       "question_number": 16,
       "progress_text": "Question 16 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a resident in the living room of this private home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">resident</strong> in the living room of this private home."
+          "label": "What is the scenario?",
+          "value": "A monitoring device tracks bedroom activity, such as sleeping, resting, or getting in and out of bed, for daily activity monitoring.",
+          "value_html": "A monitoring device tracks bedroom activity, such as sleeping, resting, or getting in and out of bed, for daily activity monitoring.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the living room of a private home, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to personalize a home service based on room use or daily activity patterns.",
-          "value_html": "In <strong class=\"scenario-var\">the living room of a private home</strong>, a sensing system detects living-room activity patterns such as sitting, standing, lying down, movement, or room use. The goal is to personalize a home service based on room use or daily activity patterns."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the bedroom of this long-term care home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the bedroom of this long-term care home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is synchronized camera video and audio. Faces and visible personal identifiers are blurred or obscured.",
-          "description": "This means the recipient receives camera video together with audio from the same sensing system. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured. This does not necessarily remove all contextual clues, such as clothing, posture, or room layout. The audio track is shared as part of the output and may include speech or conversation if people are talking."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera and microphone owned and operated by the resident. Recipient: the personalization app for the home resident or homeowner. Condition: Sensor data is processed on the device or local hub, not in a third-party cloud.",
-          "value_html": "<div><strong>Device:</strong> a camera and microphone owned and operated by the resident.</div><div><strong>Recipient:</strong> the personalization app for the home resident or homeowner.</div><div><strong>Condition:</strong> Sensor data is processed on the device or local hub, not in a third-party cloud.</div>",
-          "example": "Example: a local device or home hub detects the event before any listed output is shared"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera managed by the patient, resident, or family.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for daily activity monitoring in the care home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is not sent over the internet for company analysis.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -894,33 +1117,42 @@
     {
       "question_number": 17,
       "progress_text": "Question 17 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a resident in the bathroom of this private home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">resident</strong> in the bathroom of this private home."
+          "label": "What is the scenario?",
+          "value": "A monitoring device tracks bedroom activity, such as sleeping, resting, or getting in and out of bed, for daily activity monitoring.",
+          "value_html": "A monitoring device tracks bedroom activity, such as sleeping, resting, or getting in and out of bed, for daily activity monitoring."
         },
         {
-          "label": "The scenario",
-          "value": "In the bathroom of a private home, a sensing system looks for signs that a person may have fallen and may need help. The goal is to send help or an alert when a possible fall is detected.",
-          "value_html": "In <strong class=\"scenario-var\">the bathroom of a private home</strong>, a sensing system looks for signs that a person may have fallen and may need help. The goal is to send help or an alert when a possible fall is detected."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the bedroom of this long-term care home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the bedroom of this long-term care home."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is body pose points, such as stick-figure joint locations, not the original photo or video.",
-          "description": "The recipient receives body joint locations, like a stick-figure skeleton. They do not receive the original image or video.",
-          "example": "Example: a stick-figure skeleton showing body joint positions"
+          "label": "What data would be shared?",
+          "value": "The shared data is video with sound; faces and identifying details are blurred, and spoken words are removed.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "Faces, tattoos, and readable personal text are blurred out. Clothing, posture, and room layout may still be visible. Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds may still be heard."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera owned and operated by the resident. Recipient: a caregiver for the resident in the private home. Condition: Sensor data is processed on the device or local hub, not in a third-party cloud.",
-          "value_html": "<div><strong>Device:</strong> a camera owned and operated by the resident.</div><div><strong>Recipient:</strong> a caregiver for the resident in the private home.</div><div><strong>Condition:</strong> Sensor data is processed on the device or local hub, not in a third-party cloud.</div>",
-          "example": "Example: a local device or home hub detects the event before any listed output is shared"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera and microphone managed by the patient, resident, or family.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for daily activity monitoring in the care home."
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is not sent over the internet for company analysis."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -950,32 +1182,47 @@
     {
       "question_number": 18,
       "progress_text": "Question 18 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the bedroom of a long-term care home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the bedroom of a long-term care home</strong> looks for possible falls so the named receiver can respond or send help.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "What is your role in this scenario?",
           "value": "For this scenario, imagine the data is about you as a resident in the bedroom of this long-term care home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">resident</strong> in the bedroom of this long-term care home."
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the bedroom of this long-term care home."
         },
         {
-          "label": "The scenario",
-          "value": "In the bedroom of a long-term care home, a sensing system detects bedroom activity patterns such as sleeping, resting, movement, getting in or out of bed, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use.",
-          "value_html": "In <strong class=\"scenario-var\">the bedroom of a long-term care home</strong>, a sensing system detects bedroom activity patterns such as sleeping, resting, movement, getting in or out of bed, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use."
+          "label": "What data would be shared?",
+          "value": "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is continuous camera video.",
-          "description": "This means the recipient receives continuous video from a camera feed, rather than isolated still frames."
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera managed by the patient, resident, or family.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera managed by the patient, resident, or family. Recipient: a caregiver for the resident in the long-term care home. Condition: Sensor data is processed on the device or local hub, not in a third-party cloud.",
-          "value_html": "<div><strong>Device:</strong> a camera managed by the patient, resident, or family.</div><div><strong>Recipient:</strong> a caregiver for the resident in the long-term care home.</div><div><strong>Condition:</strong> Sensor data is processed on the device or local hub, not in a third-party cloud.</div>",
-          "example": "Example: a local device or home hub detects the event before any listed output is shared"
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for fall detection or safety response in the care home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "When is data collected or shared?",
+          "value": "Data is collected, processed, or shared only after the monitoring device detects a possible fall.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -1002,15 +1249,17 @@
       "confidence_prompt": "How confident are you in this rating?",
       "optional_note_prompt": "Optional: Explain your reasoning for this scenario",
       "attention_check": {
-        "label": "Reading check",
-        "question": "To show that you are reading the survey, please select \u2018I am reading this survey carefully.\u2019",
-        "note": "This check is not about the scenario content.",
+        "label": "Attention check",
+        "question": "To show that you are paying attention, please select \u2018Somewhat agree\u2019 for this question.",
+        "note": "This check is not asking about the scenario.",
         "input_type": "select",
         "placeholder": "Select an answer",
         "options": [
-          "I am reading this survey carefully",
-          "I selected this by accident",
-          "I prefer not to answer this check"
+          "Strongly disagree",
+          "Disagree",
+          "Somewhat agree",
+          "Agree",
+          "Strongly agree"
         ],
         "required": true
       }
@@ -1018,32 +1267,40 @@
     {
       "question_number": 19,
       "progress_text": "Question 19 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the bedroom of a long-term care home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the bedroom of a long-term care home</strong> looks for possible falls so the named receiver can respond or send help."
+        },
+        {
+          "label": "What is your role in this scenario?",
           "value": "For this scenario, imagine the data is about you as a resident in the bedroom of this long-term care home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">resident</strong> in the bedroom of this long-term care home."
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the bedroom of this long-term care home."
         },
         {
-          "label": "The scenario",
-          "value": "In the bedroom of a long-term care home, a sensing system detects bedroom activity patterns such as sleeping, resting, movement, getting in or out of bed, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use.",
-          "value_html": "In <strong class=\"scenario-var\">the bedroom of a long-term care home</strong>, a sensing system detects bedroom activity patterns such as sleeping, resting, movement, getting in or out of bed, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is synchronized camera video and audio from the sensing device.",
-          "description": "This means the recipient receives camera video together with audio from the same sensing system. The camera video may show people and the surrounding scene without visual blurring."
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera managed by the patient, resident, or family."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera and microphone managed by the patient, resident, or family. Recipient: a caregiver for the resident in the long-term care home. Condition: Sensor data is processed on the device or local hub, not in a third-party cloud.",
-          "value_html": "<div><strong>Device:</strong> a camera and microphone managed by the patient, resident, or family.</div><div><strong>Recipient:</strong> a caregiver for the resident in the long-term care home.</div><div><strong>Condition:</strong> Sensor data is processed on the device or local hub, not in a third-party cloud.</div>",
-          "example": "Example: a local device or home hub detects the event before any listed output is shared"
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for fall detection or safety response in the care home."
+        },
+        {
+          "label": "When is data collected or shared?",
+          "value": "Data is collected, processed, or shared only after the monitoring device detects a possible fall."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -1073,33 +1330,45 @@
     {
       "question_number": 20,
       "progress_text": "Question 20 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the living room of a long-term care home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the living room of a long-term care home</strong> looks for possible falls so the named receiver can respond or send help.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "What is your role in this scenario?",
           "value": "For this scenario, imagine the data is about you as a resident in the living room of this long-term care home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">resident</strong> in the living room of this long-term care home."
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the living room of this long-term care home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the living room of a long-term care home, a sensing system looks for signs that a person may have fallen and may need help. The goal is to send help or an alert when a possible fall is detected.",
-          "value_html": "In <strong class=\"scenario-var\">the living room of a long-term care home</strong>, a sensing system looks for signs that a person may have fallen and may need help. The goal is to send help or an alert when a possible fall is detected."
+          "label": "What data would be shared?",
+          "value": "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is body pose points, such as stick-figure joint locations, not the original photo or video.",
-          "description": "The recipient receives body joint locations, like a stick-figure skeleton. They do not receive the original image or video.",
-          "example": "Example: a stick-figure skeleton showing body joint positions"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera managed by the patient, resident, or family."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera managed by the patient, resident, or family. Recipient: a caregiver for the resident in the long-term care home. Condition: Sensor data is processed on the device or local hub, not in a third-party cloud.",
-          "value_html": "<div><strong>Device:</strong> a camera managed by the patient, resident, or family.</div><div><strong>Recipient:</strong> a caregiver for the resident in the long-term care home.</div><div><strong>Condition:</strong> Sensor data is processed on the device or local hub, not in a third-party cloud.</div>",
-          "example": "Example: a local device or home hub detects the event before any listed output is shared"
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for fall detection or safety response in the care home."
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is not sent over the internet for company analysis.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -1129,31 +1398,40 @@
     {
       "question_number": 21,
       "progress_text": "Question 21 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a co-resident or roommate in the kitchen of this private home.",
-          "value_html": "For this scenario, imagine the data is about you as a co-resident or <strong class=\"scenario-var\">roommate</strong> in the kitchen of this private home."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the living room of a long-term care home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the living room of a long-term care home</strong> looks for possible falls so the named receiver can respond or send help."
         },
         {
-          "label": "The scenario",
-          "value": "In the kitchen of a private home, a sensing system detects kitchen activity patterns such as cooking, food preparation, eating, movement, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use.",
-          "value_html": "In <strong class=\"scenario-var\">the kitchen of a private home</strong>, a sensing system detects kitchen activity patterns such as cooking, food preparation, eating, movement, or room use. The goal is to monitor daily activity patterns over time that fit this room, such as movement, resting, sitting, standing, or room use."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a resident in the living room of this long-term care home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a resident</strong> in the living room of this long-term care home."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is synchronized camera video and audio. Faces and visible personal identifiers are blurred or obscured.",
-          "description": "This means the recipient receives camera video together with audio from the same sensing system. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured. This does not necessarily remove all contextual clues, such as clothing, posture, or room layout. The audio track is shared as part of the output and may include speech or conversation if people are talking."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera and microphone owned and operated by the resident. Recipient: the home resident for the private home. Condition: Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.",
-          "value_html": "<div><strong>Device:</strong> a camera and microphone owned and operated by the resident.</div><div><strong>Recipient:</strong> the home resident for the private home.</div><div><strong>Condition:</strong> Data collection is continuous; there is no event trigger limiting collection, processing, or sharing.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera managed by the patient, resident, or family."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data for fall detection or safety response in the care home."
+        },
+        {
+          "label": "Where is the data processed?",
+          "value": "Locally inside the home or building. The data is not sent over the internet for company analysis."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -1183,31 +1461,49 @@
     {
       "question_number": 22,
       "progress_text": "Question 22 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a visitor in the entryway of this private home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">visitor</strong> in the entryway of this private home."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the living room of a private home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the living room of a private home</strong> looks for possible falls so the named receiver can respond or send help.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In the entryway of a private home, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area.",
-          "value_html": "In <strong class=\"scenario-var\">the entryway of a private home</strong>, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a co-resident or roommate in the living room of this private home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a co-resident or roommate</strong> in the living room of this private home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is continuous camera video.",
-          "description": "This means the recipient receives continuous video from a camera feed, rather than isolated still frames."
+          "label": "What data would be shared?",
+          "value": "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera owned and operated by the resident. Recipient: the home resident for the private home. Condition: Data is collected, processed, or shared only after the sensing system detects a visitor, presence, or intrusion event.",
-          "value_html": "<div><strong>Device:</strong> a camera owned and operated by the resident.</div><div><strong>Recipient:</strong> the home resident for the private home.</div><div><strong>Condition:</strong> Data is collected, processed, or shared only after the sensing system detects a visitor, presence, or intrusion event.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by a household resident, not by you as the co-resident or roommate.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data to support you as a co-resident in the home.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "When is data collected or shared?",
+          "value": "Data is collected, processed, or shared only after the monitoring device detects a possible fall.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -1237,31 +1533,40 @@
     {
       "question_number": 23,
       "progress_text": "Question 23 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
-          "value": "For this scenario, imagine the data is about you as a visitor in the entryway of this private home.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">visitor</strong> in the entryway of this private home."
+          "label": "What is the scenario?",
+          "value": "A monitoring device in the living room of a private home looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">the living room of a private home</strong> looks for possible falls so the named receiver can respond or send help."
         },
         {
-          "label": "The scenario",
-          "value": "In the entryway of a private home, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area.",
-          "value_html": "In <strong class=\"scenario-var\">the entryway of a private home</strong>, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area."
+          "label": "What is your role in this scenario?",
+          "value": "For this scenario, imagine the data is about you as a co-resident or roommate in the living room of this private home.",
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a co-resident or roommate</strong> in the living room of this private home."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is individual camera frames from a camera feed, with faces and visible personal identifiers blurred or obscured.",
-          "description": "This means the recipient receives still camera frames from a camera feed. Faces and visible personal identifiers, such as name tags, readable personal text, or distinctive tattoos when detected, are blurred or obscured before sharing. This does not necessarily remove all contextual clues such as clothing, posture, or room layout."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera owned and operated by the resident. Recipient: the home resident for the private home. Condition: Data is collected, processed, or shared only after the sensing system detects a visitor, presence, or intrusion event.",
-          "value_html": "<div><strong>Device:</strong> a camera owned and operated by the resident.</div><div><strong>Recipient:</strong> the home resident for the private home.</div><div><strong>Condition:</strong> Data is collected, processed, or shared only after the sensing system detects a visitor, presence, or intrusion event.</div>"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by a household resident, not by you as the co-resident or roommate."
+        },
+        {
+          "label": "Who receives or uses the shared data?",
+          "value": "A caregiver receives the data to support you as a co-resident in the home."
+        },
+        {
+          "label": "When is data collected or shared?",
+          "value": "Data is collected, processed, or shared only after the monitoring device detects a possible fall."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -1286,37 +1591,69 @@
         ]
       },
       "confidence_prompt": "How confident are you in this rating?",
-      "optional_note_prompt": "Optional: Explain your reasoning for this scenario"
+      "optional_note_prompt": "Optional: Explain your reasoning for this scenario",
+      "comprehension_check": {
+        "label": "Scenario check",
+        "question": "According to this page, whose data is being described?",
+        "note": "Please answer based on the scenario details shown above.",
+        "input_type": "select",
+        "placeholder": "Select an answer",
+        "options": [
+          "You as a guest",
+          "A clinician",
+          "You as a visitor",
+          "You as a co-resident or roommate",
+          "You as a research participant"
+        ],
+        "required": true
+      }
     },
     {
       "question_number": 24,
       "progress_text": "Question 24 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
+          "label": "What is the scenario?",
+          "value": "A monitoring device in a public outdoor area looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">a public outdoor area</strong> looks for possible falls so the named receiver can respond or send help.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "What is your role in this scenario?",
           "value": "For this scenario, imagine the data is about you as a visitor in this public outdoor area.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">visitor</strong> in this public outdoor area."
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a visitor</strong> in this public outdoor area.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The scenario",
-          "value": "In a public outdoor area, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support safety by detecting a possible fall or urgent safety event.",
-          "value_html": "In <strong class=\"scenario-var\">a public outdoor area</strong>, a sensing system looks for signs that a person may have fallen and may need help. The goal is to support safety by detecting a possible fall or urgent safety event."
+          "label": "What data would be shared?",
+          "value": "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is body pose points, such as stick-figure joint locations, not the original photo or video.",
-          "description": "The recipient receives body joint locations, like a stick-figure skeleton. They do not receive the original image or video.",
-          "example": "Example: a stick-figure skeleton showing body joint positions"
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the organization responsible for the public area.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a camera operated by the organization responsible for the public area. Recipient: authorized staff responsible for the public area. Condition: People in this setting are told that data is being collected or shared.",
-          "value_html": "<div><strong>Device:</strong> a camera operated by the organization responsible for the public area.</div><div><strong>Recipient:</strong> authorized staff responsible for the public area.</div><div><strong>Condition:</strong> People in this setting are told that data is being collected or shared.</div>"
+          "label": "Who receives or uses the shared data?",
+          "value": "Authorized staff receive the data for fall detection or safety response in the public area.",
+          "emphasis": "changed",
+          "change_label": "Changed"
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "People in this setting are told that data is being collected or shared.",
+          "emphasis": "changed",
+          "change_label": "Changed"
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
@@ -1346,31 +1683,40 @@
     {
       "question_number": 25,
       "progress_text": "Question 25 of 25",
-      "vignette": "Review the role, scenario, system, and data shared. Then rate whether you personally think the sharing is appropriate in this situation.",
+      "vignette": "Some questions are versions of the same general scenario. If a row is marked Changed, that row differs from the previous question. Please rate this page as its own complete situation. Assume only the listed data is saved or shared.",
       "scenario_details": [
         {
-          "label": "Your role",
+          "label": "What is the scenario?",
+          "value": "A monitoring device in a public outdoor area looks for possible falls so the named receiver can respond or send help.",
+          "value_html": "A monitoring device in <strong class=\"scenario-var\">a public outdoor area</strong> looks for possible falls so the named receiver can respond or send help."
+        },
+        {
+          "label": "What is your role in this scenario?",
           "value": "For this scenario, imagine the data is about you as a visitor in this public outdoor area.",
-          "value_html": "For this scenario, imagine the data is about you as a <strong class=\"scenario-var\">visitor</strong> in this public outdoor area."
+          "value_html": "For this scenario, imagine the data is about you as <strong class=\"scenario-var\">a visitor</strong> in this public outdoor area."
         },
         {
-          "label": "The scenario",
-          "value": "In a public outdoor area, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area.",
-          "value_html": "In <strong class=\"scenario-var\">a public outdoor area</strong>, a sensing system detects when a person enters, leaves, approaches, or is present in the area. The goal is to support visitor/security monitoring, such as noticing someone arriving, entering, or approaching the area."
+          "label": "What data would be shared?",
+          "value": "The shared data is continuous camera video without sound.",
+          "emphasis": "changed",
+          "change_label": "Changed",
+          "description": "This is video only; audio is not included."
         },
         {
-          "label": "The data shared",
-          "value": "The shared output is continuous camera video.",
-          "description": "This means the recipient receives continuous video from a camera feed, rather than isolated still frames."
+          "label": "Who controls the monitoring device?",
+          "value": "The device is a camera controlled by the organization responsible for the public area."
         },
         {
-          "label": "The system and sharing",
-          "value": "Device: a privately owned camera used in the public area. Recipient: the presence-detection app for the person or organization responsible for the public area. Condition: People in this setting are told that data is being collected or shared.",
-          "value_html": "<div><strong>Device:</strong> a privately owned camera used in the public area.</div><div><strong>Recipient:</strong> the presence-detection app for the person or organization responsible for the public area.</div><div><strong>Condition:</strong> People in this setting are told that data is being collected or shared.</div>"
+          "label": "Who receives or uses the shared data?",
+          "value": "Authorized staff receive the data for fall detection or safety response in the public area."
+        },
+        {
+          "label": "What notice or permission is given?",
+          "value": "People in this setting are told that data is being collected or shared."
         }
       ],
       "rating": {
-        "prompt": "In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation?",
+        "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
         "scale": [
           {
             "value": 1,
