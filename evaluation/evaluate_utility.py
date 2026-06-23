@@ -77,7 +77,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-EVALUATE_UTILITY_PATCH_VERSION = "2026-06-auto-utility-metrics"
+EVALUATE_UTILITY_PATCH_VERSION = "2026-06-fall-pose-log-preflight-deps"
 
 try:
     from tqdm.auto import tqdm
@@ -104,6 +104,20 @@ def progress_write(msg: str) -> None:
             tqdm.write(str(msg))  # type: ignore[union-attr]
         except Exception:
             print(str(msg), file=sys.stderr, flush=True)
+
+
+class PreprocessingStageError(RuntimeError):
+    """Raised when preprocessing cannot produce the manifest needed downstream.
+
+    The attached ``prep`` dictionary is copied into utility_result.json so the
+    retained logs and failed stage command remain visible even though temporary
+    intermediate artifacts may be deleted.
+    """
+
+    def __init__(self, message: str, prep: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.prep = dict(prep or {})
+
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".ogg", ".m4a"}
@@ -483,19 +497,29 @@ AUTO_PATH_CANDIDATES = {
         "data/chokepoint/manifest.csv",
     ],
     "fall_manifest": [
-        # Prefer the raw task manifest when present.  If it lacks keypoints_path,
-        # the downstream-app pose extractor is run on the test-filtered manifest.
+        # Prefer the raw LE2I task manifest.  If a method/pipeline needs pose
+        # keypoints and no keypoints_path exists, the evaluator runs the same
+        # downstream YOLO-pose extractor used by the fall app.
         "data/le2i/le2i_manifest.csv",
-        "data/le2i/le2i_manifest_with_keypoints.csv",
-        "outputs/le2i/le2i_manifest_with_keypoints.csv",
+        "data/le2i/manifest.csv",
+    ],
+    "fall_precomputed_pose_manifest": [
+        # Optional speed-up for raw/no-transform fall utility: this manifest
+        # already has keypoints_path rows generated from the original videos.
+        "outputs/le2i_manifest_with_keypoints.csv",
         "outputs/le2i_pose/le2i_manifest_with_keypoints.csv",
+        "data/le2i/le2i_manifest_with_keypoints.csv",
     ],
     "fall_checkpoint": [
+        "outputs/le2i_fall_model/best.pt",
+        "outputs/le2i_fall_model/last.pt",
+        "outputs/le2i_fall_model/checkpoint.pt",
         "outputs/le2i/checkpoint.pt",
         "outputs/le2i/best.pt",
         "outputs/le2i/model.pt",
     ],
     "fall_label_map": [
+        "outputs/le2i_fall_model/label_map.json",
         "outputs/le2i/label_map.json",
         "data/le2i/label_map.json",
     ],
@@ -504,6 +528,9 @@ AUTO_PATH_CANDIDATES = {
         "data/chime_home/manifest.csv",
     ],
     "home_audio_checkpoint": [
+        "outputs/chime_home_ast/best.pt",
+        "outputs/chime_home_ast/last.pt",
+        "outputs/chime_home_ast/checkpoint.pt",
         "outputs/chime_home/checkpoint.pt",
         "outputs/chime_home/best.pt",
         "outputs/chime_home/model.pt",
@@ -513,11 +540,15 @@ AUTO_PATH_CANDIDATES = {
         "data/youhome/manifest.csv",
     ],
     "youhome_checkpoint": [
+        "outputs/youhome_adl_av_logmel_audiofixed_v2/best.pt",
+        "outputs/youhome_adl_av_logmel_audiofixed_v2/last.pt",
+        "outputs/youhome_adl_av_logmel_audiofixed_v2/checkpoint.pt",
         "outputs/youhome/checkpoint.pt",
         "outputs/youhome/best.pt",
         "outputs/youhome/model.pt",
     ],
     "youhome_label_map": [
+        "outputs/youhome_adl_av_logmel_audiofixed_v2/label_map.json",
         "outputs/youhome/label_map.json",
         "data/youhome/label_map.json",
     ],
@@ -1462,21 +1493,64 @@ def infer_visitor(args: argparse.Namespace, manifest: Path, data_root: Optional[
     }
 
 
-def run_fall_extract_pose(args: argparse.Namespace, manifest: Path, data_root: Optional[str | Path], out_dir: Path, dry_run: bool) -> Tuple[Path, Dict[str, Any]]:
+def run_fall_extract_pose(
+    args: argparse.Namespace,
+    manifest: Path,
+    data_root: Optional[str | Path],
+    out_dir: Path,
+    dry_run: bool,
+    log_dir: Optional[Path] = None,
+) -> Tuple[Path, Dict[str, Any]]:
     if not args.fall_extract_pose_module and not args.fall_extract_pose_script:
         raise ValueError("fall image/video path requires --fall-extract-pose-module or --fall-extract-pose-script")
     pose_dir = out_dir / "pose"
     pose_manifest = out_dir / "manifest_with_keypoints.csv"
+    retained_log_dir = Path(log_dir) if log_dir is not None else out_dir
+    retained_log_dir.mkdir(parents=True, exist_ok=True)
+    extract_log = retained_log_dir / "extract_pose.log"
+
     cmd = command_base(args.fall_extract_pose_module, args.fall_extract_pose_script, args.python)
+    supported = supported_cli_flags(cmd, cwd=args.project_root)
     cmd.extend(["--manifest", str(manifest), "--output-dir", str(pose_dir), "--updated-manifest", str(pose_manifest)])
-    append_if(cmd, "--data-root", data_root)
-    append_if(cmd, "--model", args.fall_pose_model)
-    append_if(cmd, "--device", normalized_device(args.device, ultralytics=True))
-    append_if(cmd, "--stride", args.fall_pose_stride)
-    append_if(cmd, "--max-frames", args.max_frames_per_sample)
-    append_bool(cmd, "--no-sanitize-videos", args.no_sanitize_videos)
-    run = run_cmd(cmd, cwd=args.project_root, log_path=out_dir / "extract_pose.log", dry_run=dry_run)
-    return pose_manifest, {"extract_pose": run, "pose_manifest": str(pose_manifest), "pose_dir": str(pose_dir)}
+    append_if_supported(cmd, supported, "--data-root", data_root)
+    append_if_supported(cmd, supported, "--model", args.fall_pose_model)
+    append_if_supported(cmd, supported, "--device", normalized_device(args.device, ultralytics=True))
+    append_if_supported(cmd, supported, "--stride", args.fall_pose_stride)
+    append_if_supported(cmd, supported, "--max-frames", args.max_frames_per_sample)
+    append_bool_if_supported(cmd, supported, "--no-sanitize-videos", args.no_sanitize_videos)
+    run = run_cmd(cmd, cwd=args.project_root, log_path=extract_log, dry_run=dry_run)
+
+    output_exists = bool(pose_manifest.exists()) if not dry_run else True
+    status = "ok" if run.get("returncode") == 0 and output_exists else "error"
+    if run.get("returncode") == 0 and not output_exists and not dry_run:
+        run = dict(run)
+        run["error_summary"] = f"Pose extraction returned 0 but did not create expected manifest: {pose_manifest}"
+    return pose_manifest, {
+        "extract_pose_status": status,
+        "extract_pose": run,
+        "extract_pose_log": str(extract_log),
+        "pose_manifest": str(pose_manifest),
+        "pose_manifest_exists": output_exists,
+        "pose_dir": str(pose_dir),
+    }
+
+
+def _ensure_fall_pose_manifest_ready(args: argparse.Namespace, pose_manifest: Path, pose_info: Dict[str, Any], prep: Dict[str, Any], status_on_error: str) -> None:
+    """Stop before fall inference if pose extraction failed or produced no manifest."""
+    if getattr(args, "dry_run", False):
+        return
+    ok = (pose_info.get("extract_pose_status") == "ok") and pose_manifest.exists()
+    if ok:
+        return
+    prep.update(pose_info)
+    prep["preprocessing_status"] = status_on_error
+    log_path = pose_info.get("extract_pose_log") or (pose_info.get("extract_pose") or {}).get("log_path")
+    msg = (
+        "Fall pose extraction did not produce the keypoint manifest needed by fall inference. "
+        f"Expected manifest: {pose_manifest}."
+        + (f" See retained log: {log_path}." if log_path else "")
+    )
+    raise PreprocessingStageError(msg, prep)
 
 
 def infer_fall(args: argparse.Namespace, manifest: Path, data_root: Optional[str | Path], out_dir: Path, dry_run: bool) -> Dict[str, Any]:
@@ -1867,6 +1941,13 @@ def compute_downstream_metrics(args: argparse.Namespace, row: MethodRow, prep: D
         )
     else:
         existing = downstream.get("metrics") if isinstance(downstream.get("metrics"), dict) else {}
+        # If this is a resumed result, the nested metrics dictionary may be
+        # absent even though the downstream script already wrote metrics.json.
+        if not existing and downstream.get("metrics_json") and Path(str(downstream.get("metrics_json"))).exists():
+            try:
+                existing = load_json(str(downstream.get("metrics_json")))
+            except Exception:
+                existing = {}
         if existing:
             metrics = dict(existing)
             metrics.setdefault("status", "ok")
@@ -1922,7 +2003,7 @@ def task_manifest_and_root(args: argparse.Namespace, task: str) -> Tuple[Path, O
     raise ValueError(f"Unknown task {task!r}")
 
 
-def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_dir: Path) -> Tuple[Path, Optional[str | Path], Dict[str, Any]]:
+def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_dir: Path, log_dir: Optional[Path] = None) -> Tuple[Path, Optional[str | Path], Dict[str, Any]]:
     """Return a manifest/data-root to feed into downstream inference.
 
     This function always evaluates the requested split only.  It first writes a
@@ -1965,8 +2046,28 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
         if manifest_has_nonempty_column(manifest_for_eval, "keypoints_path"):
             prep["preprocessing_status"] = "passthrough_existing_pose_manifest_test_split"
             return manifest_for_eval, data_root, prep
-        pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run)
+
+        # Optional speed-up: for the raw/no-transform fall app, a precomputed
+        # keypoints manifest is equivalent to running the downstream pose
+        # extractor over the original videos, but avoids recomputing YOLO-pose.
+        precomputed_pose_manifest = getattr(args, "fall_precomputed_pose_manifest", None)
+        if precomputed_pose_manifest and Path(str(precomputed_pose_manifest)).exists():
+            pose_filtered_manifest = work_dir / "precomputed_pose_manifest_eval_split.csv"
+            pose_filter_info = filter_manifest_rows(
+                precomputed_pose_manifest,
+                pose_filtered_manifest,
+                split=args.split,
+                max_samples=args.max_samples,
+            )
+            if manifest_has_nonempty_column(pose_filtered_manifest, "keypoints_path"):
+                prep["preprocessing_status"] = "passthrough_precomputed_pose_manifest_test_split"
+                prep["source_pose_manifest"] = str(precomputed_pose_manifest)
+                prep["source_pose_manifest_filter"] = pose_filter_info
+                return pose_filtered_manifest, None, prep
+
+        pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run, log_dir=log_dir)
         prep.update(pose_info)
+        _ensure_fall_pose_manifest_ready(args, pose_manifest, pose_info, prep, "raw_media_downstream_yolo_pose_failed")
         prep["preprocessing_status"] = "raw_media_then_downstream_yolo_pose_test_split"
         return pose_manifest, None, prep
 
@@ -2000,10 +2101,11 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
                     dry_run=args.dry_run,
                 )
                 prep["pre_pose_preprocessing"] = pre_result
-                pose_manifest, pose_info = run_fall_extract_pose(args, pre_manifest, None, work_dir, args.dry_run)
+                pose_manifest, pose_info = run_fall_extract_pose(args, pre_manifest, None, work_dir, args.dry_run, log_dir=log_dir)
             else:
-                pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run)
+                pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run, log_dir=log_dir)
             prep.update(pose_info)
+            _ensure_fall_pose_manifest_ready(args, pose_manifest, pose_info, prep, "pose_extraction_failed_before_fall_inference")
             prep["preprocessing_status"] = "pose_extracted_with_downstream_yolo_pose_test_split"
             return pose_manifest, None, prep
 
@@ -2042,8 +2144,9 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
             dry_run=args.dry_run,
         )
         prep.update(transformed)
-        pose_manifest, pose_info = run_fall_extract_pose(args, media_manifest, None, work_dir, args.dry_run)
+        pose_manifest, pose_info = run_fall_extract_pose(args, media_manifest, None, work_dir, args.dry_run, log_dir=log_dir)
         prep.update(pose_info)
+        _ensure_fall_pose_manifest_ready(args, pose_manifest, pose_info, prep, "media_preprocessed_downstream_pose_failed")
         prep["preprocessing_status"] = "media_preprocessed_then_downstream_pose_test_split"
         return pose_manifest, None, prep
 
@@ -2134,7 +2237,9 @@ def _evaluate_one_with_intermediate_workspace(
     """
     try:
         progress_write(f"[method] {row.scenario_id}/{row.method_id}: prepare/preprocess start task={row.task}; evaluator device request={args.device}; {compact_device_report(cuda_device_report())}")
-        manifest, data_root, prep = prepare_manifest_for_method(args, row, intermediate_dir)
+        manifest, data_root, prep = prepare_manifest_for_method(args, row, intermediate_dir, log_dir=work_dir)
+        if not getattr(args, "dry_run", False) and not Path(manifest).exists():
+            raise PreprocessingStageError(f"Prepared manifest does not exist before downstream inference: {manifest}", prep)
         progress_write(f"[method] {row.scenario_id}/{row.method_id}: downstream start manifest={manifest}")
         prep["intermediate_artifact_dir"] = str(intermediate_dir)
         prep["intermediate_artifacts_retained"] = bool(args.keep_intermediate_data)
@@ -2163,6 +2268,26 @@ def _evaluate_one_with_intermediate_workspace(
             "downstream": downstream,
             **flatten_metrics(downstream.get("metrics", {})),
         }
+    except PreprocessingStageError as exc:
+        prep = dict(getattr(exc, "prep", {}) or {})
+        prep.setdefault("intermediate_artifact_dir", str(intermediate_dir))
+        prep.setdefault("intermediate_artifacts_retained", bool(args.keep_intermediate_data))
+        prep.setdefault(
+            "intermediate_artifact_policy",
+            "retained_under_utility_work_dir" if args.keep_intermediate_data else "temporary_deleted_after_downstream_inference",
+        )
+        result = {
+            **base,
+            "status": "error",
+            "elapsed_ms": now_ms() - started,
+            "error": repr(exc),
+            "traceback": traceback.format_exc(),
+            "intermediate_artifacts_retained": bool(args.keep_intermediate_data),
+            "intermediate_artifact_policy": prep["intermediate_artifact_policy"],
+            "preprocessing": prep,
+            "downstream": {"status": "skipped", "reason": "preprocessing_failed_before_downstream"},
+        }
+        write_text(result["traceback"], work_dir / "traceback.txt")
     except Exception as exc:
         result = {
             **base,
@@ -2181,9 +2306,99 @@ def _evaluate_one_with_intermediate_workspace(
     return result
 
 
-def evaluate_one(args: argparse.Namespace, row: MethodRow) -> Dict[str, Any]:
+def method_work_dir(args: argparse.Namespace, row: MethodRow) -> Path:
     method_slug = row.method_id.replace(":", "__").replace("/", "_")
-    work_dir = Path(args.out_dir) / row.scenario_id / method_slug
+    return Path(args.out_dir) / row.scenario_id / method_slug
+
+
+def downstream_output_exists(result: Dict[str, Any]) -> bool:
+    downstream = result.get("downstream") or {}
+    output_csv = downstream.get("output_csv")
+    if output_csv:
+        return Path(str(output_csv)).exists()
+    # Some error/no-output cases have no CSV.  Treat them as incomplete for
+    # resume purposes so a later run can retry after configs are fixed.
+    return False
+
+
+def result_has_ok_metrics(result: Dict[str, Any]) -> bool:
+    downstream = result.get("downstream") or {}
+    metrics = downstream.get("metrics") if isinstance(downstream.get("metrics"), dict) else {}
+    if metrics.get("status") == "ok":
+        return True
+    if result.get("metric_status") == "ok":
+        return True
+    metrics_json = downstream.get("metrics_json")
+    if metrics_json and Path(str(metrics_json)).exists():
+        try:
+            loaded = load_json(metrics_json)
+            return isinstance(loaded, dict) and loaded.get("status", "ok") == "ok"
+        except Exception:
+            return False
+    return False
+
+
+def load_existing_completed_result(args: argparse.Namespace, row: MethodRow, cache_key: str, cache_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Load a previous ok utility_result.json instead of rerunning it.
+
+    The default evaluator behavior is resume-friendly: if the per-method result
+    exists, downstream completed successfully, and the prediction CSV is still on
+    disk, we reuse it.  Metrics are backfilled or recomputed when missing, so
+    older visitor-only runs can be upgraded without rerunning YOLO.
+    """
+    if getattr(args, "rerun_existing", False):
+        return None
+    work_dir = method_work_dir(args, row)
+    result_path = work_dir / "utility_result.json"
+    if not result_path.exists():
+        return None
+    try:
+        result = load_json(result_path)
+    except Exception as exc:
+        progress_write(f"[resume] ignoring unreadable existing result {result_path}: {exc!r}")
+        return None
+
+    if result.get("status") != "ok" or (result.get("downstream") or {}).get("status") != "ok":
+        progress_write(f"[resume] existing result is not ok; rerunning {row.scenario_id}/{row.method_id}")
+        return None
+    if not downstream_output_exists(result):
+        progress_write(f"[resume] existing result has no prediction CSV on disk; rerunning {row.scenario_id}/{row.method_id}")
+        return None
+
+    # Make sure the resumed row identity matches the requested row.  This avoids
+    # accidentally reusing a stale file after renaming methods or changing out_dir.
+    if str(result.get("scenario_id")) != str(row.scenario_id) or str(result.get("method_id")) != str(row.method_id):
+        progress_write(f"[resume] existing result identity mismatch in {result_path}; rerunning")
+        return None
+
+    downstream = result.get("downstream") or {}
+    metrics_missing = not result_has_ok_metrics(result)
+    if metrics_missing or getattr(args, "recompute_existing_metrics", False):
+        progress_write(f"[resume] backfilling metrics for existing result {row.scenario_id}/{row.method_id}")
+        prep = result.get("preprocessing") if isinstance(result.get("preprocessing"), dict) else {}
+        try:
+            compute_downstream_metrics(args, row, prep, downstream, work_dir)
+            # Remove stale flattened metric fields before re-flattening.
+            for k in list(result.keys()):
+                if str(k).startswith("metric_"):
+                    del result[k]
+            result["downstream"] = downstream
+            result.update(flatten_metrics(downstream.get("metrics", {})))
+        except Exception as exc:
+            progress_write(f"[resume] metric backfill failed for {row.scenario_id}/{row.method_id}: {exc!r}")
+
+    result["resume_status"] = "reused_existing_result"
+    result["cache_status"] = "existing_result"
+    result["cache_key"] = cache_key
+    result["pipeline_fingerprint"] = cache_info.get("pipeline_fingerprint")
+    result.setdefault("utility_work_dir", str(work_dir))
+    write_json(result, result_path)
+    return result
+
+
+def evaluate_one(args: argparse.Namespace, row: MethodRow) -> Dict[str, Any]:
+    work_dir = method_work_dir(args, row)
+    method_slug = row.method_id.replace(":", "__").replace("/", "_")
     work_dir.mkdir(parents=True, exist_ok=True)
     started = now_ms()
     base: Dict[str, Any] = {
@@ -2284,11 +2499,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "only the first row is preprocessed/inferred and later rows are recorded as cache hits."
         ),
     )
+    p.add_argument("--rerun-existing", action="store_true", help="Do not resume/reuse existing per-method utility_result.json files; rerun preprocessing and downstream inference.")
+    p.add_argument("--recompute-existing-metrics", action="store_true", help="When resuming existing results, recompute metrics from prediction CSVs even if metrics already exist.")
     p.add_argument("--fail-fast", action="store_true")
     p.add_argument("--keep-intermediate-data", action="store_true", help="Retain transformed media/keypoint/audio artifacts. Default is to use a temporary directory and delete them after each downstream run.")
     p.add_argument("--intermediate-root", default=None, help="Optional parent directory for temporary intermediate artifacts. Useful if /tmp is small; artifacts are still deleted unless --keep-intermediate-data is set.")
     p.add_argument("--no-auto-task-config", action="store_true", help="Disable conventional default module/path discovery.")
     p.add_argument("--strict-task-config", action="store_true", help="Error if any requested or discovered task is missing manifest/checkpoint/inference configuration. By default auto mode skips unconfigured tasks.")
+    p.add_argument("--yes", "-y", action="store_true", help="Skip the interactive preflight confirmation prompt. Useful for scripts/cluster jobs.")
+    p.add_argument("--no-preflight-confirm", action="store_true", help="Print the task-configuration preflight report but do not wait for Enter.")
+    p.add_argument("--no-preflight-report", action="store_true", help="Do not print the task-configuration preflight report.")
 
     # General inference resource knobs.
     p.add_argument(
@@ -2318,6 +2538,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # LE2I fall.
     p.add_argument("--fall-manifest", default=None)
+    p.add_argument("--fall-precomputed-pose-manifest", default=None, help="Optional LE2I manifest with keypoints_path; used to avoid rerunning YOLO-pose for raw/no-transform fall baselines.")
     p.add_argument("--fall-data-root", default=None)
     p.add_argument("--fall-extract-pose-module", default=None, help="Default auto: baselines.task.le2i_fall.extract_pose")
     p.add_argument("--fall-extract-pose-script", default=None)
@@ -2643,6 +2864,198 @@ def filter_rows(args: argparse.Namespace, rows: List[MethodRow]) -> List[MethodR
         out.append(r)
     return out
 
+
+def _preflight_path_exists(args: argparse.Namespace, value: Optional[Any]) -> bool:
+    if value is None or str(value).strip() == "":
+        return False
+    p = Path(str(value))
+    if p.is_absolute():
+        return p.exists()
+    return p.exists() or (Path(args.project_root) / p).exists()
+
+
+def _preflight_module_status(module: Optional[str], script: Optional[str | Path]) -> str:
+    if script:
+        return "script:ok" if Path(str(script)).exists() else "script:MISSING"
+    if module:
+        return "module:ok" if _module_is_importable(str(module)) else "module:NOT_IMPORTABLE"
+    return "MISSING"
+
+
+def _preflight_asset(args: argparse.Namespace, label: str, attr: str, required: bool = True) -> Dict[str, Any]:
+    value = getattr(args, attr, None)
+    exists = _preflight_path_exists(args, value)
+    return {
+        "label": label,
+        "attr": attr,
+        "value": str(value) if value not in (None, "") else "",
+        "exists": bool(exists),
+        "required": bool(required),
+        "status": "ok" if exists else ("missing" if required else "optional_missing"),
+    }
+
+
+def _preflight_python_import_status(args: argparse.Namespace, module_name: str) -> str:
+    """Check an optional runtime dependency in the same Python env used for downstream commands."""
+    try:
+        proc = subprocess.run(
+            [str(args.python), "-c", f"import {module_name}"],
+            cwd=str(args.project_root) if getattr(args, "project_root", None) else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+            env=make_subprocess_env(getattr(args, "project_root", None)),
+        )
+        if proc.returncode == 0:
+            return "python-import:ok"
+        tail = (proc.stdout or "").strip().splitlines()[-1:]
+        return "python-import:MISSING" + (f" ({tail[0][:160]})" if tail else "")
+    except Exception as exc:
+        return f"python-import:UNKNOWN ({exc!r})"
+
+
+def build_preflight_report(args: argparse.Namespace, rows: Sequence[MethodRow], selected: Sequence[MethodRow], task_config: Dict[str, Dict[str, Any]], cache_plan: Dict[str, Any]) -> Dict[str, Any]:
+    tasks_present = sorted({r.task for r in rows if r.task in TASK_TO_SHORT})
+    selected_tasks = sorted({r.task for r in selected if r.task in TASK_TO_SHORT})
+    selected_rows_by_task = {t: sum(1 for r in selected if r.task == t) for t in tasks_present}
+    discovered_rows_by_task = {t: sum(1 for r in rows if r.task == t) for t in tasks_present}
+
+    task_assets: Dict[str, List[Dict[str, Any]]] = {
+        "visitor_presence_detection": [
+            _preflight_asset(args, "ChokePoint manifest", "chokepoint_manifest", True),
+            _preflight_asset(args, "ChokePoint data root", "chokepoint_data_root", False),
+            _preflight_asset(args, "YOLO detector model", "chokepoint_model", False),
+        ],
+        "fall_detection": [
+            _preflight_asset(args, "LE2I raw manifest", "fall_manifest", True),
+            _preflight_asset(args, "LE2I precomputed pose manifest", "fall_precomputed_pose_manifest", False),
+            _preflight_asset(args, "LE2I data root", "fall_data_root", False),
+            _preflight_asset(args, "LE2I fall checkpoint", "fall_checkpoint", True),
+            _preflight_asset(args, "LE2I label map", "fall_label_map", True),
+            _preflight_asset(args, "YOLO pose model", "fall_pose_model", False),
+        ],
+        "domestic_sound_monitoring": [
+            _preflight_asset(args, "CHiME-Home manifest", "home_audio_manifest", True),
+            _preflight_asset(args, "CHiME-Home checkpoint", "home_audio_checkpoint", True),
+        ],
+        "adl_recognition": [
+            _preflight_asset(args, "YouHome manifest", "youhome_manifest", True),
+            _preflight_asset(args, "YouHome data root", "youhome_data_root", False),
+            _preflight_asset(args, "YouHome checkpoint", "youhome_checkpoint", True),
+            _preflight_asset(args, "YouHome label map", "youhome_label_map", True),
+        ],
+    }
+
+    task_modules = {
+        "visitor_presence_detection": {
+            "infer": _preflight_module_status(getattr(args, "chokepoint_infer_module", None), getattr(args, "chokepoint_infer_script", None)),
+        },
+        "fall_detection": {
+            "extract_pose": _preflight_module_status(getattr(args, "fall_extract_pose_module", None), getattr(args, "fall_extract_pose_script", None)),
+            "infer": _preflight_module_status(getattr(args, "fall_infer_module", None), getattr(args, "fall_infer_script", None)),
+        },
+        "domestic_sound_monitoring": {
+            "infer": _preflight_module_status(getattr(args, "home_audio_infer_module", None), getattr(args, "home_audio_infer_script", None)),
+        },
+        "adl_recognition": {
+            "infer": _preflight_module_status(getattr(args, "youhome_infer_module", None), getattr(args, "youhome_infer_script", None)),
+        },
+    }
+
+    task_dependencies = {
+        "visitor_presence_detection": {"ultralytics": _preflight_python_import_status(args, "ultralytics")},
+        "fall_detection": {"ultralytics": _preflight_python_import_status(args, "ultralytics"), "torch": _preflight_python_import_status(args, "torch")},
+        "domestic_sound_monitoring": {"torchaudio": _preflight_python_import_status(args, "torchaudio"), "torch": _preflight_python_import_status(args, "torch")},
+        "adl_recognition": {"torchaudio": _preflight_python_import_status(args, "torchaudio"), "torch": _preflight_python_import_status(args, "torch")},
+    }
+
+    report_tasks: Dict[str, Any] = {}
+    for task in tasks_present:
+        config_info = task_config.get(task, {"configured": False, "errors": ["not present in task_config"]})
+        required_missing_assets = [a for a in task_assets.get(task, []) if a.get("required") and not a.get("exists")]
+        module_bad = [name for name, status in task_modules.get(task, {}).items() if str(status).endswith("NOT_IMPORTABLE") or status == "MISSING"]
+        deps = task_dependencies.get(task, {})
+        dependency_bad = [name for name, status in deps.items() if "MISSING" in str(status)]
+        fully_ready = bool(config_info.get("configured")) and not required_missing_assets and not module_bad and not dependency_bad
+        report_tasks[task] = {
+            "generated_rows": discovered_rows_by_task.get(task, 0),
+            "selected_rows": selected_rows_by_task.get(task, 0),
+            "selected_for_this_run": task in selected_tasks,
+            "configured_by_evaluator": bool(config_info.get("configured")),
+            "fully_ready": fully_ready,
+            "config_errors": list(config_info.get("errors") or []),
+            "modules": task_modules.get(task, {}),
+            "dependencies": deps,
+            "assets": task_assets.get(task, []),
+        }
+
+    return {
+        "requested_tasks": args.tasks,
+        "tasks_present_in_pipeline_summary": tasks_present,
+        "selected_tasks": selected_tasks,
+        "total_discovered_rows": len(rows),
+        "selected_rows": len(selected),
+        "unique_task_pipeline_runs": cache_plan.get("unique_task_pipeline_runs"),
+        "duplicate_rows_reused_from_cache": cache_plan.get("duplicate_rows_reused_from_cache"),
+        "tasks": report_tasks,
+        "all_present_tasks_fully_ready": all(report_tasks[t].get("fully_ready") for t in tasks_present),
+    }
+
+
+def print_preflight_report(report: Dict[str, Any]) -> None:
+    print("\n=== Utility evaluation preflight ===", flush=True)
+    print(f"Requested tasks: {report.get('requested_tasks')}", flush=True)
+    print("Tasks present in pipeline summary: " + ", ".join(report.get("tasks_present_in_pipeline_summary") or []), flush=True)
+    print("Selected tasks for this run: " + (", ".join(report.get("selected_tasks") or []) or "<none>"), flush=True)
+    print(
+        f"Rows: discovered={report.get('total_discovered_rows')} selected={report.get('selected_rows')} "
+        f"unique_task_pipeline_runs={report.get('unique_task_pipeline_runs')} "
+        f"cache_duplicates={report.get('duplicate_rows_reused_from_cache')}",
+        flush=True,
+    )
+    for task, info in (report.get("tasks") or {}).items():
+        state = "READY" if info.get("fully_ready") else "NOT READY"
+        selected = "selected" if info.get("selected_for_this_run") else "not selected/skipped"
+        print(f"\n[{state}] {task} ({selected}) generated_rows={info.get('generated_rows')} selected_rows={info.get('selected_rows')}", flush=True)
+        if info.get("config_errors"):
+            for err in info.get("config_errors") or []:
+                print(f"  config error: {err}", flush=True)
+        modules = info.get("modules") or {}
+        if modules:
+            for name, status in modules.items():
+                print(f"  module {name}: {status}", flush=True)
+        dependencies = info.get("dependencies") or {}
+        if dependencies:
+            for name, status in dependencies.items():
+                print(f"  dependency {name}: {status}", flush=True)
+        for asset in info.get("assets") or []:
+            req = "required" if asset.get("required") else "optional"
+            exists = "ok" if asset.get("exists") else "missing"
+            value = asset.get("value") or "<unset>"
+            print(f"  {req:8s} {asset.get('label')}: {exists} :: {value}", flush=True)
+    if not report.get("all_present_tasks_fully_ready"):
+        print(
+            "\nWARNING: At least one task present in the pipeline summary is not fully ready. "
+            "In auto mode, unconfigured tasks are skipped unless --strict-task-config is set.",
+            flush=True,
+        )
+    print("====================================\n", flush=True)
+
+
+def maybe_confirm_preflight(args: argparse.Namespace, report: Dict[str, Any]) -> None:
+    if getattr(args, "no_preflight_report", False):
+        return
+    print_preflight_report(report)
+    if getattr(args, "yes", False) or getattr(args, "no_preflight_confirm", False):
+        return
+    try:
+        input("Press Enter to continue with this utility-evaluation plan, or Ctrl-C to abort... ")
+    except EOFError:
+        raise SystemExit(
+            "Preflight confirmation requires interactive stdin. Re-run with --yes or --no-preflight-confirm for noninteractive execution."
+        )
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     set_progress_enabled(not args.no_progress)
@@ -2680,6 +3093,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"ultralytics={device_summary['ultralytics_device']} torch={device_summary['torch_device']} "
         f"| {device_summary['cuda_summary']}"
     )
+    preflight_report = build_preflight_report(args, rows, selected, task_config, cache_plan)
+    maybe_confirm_preflight(args, preflight_report)
     write_json({
         "pipeline_root": str(pipeline_root),
         "out_dir": str(out_dir),
@@ -2688,6 +3103,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "requested_tasks": args.tasks,
         "selected_tasks": sorted({r.task for r in selected}),
         "task_config": task_config,
+        "preflight_report": preflight_report,
         "methods": sorted({r.method_id for r in selected}),
         "ablation_policy": ("explicit_methods" if requested_methods else args.ablation_policy),
         "default_meaningful_ablation_modes": DEFAULT_MEANINGFUL_ABLATION_MODES,
@@ -2714,6 +3130,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.keep_intermediate_data
             else "temporary_deleted_after_each_downstream_run"
         ),
+        "resume_existing_results": {
+            "enabled": not bool(getattr(args, "rerun_existing", False)),
+            "policy": "Reuse per-method utility_result.json when status/downstream are ok and prediction CSV still exists; backfill metrics if missing.",
+            "rerun_existing": bool(getattr(args, "rerun_existing", False)),
+            "recompute_existing_metrics": bool(getattr(args, "recompute_existing_metrics", False)),
+        },
         "task_pipeline_cache": {
             "enabled": cache_enabled,
             "policy": (
@@ -2775,15 +3197,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
             result = clone_cached_result_for_row(args, r, original, cache_key, cache_info)
         else:
-            result = evaluate_one(args, r)
-            result["cache_status"] = cache_status
-            result["cache_key"] = cache_key if cache_enabled else None
-            result["pipeline_fingerprint"] = pipeline_fp
+            existing = load_existing_completed_result(args, r, cache_key, cache_info)
+            if existing is not None:
+                progress_write(
+                    f"[resume] reused existing ok result for {r.scenario_id}/{r.method_id}; "
+                    f"use --rerun-existing to force recomputation"
+                )
+                result = existing
+            else:
+                result = evaluate_one(args, r)
+                result["cache_status"] = cache_status
+                result["cache_key"] = cache_key if cache_enabled else None
+                result["pipeline_fingerprint"] = pipeline_fp
             if cache_enabled:
                 task_pipeline_cache[cache_key] = result
                 task_pipeline_cache_info[cache_key] = cache_info
             # evaluate_one writes before cache fields are attached; update the
-            # per-method result file so cache diagnostics are visible there too.
+            # per-method result file so cache/resume diagnostics are visible there too.
             if result.get("utility_work_dir"):
                 write_json(result, Path(str(result["utility_work_dir"])) / "utility_result.json")
         results.append(result)

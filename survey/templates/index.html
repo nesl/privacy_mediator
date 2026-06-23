@@ -10,6 +10,12 @@
     .changed-field {
       animation: changed-field-fade 2.8s ease-out;
     }
+    .scenario-var {
+      font-weight: 700;
+      background: rgba(255, 214, 102, 0.32);
+      padding: 0 0.08rem;
+      border-radius: 0.15rem;
+    }
     .changed-pill {
       display: inline-block;
       margin-left: 0.5rem;
@@ -77,7 +83,7 @@
 
       <div class="rating-card">
         <h3>Appropriateness rating</h3>
-        <p class="muted">In your personal judgment, how appropriate is it for this system to share the listed data or output in this situation? Answer from the perspective of the person the data is about, or someone responsible for that person. Here, appropriate means the sharing seems acceptable and justified for this specific setting, person, recipient, purpose, handling condition, and type of data shared.</p>
+        <p class="muted">In your personal judgment, how appropriate is it for this sensing system to share the listed data or output in this situation? Answer from the perspective of the person the data is about, or someone responsible for that person. Here, appropriate means the sharing seems acceptable and justified for this specific setting, person, recipient, purpose, handling condition, and type of data shared.</p>
         <div id="rating-options" class="rating-options">
           <label><input type="radio" name="rating" value="1"> 1<br><span>Completely inappropriate</span></label>
           <label><input type="radio" name="rating" value="2"> 2<br><span>Somewhat inappropriate</span></label>
@@ -102,7 +108,7 @@
 
       <div class="form-row">
         <label for="free-text">Optional note</label>
-        <textarea id="free-text" rows="3" placeholder="Provide some insight on your reasoning on this scenario"></textarea>
+        <textarea id="free-text" rows="3" placeholder="Optional: explain your reasoning for this scenario"></textarea>
       </div>
 
       <div id="submit-error" class="error hidden"></div>

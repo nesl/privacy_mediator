@@ -6,10 +6,10 @@ This patch adds an optional, disabled-by-default flag to `survey/server.py`:
 python survey/server.py \
   --k 25 \
   --pipeline-output-dir runs/context_pipeline_generation \
-  --write-question-preview-json outputs/question_preview.json
+  --write-question-preview-json survey/question_preview.json
 ```
 
-The server writes `outputs/question_preview.json` at startup before serving the web UI. The preview uses the same assignment and materialization functions as the live survey, but it does **not** create a participant session or save responses.
+The server writes `question_preview.json` at startup before serving the web UI. The preview uses the same assignment and materialization functions as the live survey, but it does **not** create a participant session or save responses.
 
 Optional deterministic seeds for the preview assignment:
 
