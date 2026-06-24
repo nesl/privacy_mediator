@@ -155,6 +155,41 @@ def first_present(*vals: Any) -> Optional[str]:
     return None
 
 
+def _payload_first(payload: Dict[str, Any], *keys: str) -> str:
+    """Return the first non-empty string from equivalent payload keys."""
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def extract_prolific_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Canonicalize Prolific URL parameter metadata from the start payload.
+
+    Prolific appends PROLIFIC_PID, STUDY_ID, and SESSION_ID to external survey
+    links. The browser copies those into the /api/start request.  Store both
+    canonical lowercase names and the raw query string/param object so exports
+    can be reconciled with Prolific later.
+    """
+    prolific_pid = _payload_first(payload, "prolific_pid", "PROLIFIC_PID", "participant_code")
+    prolific_study_id = _payload_first(payload, "prolific_study_id", "STUDY_ID", "study_id")
+    prolific_session_id = _payload_first(payload, "prolific_session_id", "SESSION_ID", "submission_id")
+    raw_params = payload.get("prolific_url_params")
+    if not isinstance(raw_params, dict):
+        raw_params = {}
+    return {
+        "prolific_pid": prolific_pid,
+        "prolific_study_id": prolific_study_id,
+        "prolific_session_id": prolific_session_id,
+        "prolific_url_query": _payload_first(payload, "prolific_url_query", "url_query"),
+        "prolific_url_params": raw_params,
+    }
+
+
 def get_scenario_id(flow: Dict[str, Any], ordinal: int = 0) -> str:
     return str(flow.get("flow_id") or flow.get("scenario_id") or f"S{ordinal:03d}")
 
@@ -1003,6 +1038,10 @@ def init_db(db_path: Path) -> None:
         ensure_column(conn, "sessions", "total_elapsed_ms", "INTEGER")
         ensure_column(conn, "sessions", "total_active_elapsed_ms", "INTEGER")
         ensure_column(conn, "sessions", "answered_count", "INTEGER")
+        ensure_column(conn, "sessions", "prolific_pid", "TEXT")
+        ensure_column(conn, "sessions", "prolific_study_id", "TEXT")
+        ensure_column(conn, "sessions", "prolific_session_id", "TEXT")
+        ensure_column(conn, "sessions", "prolific_url_params_json", "TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS responses (
                 session_id TEXT NOT NULL,
@@ -1039,6 +1078,10 @@ def init_db(db_path: Path) -> None:
         ensure_column(conn, "responses", "final_output_type", "TEXT")
         ensure_column(conn, "responses", "final_output_schema", "TEXT")
         ensure_column(conn, "responses", "information_types_json", "TEXT")
+        ensure_column(conn, "responses", "prolific_pid", "TEXT")
+        ensure_column(conn, "responses", "prolific_study_id", "TEXT")
+        ensure_column(conn, "responses", "prolific_session_id", "TEXT")
+        ensure_column(conn, "responses", "prolific_url_params_json", "TEXT")
         ensure_column(conn, "responses", "attention_check_field", "TEXT")
         ensure_column(conn, "responses", "attention_check_prompt", "TEXT")
         ensure_column(conn, "responses", "attention_check_expected", "TEXT")
@@ -1054,15 +1097,26 @@ def init_db(db_path: Path) -> None:
 
 def create_session(db_path: Path, session_id: str, participant_id: str, assignment: List[Dict[str, Any]], metadata: Dict[str, Any]) -> None:
     created = now_ms()
+    prolific = extract_prolific_metadata(metadata)
+    # Preserve canonical Prolific fields inside metadata_json as well as explicit
+    # database columns, so existing exports and direct SQL inspection both work.
+    metadata = dict(metadata)
+    metadata.update(prolific)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO sessions(
                 session_id, participant_id, created_at_ms, assignment_json, metadata_json,
-                last_activity_at_ms, total_elapsed_ms, total_active_elapsed_ms, answered_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                last_activity_at_ms, total_elapsed_ms, total_active_elapsed_ms, answered_count,
+                prolific_pid, prolific_study_id, prolific_session_id, prolific_url_params_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (session_id, participant_id, created, json.dumps(assignment), json.dumps(metadata), created, 0, 0, 0),
+            (
+                session_id, participant_id, created, json.dumps(assignment), json.dumps(metadata),
+                created, 0, 0, 0,
+                prolific.get("prolific_pid"), prolific.get("prolific_study_id"),
+                prolific.get("prolific_session_id"), json.dumps(prolific.get("prolific_url_params") or {}, sort_keys=True),
+            ),
         )
         conn.commit()
 
@@ -1142,6 +1196,15 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
         if isinstance(d, dict) and d.get("method_kind") == "baseline" and d.get("method_id")
     ]
     with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sess_row = conn.execute(
+            "SELECT prolific_pid, prolific_study_id, prolific_session_id, prolific_url_params_json FROM sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        prolific_pid = sess_row["prolific_pid"] if sess_row else None
+        prolific_study_id = sess_row["prolific_study_id"] if sess_row else None
+        prolific_session_id = sess_row["prolific_session_id"] if sess_row else None
+        prolific_url_params_json = sess_row["prolific_url_params_json"] if sess_row else None
         conn.execute("""
             INSERT OR REPLACE INTO responses(
                 session_id, participant_id, item_index, flow_id, method_id, task,
@@ -1152,11 +1215,12 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
                 ablation_modes_json, baseline_method_ids_json,
                 output_variant_label, output_variant_description, variant_privacy_class, final_output_type,
                 final_output_schema, information_types_json,
+                prolific_pid, prolific_study_id, prolific_session_id, prolific_url_params_json,
                 attention_check_field, attention_check_prompt, attention_check_expected,
                 attention_check_answer, attention_check_correct,
                 comprehension_check_field, comprehension_check_prompt, comprehension_check_expected,
                 comprehension_check_answer, comprehension_check_correct
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             participant_id,
@@ -1188,6 +1252,10 @@ def save_response(db_path: Path, session_id: str, participant_id: str, index: in
             cap_type(final_cap),
             cap_schema(final_cap),
             json.dumps(output.get("information_types") or {}, sort_keys=True),
+            prolific_pid,
+            prolific_study_id,
+            prolific_session_id,
+            prolific_url_params_json,
             attention.get("field_label"),
             attention.get("question"),
             attention_expected,
@@ -2818,6 +2886,9 @@ def participant_counts(db_path: Path) -> List[Dict[str, Any]]:
         completed = bool(assigned_count is not None and answered >= assigned_count)
         out.append({
             "participant_id": srow.get("participant_id"),
+            "prolific_pid": srow.get("prolific_pid"),
+            "prolific_study_id": srow.get("prolific_study_id"),
+            "prolific_session_id": srow.get("prolific_session_id"),
             "session_id": srow.get("session_id"),
             "answered_count": answered,
             "assigned_count": assigned_count,
@@ -3098,18 +3169,33 @@ def make_handler(state: SurveyState):
             path = urlparse(self.path).path
             if path == "/api/start":
                 payload = read_json_body(self)
-                participant_code = str(payload.get("participant_code") or "").strip()
+                prolific = extract_prolific_metadata(payload)
+                participant_code = str(payload.get("participant_code") or prolific.get("prolific_pid") or "").strip()
+                # In Prolific, PROLIFIC_PID is the participant identifier.  Keep a
+                # manual fallback for local testing or preview links opened outside
+                # Prolific.
+                if prolific.get("prolific_pid"):
+                    participant_code = str(prolific["prolific_pid"]).strip()
                 if not participant_code:
-                    return json_response(self, {"error": "participant code/number is required"}, 400)
+                    return json_response(self, {"error": "Prolific ID is required"}, 400)
                 k = max(1, min(int(state.config.k), len(state.items)))
                 participant_id = participant_code
                 session_id = uuid.uuid4().hex
                 assignment = assign_items(state.items, k, state.config.seed, participant_id, session_id, state.config.assignment_mode, state.config.db_path, state.config.max_per_scenario_group)
                 metadata = dict(payload)
+                metadata.update(prolific)
                 metadata["requested_k_ignored"] = payload.get("k") if "k" in payload else None
                 metadata["assigned_k"] = len(assignment)
                 create_session(state.config.db_path, session_id, participant_id, assignment, metadata)
-                return json_response(self, {"session_id": session_id, "participant_id": participant_id, "k": len(assignment), "first_index": 0})
+                return json_response(self, {
+                    "session_id": session_id,
+                    "participant_id": participant_id,
+                    "prolific_pid": prolific.get("prolific_pid"),
+                    "prolific_study_id": prolific.get("prolific_study_id"),
+                    "prolific_session_id": prolific.get("prolific_session_id"),
+                    "k": len(assignment),
+                    "first_index": 0,
+                })
             if path.startswith("/api/session/") and path.endswith("/submit"):
                 parts = path.strip("/").split("/")
                 if len(parts) != 4:

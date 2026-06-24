@@ -142,8 +142,12 @@
       </section>
 
       <div class="form-row">
-        <label for="participant-code">Participant code/number</label>
-        <input id="participant-code" type="text" placeholder="Enter your participant code/number" required />
+        <label for="participant-code">Prolific ID</label>
+        <input id="participant-code" type="text" placeholder="Prolific ID will be filled automatically when opened from Prolific" autocomplete="off" required />
+        <input id="prolific-pid" type="hidden" />
+        <input id="prolific-study-id" type="hidden" />
+        <input id="prolific-session-id" type="hidden" />
+        <p id="prolific-id-note" class="muted small-note">If you opened this survey from Prolific, your Prolific ID should fill in automatically. If it does not, please paste your Prolific participant ID exactly as it appears on Prolific.</p>
       </div>
       <button id="start-btn" class="primary">Start survey</button>
       <div id="start-error" class="error hidden"></div>
@@ -205,6 +209,82 @@
       <p class="muted">Your responses have been saved on the survey server.</p>
     </section>
   </main>
+  <script>
+    (function () {
+      function prolificParamsFromUrl() {
+        const params = new URLSearchParams(window.location.search || "");
+        const allParams = {};
+        params.forEach((value, key) => { allParams[key] = value; });
+        return {
+          prolific_pid: params.get("PROLIFIC_PID") || params.get("prolific_pid") || "",
+          prolific_study_id: params.get("STUDY_ID") || params.get("study_id") || "",
+          prolific_session_id: params.get("SESSION_ID") || params.get("session_id") || "",
+          prolific_url_query: window.location.search || "",
+          prolific_url_params: allParams
+        };
+      }
+
+      const prolific = prolificParamsFromUrl();
+      window.prolificSurveyMetadata = prolific;
+
+      function fillProlificFields() {
+        const participantInput = document.getElementById("participant-code");
+        const pidInput = document.getElementById("prolific-pid");
+        const studyInput = document.getElementById("prolific-study-id");
+        const sessionInput = document.getElementById("prolific-session-id");
+        const note = document.getElementById("prolific-id-note");
+
+        if (pidInput) pidInput.value = prolific.prolific_pid;
+        if (studyInput) studyInput.value = prolific.prolific_study_id;
+        if (sessionInput) sessionInput.value = prolific.prolific_session_id;
+
+        if (participantInput && prolific.prolific_pid) {
+          participantInput.value = prolific.prolific_pid;
+          participantInput.readOnly = true;
+          participantInput.setAttribute("aria-readonly", "true");
+          participantInput.dataset.autofilledFromProlific = "true";
+          if (note) {
+            note.textContent = "Your Prolific ID was filled in automatically from the Prolific study link.";
+          }
+        }
+      }
+
+      // The existing app.js starts the session by POSTing to /api/start.  This
+      // wrapper appends Prolific URL parameters to that request without requiring
+      // changes to the rest of the front-end code.
+      const originalFetch = window.fetch;
+      window.fetch = function (input, init) {
+        try {
+          const url = (typeof input === "string") ? input : (input && input.url) || "";
+          const isStartRequest = url.endsWith("/api/start") || url === "/api/start";
+          if (isStartRequest && init && init.body) {
+            const body = JSON.parse(init.body);
+            body.prolific_pid = body.prolific_pid || prolific.prolific_pid;
+            body.PROLIFIC_PID = body.PROLIFIC_PID || prolific.prolific_pid;
+            body.prolific_study_id = body.prolific_study_id || prolific.prolific_study_id;
+            body.STUDY_ID = body.STUDY_ID || prolific.prolific_study_id;
+            body.prolific_session_id = body.prolific_session_id || prolific.prolific_session_id;
+            body.SESSION_ID = body.SESSION_ID || prolific.prolific_session_id;
+            body.prolific_url_query = body.prolific_url_query || prolific.prolific_url_query;
+            body.prolific_url_params = body.prolific_url_params || prolific.prolific_url_params;
+            if (!body.participant_code && prolific.prolific_pid) {
+              body.participant_code = prolific.prolific_pid;
+            }
+            init = Object.assign({}, init, { body: JSON.stringify(body) });
+          }
+        } catch (err) {
+          // If the request is not JSON or not the start request, leave it unchanged.
+        }
+        return originalFetch.call(this, input, init);
+      };
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", fillProlificFields);
+      } else {
+        fillProlificFields();
+      }
+    })();
+  </script>
   <script src="/static/app.js"></script>
 </body>
 </html>
