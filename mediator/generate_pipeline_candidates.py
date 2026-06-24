@@ -337,15 +337,35 @@ def cap_matches(up_cap: Dict[str, Any], in_cap: Dict[str, Any]) -> bool:
     return bool(cap_schema(up_cap) and cap_schema(up_cap) == cap_schema(in_cap))
 
 
-def goal_cap_matches(out_cap: Dict[str, Any], goal_cap: Dict[str, Any]) -> bool:
+def goal_cap_match_score(out_cap: Dict[str, Any], goal_cap: Dict[str, Any]) -> Optional[Tuple[int, str]]:
+    """Return a score for an accepted output cap match, or None.
+
+    Lower scores are better.  This is stricter than ordinary in-pipeline caps
+    compatibility because accepted_output_caps are the app-facing interface.
+    For example, audio/x-filtered may be loadable by an audio/x-raw consumer, but
+    if the request also declares an explicit audio/x-filtered accepted cap, the
+    filtered cap should be matched so its required CI terms are attached.
+    """
     goal_t = goal_cap.get("semantic_type") or goal_cap.get("media_type")
     out_t = cap_type(out_cap)
-    if goal_t and type_matches(out_t, goal_t):
-        return True
     goal_schema = goal_cap.get("schema")
-    if goal_schema and cap_schema(out_cap) == goal_schema:
-        return True
-    return False
+    out_schema = cap_schema(out_cap)
+
+    type_exact = bool(goal_t and out_t == goal_t)
+    schema_exact = bool(goal_schema and out_schema == goal_schema)
+    if type_exact and schema_exact:
+        return (0, "exact_type_and_schema")
+    if type_exact:
+        return (1, "exact_type")
+    if schema_exact:
+        return (2, "exact_schema")
+    if goal_t and type_matches(out_t, goal_t):
+        return (10, "compatible_type")
+    return None
+
+
+def goal_cap_matches(out_cap: Dict[str, Any], goal_cap: Dict[str, Any]) -> bool:
+    return goal_cap_match_score(out_cap, goal_cap) is not None
 
 
 def parse_or_terms(terms: Sequence[str]) -> List[List[str]]:
@@ -622,16 +642,39 @@ def allowed_source(v: OperatorVariant, request: Dict[str, Any]) -> bool:
     if allowed_content and content and content in allowed_content:
         return True
 
+    # Multimodal AV samples are source-level containers for synchronized image/audio
+    # payloads.  Their sensorPrimitive property is intentionally list-valued, so
+    # all source checks below must use a flattened set rather than scalar equality.
+    if (content == "av_content" or cap_type(cap) == "application/x-youhome-av-sample"):
+        # Do not treat generic input_data as permission to use a synchronized
+        # YouHome AV source.  Otherwise non-ADL requests such as fall detection
+        # can accidentally choose the high-disclosure YouHome AV container as
+        # their raw/no-mediation source.  AV sources are allowed only when the
+        # request explicitly asks for AV content or for both visual and audio
+        # modalities/content types.
+        if "audio_content" in forbidden_content or ({"image_content", "video_content"} & forbidden_content):
+            return False
+        if "av_content" in allowed_content:
+            return True
+        if {"image_content", "video_content", "audio_content"}.issubset(allowed_content):
+            return True
+        if ({"image_content", "video_content"} & allowed_content) and "audio_content" in allowed_content:
+            return True
+        if allowed_modality and {"visual", "audio"}.issubset(allowed_modality):
+            return True
+        return False
+
     # semantic sensor readings may correspond to input_data, motion, or environmental.
     if cap.get("semantic_type") == "application/x-sensor-reading":
         return ("input_data" in allowed_content) or bool(allowed_modality & {"motion", "environmental"})
 
-    # Some source caps may only have properties.
+    # Some source caps may only have properties.  sensorPrimitive may be either a
+    # scalar string or a list such as ["image_frame", "audio_waveform"].
     props = cap.get("properties", {}) or {}
-    prim = props.get("sensorPrimitive")
-    if prim == "audio_waveform" and "audio_content" in allowed_content:
+    prim_terms = set(flatten_terms(props.get("sensorPrimitive")))
+    if "audio_waveform" in prim_terms and "audio_content" in allowed_content:
         return True
-    if prim in {"image_frame", "video_stream"} and ({"image_content", "video_content"} & allowed_content):
+    if prim_terms & {"image_frame", "video_stream"} and ({"image_content", "video_content"} & allowed_content):
         return True
 
     return not allowed_content
@@ -648,18 +691,26 @@ def initial_state_from_source(v: OperatorVariant) -> State:
     init_by_mod = v.residual_effect.get("initial_state_by_modality", {}) if isinstance(v.residual_effect, dict) else {}
     if content and content in init_by_mod:
         residual.update({k: normalize_risk(vv) for k, vv in init_by_mod[content].items()})
-    elif prim == "decibel_level" and "noise_decibel_monitor" in init_by_mod:
-        residual.update({k: normalize_risk(vv) for k, vv in init_by_mod["noise_decibel_monitor"].items()})
-    elif prim == "audio_waveform" and "audio_content" in init_by_mod:
-        residual.update({k: normalize_risk(vv) for k, vv in init_by_mod["audio_content"].items()})
-    elif prim in {"image_frame", "video_stream"}:
-        key = "video_content" if prim == "video_stream" else "image_content"
-        if key in init_by_mod:
-            residual.update({k: normalize_risk(vv) for k, vv in init_by_mod[key].items()})
     else:
-        # Conservative defaults for unknown sensor readings.
-        residual["location"] = "low"
-        residual["aggregate_presence"] = "low"
+        prim_terms = set(flatten_terms(prim))
+        if "decibel_level" in prim_terms and "noise_decibel_monitor" in init_by_mod:
+            residual.update({k: normalize_risk(vv) for k, vv in init_by_mod["noise_decibel_monitor"].items()})
+        elif "audio_waveform" in prim_terms and "audio_content" in init_by_mod and not (prim_terms & {"image_frame", "video_stream"}):
+            residual.update({k: normalize_risk(vv) for k, vv in init_by_mod["audio_content"].items()})
+        elif prim_terms & {"image_frame", "video_stream"}:
+            key = "video_content" if "video_stream" in prim_terms else "image_content"
+            if key in init_by_mod:
+                residual.update({k: normalize_risk(vv) for k, vv in init_by_mod[key].items()})
+            # If this is a mixed AV source but no av_content initial state was provided,
+            # conservatively merge in audio risk too.
+            if "audio_waveform" in prim_terms and "audio_content" in init_by_mod:
+                for k, vv in init_by_mod["audio_content"].items():
+                    if k in residual:
+                        residual[k] = risk_max(residual.get(k, "none"), normalize_risk(vv))
+        else:
+            # Conservative defaults for unknown sensor readings.
+            residual["location"] = "low"
+            residual["aggregate_presence"] = "low"
 
     ci_terms = {
         "informationType.sensorPrimitive": set(),
@@ -667,23 +718,35 @@ def initial_state_from_source(v: OperatorVariant) -> State:
         "informationType.inferredInformationType": set(),
         "transmissionPrinciple": set(),
     }
-    if prim:
-        ci_terms["informationType.sensorPrimitive"].add(prim)
+    for prim_term in flatten_terms(prim):
+        if prim_term:
+            ci_terms["informationType.sensorPrimitive"].add(prim_term)
     if content == "video_content":
         ci_terms["informationType.sensorPrimitive"].add("video_stream")
     elif content == "image_content":
         ci_terms["informationType.sensorPrimitive"].add("image_frame")
     elif content == "audio_content":
         ci_terms["informationType.sensorPrimitive"].add("audio_waveform")
+    elif content == "av_content" or cap_type(cap) == "application/x-youhome-av-sample":
+        ci_terms["informationType.sensorPrimitive"].update({"image_frame", "audio_waveform"})
 
     for k, vals in v.ci_additions.items():
         ci_terms.setdefault(k, set()).update(vals)
+
+    utility_caps = set(v.utility_capabilities)
+    if content == "av_content" or cap_type(cap) == "application/x-youhome-av-sample":
+        utility_caps.update({
+            "adl_recognition",
+            "av_adl_input_compatibility",
+            "youhome_av_compatibility",
+            "format_preserving_av",
+        })
 
     return State(
         cap=cap,
         residual=residual,
         ci_terms=ci_terms,
-        utility_caps=set(v.utility_capabilities),
+        utility_caps=utility_caps,
         transforms=set(v.transform_effects),
         pipeline=[{
             "operator": v.raw_operator_id,
@@ -717,10 +780,86 @@ def apply_reduce_rule(current: str, rule: Any) -> str:
     return risk_decrement(current, 1)
 
 
+
+
+def _component_role(component: Dict[str, Any]) -> str:
+    role = str(component.get("role") or "").lower()
+    mt = str(component.get("media_type") or "")
+    schema = str(component.get("schema") or "")
+    if role:
+        return role
+    if mt.startswith(("image/", "video/")) or "video" in schema or "frame" in schema:
+        return "visual"
+    if mt.startswith("audio/") or "audio" in schema or "waveform" in schema:
+        return "audio"
+    return ""
+
+
+def _component_from_cap(cap: Dict[str, Any], role: str) -> Optional[Dict[str, Any]]:
+    props = cap.get("properties", {}) or {}
+    for comp in props.get("components", []) or []:
+        if isinstance(comp, dict) and _component_role(comp) == role:
+            return copy.deepcopy(comp)
+    return None
+
+
+def _replace_component(components: List[Dict[str, Any]], replacement: Dict[str, Any]) -> List[Dict[str, Any]]:
+    role = _component_role(replacement)
+    out: List[Dict[str, Any]] = []
+    replaced = False
+    for comp in components:
+        if isinstance(comp, dict) and _component_role(comp) == role:
+            out.append(copy.deepcopy(replacement))
+            replaced = True
+        else:
+            out.append(copy.deepcopy(comp))
+    if not replaced:
+        out.append(copy.deepcopy(replacement))
+    return out
+
+
+def preserve_youhome_av_component_state(upstream_cap: Dict[str, Any], op_output_cap: Dict[str, Any], op_id: str) -> Dict[str, Any]:
+    """Preserve component-level AV transformations across sequential AV ops.
+
+    Operator contracts have static output caps.  For component-wise YouHome AV
+    transforms, applying audio filtering after visual redaction should produce an
+    AV cap that records both the redacted visual component and the filtered audio
+    component, rather than replacing the whole component list with the static cap
+    from the last operator.
+    """
+    if cap_type(upstream_cap) != "application/x-youhome-av-sample" or cap_type(op_output_cap) != "application/x-youhome-av-sample":
+        return op_output_cap
+    if op_id not in {"op.av_visual_redact", "op.av_audio_speech_filter", "op.av_audio_silence", "op.av_video_blackout"}:
+        return op_output_cap
+
+    out = copy.deepcopy(upstream_cap)
+    out["semantic_type"] = "application/x-youhome-av-sample"
+    out["schema"] = "youhome_av_manifest_or_sample"
+    out_props = out.setdefault("properties", {})
+    down_props = op_output_cap.get("properties", {}) or {}
+    components = [copy.deepcopy(c) for c in out_props.get("components", []) or [] if isinstance(c, dict)]
+
+    if op_id in {"op.av_visual_redact", "op.av_video_blackout"}:
+        visual = _component_from_cap(op_output_cap, "visual")
+        if visual is not None:
+            components = _replace_component(components, visual)
+    if op_id in {"op.av_audio_speech_filter", "op.av_audio_silence"}:
+        audio = _component_from_cap(op_output_cap, "audio")
+        if audio is not None:
+            components = _replace_component(components, audio)
+
+    # Merge non-component flags from the operator output cap.
+    for k, v in down_props.items():
+        if k != "components":
+            out_props[k] = copy.deepcopy(v)
+    out_props["components"] = components
+    out_props["youhome_av_compatible"] = True
+    return out
+
 def apply_residual_effect(state: State, v: OperatorVariant) -> State:
     new = state.copy()
     new.depth += 1
-    new.cap = copy.deepcopy(v.output_cap)
+    new.cap = preserve_youhome_av_component_state(state.cap, copy.deepcopy(v.output_cap), v.raw_operator_id)
     upstream_type = cap_type(state.cap)
     upstream_props = state.cap.get("properties", {}) or {}
     # Defensive normalization for media-preserving transforms. If the upstream
@@ -732,8 +871,9 @@ def apply_residual_effect(state: State, v: OperatorVariant) -> State:
             new.cap["media_type"] = redacted_type
             new.cap["schema"] = "redacted_image_frame" if redacted_type.startswith("image/") else "redacted_video_stream"
             new.cap.setdefault("properties", {})["redacted"] = True
-    if upstream_type == "audio/x-filtered" and v.raw_operator_id in {"op.sample", "op.window", "op.trigger_gate"}:
+    if (v.raw_operator_id == "op.speech_content_removal" and cap_type(new.cap) == "audio/x-filtered") or (upstream_type == "audio/x-filtered" and v.raw_operator_id in {"op.sample", "op.window", "op.trigger_gate"}):
         new.cap["media_type"] = "audio/x-filtered"
+        new.cap["schema"] = "speech_removed_audio_waveform"
         new.cap.setdefault("properties", {})["speech_content_removed"] = True
     new.utility_caps.update(v.utility_capabilities)
     new.transforms.update(v.transform_effects)
@@ -903,11 +1043,203 @@ def state_signature(state: State) -> Tuple[Any, ...]:
     )
 
 
-def output_cap_matches_request(state: State, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    for g in request.get("utility_contract", {}).get("accepted_output_caps", []) or []:
-        if goal_cap_matches(state.cap, g):
-            return g
+def _lookup_metadata_value(metadata: Dict[str, Any], key: str) -> Any:
+    """Return a metadata value, supporting simple keys and dotted paths."""
+    if key in metadata:
+        return metadata.get(key)
+    cur: Any = metadata
+    for part in str(key).split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def request_checkpoint_metadata(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Collect runtime/checkpoint metadata used by conditional output caps.
+
+    Application requests can declare accepted_output_caps that are only valid for
+    particular model/checkpoint modes, e.g. an ADL audio-only cap that is valid
+    only when the YouHome checkpoint was trained with audio modality.  The
+    symbolic planner must not treat those conditional caps as eligible unless the
+    request metadata satisfies the condition.
+    """
+    meta: Dict[str, Any] = {}
+
+    # Prefer explicit metadata when the caller overlays it into the request.
+    for key in ["checkpoint_metadata", "runtime_metadata"]:
+        value = request.get(key)
+        if isinstance(value, dict):
+            nested = value.get("checkpoint_metadata")
+            if isinstance(nested, dict):
+                meta.update(nested)
+            else:
+                meta.update(value)
+
+    utility_contract = request.get("utility_contract", {}) or {}
+    for key in ["checkpoint_metadata", "runtime_metadata"]:
+        value = utility_contract.get(key)
+        if isinstance(value, dict):
+            nested = value.get("checkpoint_metadata")
+            if isinstance(nested, dict):
+                meta.update(nested)
+            else:
+                meta.update(value)
+
+    downstream = utility_contract.get("downstream_program", {}) or {}
+    if isinstance(downstream, dict):
+        nested = downstream.get("checkpoint_metadata")
+        if isinstance(nested, dict):
+            meta.update(nested)
+        # Backward-compatible shorthand used by the YouHome AV request.
+        if downstream.get("default_checkpoint_modality") and "modality" not in meta:
+            meta["modality"] = downstream.get("default_checkpoint_modality")
+
+    return meta
+
+
+def accepted_cap_conditions_satisfied(goal_cap: Dict[str, Any], request: Dict[str, Any]) -> bool:
+    """Return True only if a conditional accepted cap is eligible.
+
+    Example: the YouHome ADL request may list audio-only/video-only caps as
+    conditional alternatives, but the default AV checkpoint must not match those
+    caps unless the request/checkpoint metadata says modality=audio or
+    modality=video.
+    """
+    condition = goal_cap.get("conditional_on_checkpoint_metadata")
+    if not condition:
+        return True
+    if not isinstance(condition, dict):
+        return False
+
+    metadata = request_checkpoint_metadata(request)
+    for key, allowed_values in condition.items():
+        actual = _lookup_metadata_value(metadata, str(key))
+        if actual is None:
+            return False
+        allowed = {str(v).strip().lower() for v in as_list(allowed_values)}
+        actual_values = {str(v).strip().lower() for v in as_list(actual)}
+        if not (actual_values & allowed):
+            return False
+    return True
+
+
+# Accepted caps sometimes share the same app-facing media/schema interface but
+# differ in the privacy transformations they describe.  For example, the fixed
+# YouHome ADL app accepts an application/x-youhome-av-sample, and the request may
+# contain both a generic AV cap and a more specific redacted-visual +
+# speech-filtered AV cap with the same type/schema.  The matcher below therefore
+# prefers the most specific eligible cap whose required privacy terms have
+# actually been produced by the candidate.
+CONTRACT_ONLY_TRANSMISSION_PRINCIPLES: Set[str] = {
+    "purpose_limited",
+    "limited_retention",
+    "authorized_personnel_only",
+    "recipient_limited",
+    "access_controlled",
+}
+
+
+def _inferred_output_property(out_cap: Dict[str, Any], key: str, transforms: Optional[Sequence[str]] = None) -> Any:
+    """Infer important output booleans from cap properties, components, and transforms."""
+    props = out_cap.get("properties", {}) or {}
+    if key in props:
+        return props.get(key)
+    transform_set = {str(t) for t in (transforms or [])}
+    components = props.get("components") if isinstance(props.get("components"), list) else []
+    component_types = {str(c.get("media_type") or c.get("semantic_type") or "") for c in components if isinstance(c, dict)}
+    if key == "youhome_av_compatible":
+        return cap_type(out_cap) == "application/x-youhome-av-sample" or bool(props.get("av_synchronized"))
+    if key in {"visual_redacted", "redacted"}:
+        return bool(component_types & {"image/x-redacted", "video/x-redacted"} or transform_set & {"face_blurred", "identity_removed", "visible_text_removed", "screen_content_removed", "body_blurred"})
+    if key in {"speech_content_removed", "audio_filtered"}:
+        return bool(component_types & {"audio/x-filtered"} or cap_type(out_cap) == "audio/x-filtered" or transform_set & {"speech_content_removed", "speech_content_minimized"})
     return None
+
+
+def accepted_cap_properties_satisfied(out_cap: Dict[str, Any], goal_cap: Dict[str, Any], transforms: Optional[Sequence[str]] = None) -> bool:
+    """Require scalar accepted-cap properties to describe the actual output."""
+    goal_props = goal_cap.get("properties", {}) or {}
+    for key, expected in goal_props.items():
+        if isinstance(expected, (dict, list)):
+            continue
+        actual = _inferred_output_property(out_cap, str(key), transforms)
+        if isinstance(expected, bool):
+            if bool(actual) != expected:
+                return False
+        elif actual != expected:
+            return False
+    return True
+
+
+def accepted_cap_privacy_terms(goal_cap: Dict[str, Any]) -> Set[str]:
+    """Terms that make an accepted cap more specific than the bare interface.
+
+    Contract-only terms such as purpose_limited can be attached at the final
+    output boundary and should not be required to have been produced by an
+    operator before matching.  Transform/privacy terms such as
+    speech_content_removed and data_minimized should be present in the candidate
+    before it is labeled with the transformed-output cap.
+    """
+    terms: Set[str] = set()
+    for key in ["required_transformations", "requiredTransformations"]:
+        terms.update(str(t) for t in flatten_terms(goal_cap.get(key) or []))
+    for tp in flatten_terms(goal_cap.get("required_transmissionPrinciple") or []):
+        tp_s = str(tp)
+        if tp_s not in CONTRACT_ONLY_TRANSMISSION_PRINCIPLES:
+            terms.add(tp_s)
+    return terms
+
+
+def state_satisfies_accepted_cap_privacy_terms(state: State, goal_cap: Dict[str, Any]) -> bool:
+    required = accepted_cap_privacy_terms(goal_cap)
+    if not required:
+        return True
+    present = set(state.transforms) | set(state.ci_terms.get("transmissionPrinciple", set()))
+    return required.issubset(present)
+
+
+def output_cap_matches_request(state: State, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    matches: List[Tuple[int, int, int, int, Dict[str, Any]]] = []
+    for idx, g in enumerate(request.get("utility_contract", {}).get("accepted_output_caps", []) or []):
+        if not accepted_cap_conditions_satisfied(g, request):
+            continue
+        if not accepted_cap_properties_satisfied(state.cap, g, state.transforms):
+            continue
+        score = goal_cap_match_score(state.cap, g)
+        if score is None:
+            continue
+        privacy_terms = accepted_cap_privacy_terms(g)
+        # Do not label a raw/generic AV sample as the transformed-output cap.
+        # The transformed cap is eligible only after its required privacy terms
+        # were produced by actual operators in the candidate chain.
+        if privacy_terms and not state_satisfies_accepted_cap_privacy_terms(state, g):
+            continue
+        priority = int(g.get("priority", 999) or 999)
+        # Lower tuple is better.  For equal type/schema match quality, prefer the
+        # more specific cap so metadata says redacted+filtered AV rather than the
+        # generic AV sample when the candidate really performed those transforms.
+        matches.append((score[0], -len(privacy_terms), priority, idx, g))
+    if not matches:
+        return None
+    matches.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+    return matches[0][4]
+
+
+
+def accepted_cap_transform_constraints_satisfied(state: State, matched_cap: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """Check app-interface constraints tied to a matched accepted cap.
+
+    This is used for fixed-interface multimodal apps: a cap can accept an AV
+    sample while still forbidding degraded variants such as fully silent audio
+    or blacked-out video unless a separate app contract explicitly permits them.
+    """
+    failures: List[str] = []
+    forbidden = set(flatten_terms(matched_cap.get("forbidden_transformations") or []))
+    present = set(state.transforms) | set(state.ci_terms.get("transmissionPrinciple", set()))
+    for term in sorted(forbidden & present):
+        failures.append(f"matched cap {matched_cap.get('cap_id')} forbids transformation: {term}")
+    return (not failures, failures)
 
 
 def request_quality_status(request: Dict[str, Any]) -> str:
@@ -952,10 +1284,17 @@ def utility_capability_satisfied(state: State, request: Dict[str, Any]) -> bool:
             "audio_event_detection", "audio_safety_without_speech", "voice_privacy",
             "temporal_context", "provide_raw_stream", "rate_limit_stream",
         },
+        # Fixed-interface ADL requests are intentionally strict.  Audio-event
+        # detection, voice privacy, or raw single-modality streams may support
+        # activity recognition in the abstract, but they do not prove that the
+        # candidate is consumable by the default YouHome AV classifier.  The
+        # final cap must match an eligible accepted_output_cap, and ADL support
+        # should come from an explicit ADL/AV-compatible operator or source.
         "adl_recognition": {
-            "adl_recognition", "activity_detection", "activity_detection_support",
-            "temporal_context", "format_preserving_video", "audio_event_detection",
-            "voice_privacy", "provide_raw_stream", "rate_limit_stream",
+            "adl_recognition",
+            "av_adl_input_compatibility",
+            "youhome_av_compatibility",
+            "format_preserving_av",
         },
     }
     return bool(state.utility_caps & equivalents.get(requested, {requested}))
@@ -1076,6 +1415,21 @@ def add_matched_cap_required_terms(state: State, matched_cap: Dict[str, Any]) ->
     return new
 
 
+def normalize_final_output_cap_for_reporting(cap: Dict[str, Any], matched_cap: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a display/export-friendly final cap.
+
+    Some operator contracts intentionally advertise only a media type, relying on
+    the accepted output cap to name the downstream schema.  That is enough for
+    compatibility, but it leaves summaries/survey exports with blank schemas
+    such as audio/x-filtered + "".  Preserve the actual output type/properties
+    and fill in the matched schema when the pipeline output omitted it.
+    """
+    out = copy.deepcopy(cap)
+    if not out.get("schema") and matched_cap.get("schema"):
+        out["schema"] = matched_cap.get("schema")
+    return out
+
+
 def pipeline_to_record(
     state: State,
     request: Dict[str, Any],
@@ -1093,16 +1447,18 @@ def pipeline_to_record(
     else:
         ci_serialized["pipelineStage"] = ["output_to_application"]
 
+    final_cap = normalize_final_output_cap_for_reporting(state.cap, matched_cap)
+
     return {
         "pipeline_id": "pipe_" + stable_hash({
             "pipeline": state.pipeline,
-            "cap": state.cap,
+            "cap": final_cap,
             "residual": state.residual,
         }),
         "decision": "candidate_pipeline",
         "matched_output_cap": matched_cap.get("cap_id"),
         "matched_output_schema": matched_cap.get("schema"),
-        "final_output_cap": state.cap,
+        "final_output_cap": final_cap,
         "operators": state.pipeline + [{
             "operator": "op.route_publish",
             "variant": "Route / Publish(output_to_application)",
@@ -1159,10 +1515,14 @@ def enumerate_candidates(
         if matched and utility_capability_satisfied(state, request):
             final_state = maybe_add_ephemeral_drop_side_effect(state, request)
             final_state = add_matched_cap_required_terms(final_state, matched)
+            cap_ok, cap_fail = accepted_cap_transform_constraints_satisfied(final_state, matched)
             if apply_request_ci_constraints:
                 ci_ok, ci_fail = ci_constraints_satisfied(final_state, request)
             else:
                 ci_ok, ci_fail = True, []
+            if not cap_ok:
+                ci_ok = False
+                ci_fail = list(ci_fail) + cap_fail
             if apply_request_residual_constraints:
                 res_ok, res_fail = residual_constraints_satisfied(final_state, request)
             else:

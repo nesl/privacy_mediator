@@ -37,15 +37,17 @@
     "allowed_content_types": [
       "image_content",
       "video_content",
-      "audio_content"
+      "audio_content",
+      "av_content"
     ],
     "allowed_modalities": [
       "visual",
-      "audio"
+      "audio",
+      "audio_visual"
     ],
     "forbidden_sensing_devices": [],
     "forbidden_content_types": [],
-    "notes": "The default YouHome app request is multimodal. Do not substitute activity labels, pose labels, sound labels, or ADL summaries as preprocessing output unless a different downstream app contract explicitly accepts those formats."
+    "notes": "The default YouHome app request is multimodal. A valid preprocessing output must remain a synchronized AV sample/manifest unless checkpoint metadata explicitly selects an audio-only or video-only model. Do not substitute activity labels, pose labels, sound labels, or ADL summaries as preprocessing output unless a different downstream app contract explicitly accepts those formats."
   },
   "utility_contract": {
     "requested_capability": "adl_recognition",
@@ -77,7 +79,7 @@
           "purpose_limited"
         ],
         "priority": 1,
-        "utility_notes": "Compatible with infer_youhome.py because the downstream YouHomeAVDataset yields both image and audio tensors to the AVADLClassifier.",
+        "utility_notes": "Compatible with infer_youhome.py because the downstream YouHomeAVDataset yields both image and audio tensors to the AVADLClassifier. Format-preserving component transforms such as visual redaction or speech filtering are compatible only when the result remains a synchronized AV sample and validation utility passes.",
         "downstream_expected_fields": [
           "manifest",
           "data_root",
@@ -89,7 +91,106 @@
           "audio_waveform_or_path": true,
           "num_frames": "from checkpoint metadata, default 8",
           "audio_duration": "from checkpoint metadata, default 10.0",
-          "sample_rate": "from checkpoint metadata, default 16000"
+          "sample_rate": "from checkpoint metadata, default 16000",
+          "preserve_av_alignment": true,
+          "blank_modalities_allowed": false
+        },
+        "properties": {
+          "youhome_av_compatible": true
+        },
+        "forbidden_transformations": [
+          "audio_silenced",
+          "video_suppressed",
+          "visual_content_removed"
+        ]
+      },
+      {
+        "cap_id": "youhome_redacted_visual_av_sample",
+        "semantic_type": "application/x-youhome-av-sample",
+        "schema": "youhome_av_manifest_or_sample",
+        "description": "Synchronized YouHome audio-video sample with visual redaction while preserving the audio component.",
+        "affordance": [
+          "fixed_interface_multimodal_adl_input",
+          "visual_redaction_preserved_av_interface"
+        ],
+        "priority": 2,
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized"
+        ],
+        "forbidden_transformations": [
+          "audio_silenced",
+          "video_suppressed",
+          "visual_content_removed"
+        ],
+        "properties": {
+          "visual_redacted": true,
+          "speech_content_removed": false,
+          "youhome_av_compatible": true
+        }
+      },
+      {
+        "cap_id": "youhome_speech_filtered_av_sample",
+        "semantic_type": "application/x-youhome-av-sample",
+        "schema": "youhome_av_manifest_or_sample",
+        "description": "Synchronized YouHome audio-video sample with speech-like audio removed while preserving the visual component.",
+        "affordance": [
+          "fixed_interface_multimodal_adl_input",
+          "speech_filtered_audio_preserved_av_interface"
+        ],
+        "priority": 2,
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "speech_content_removed"
+        ],
+        "forbidden_transformations": [
+          "audio_silenced",
+          "video_suppressed",
+          "visual_content_removed"
+        ],
+        "properties": {
+          "visual_redacted": false,
+          "speech_content_removed": true,
+          "youhome_av_compatible": true
+        }
+      },
+      {
+        "cap_id": "youhome_redacted_visual_speech_filtered_av_sample",
+        "semantic_type": "application/x-youhome-av-sample",
+        "schema": "youhome_av_manifest_or_sample",
+        "affordance": "manifest.multimodal_sample",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "image_frame",
+            "audio_waveform"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "speech_content_removed"
+        ],
+        "priority": 2,
+        "properties": {
+          "visual_redacted": true,
+          "speech_content_removed": true,
+          "youhome_av_compatible": true
+        },
+        "forbidden_transformations": [
+          "audio_silenced",
+          "video_suppressed",
+          "visual_content_removed"
+        ],
+        "requires_empirical_validation": true,
+        "utility_notes": "Compatible with the AV downstream interface if visual frames and audio waveform references remain synchronized and loadable by YouHomeAVDataset after redaction/filtering.",
+        "payload_requirements": {
+          "image_tensor_or_paths": true,
+          "audio_waveform_or_path": true,
+          "preserve_av_alignment": true,
+          "blank_modalities_allowed": false
         }
       },
       {
@@ -173,7 +274,9 @@
         "application/x-activity-label",
         "application/x-pose-keypoints",
         "application/x-sound-event-label",
-        "application/x-aggregate"
+        "application/x-aggregate",
+        "audio_silenced_av_sample_without_validation",
+        "video_blackout_av_sample_without_validation"
       ]
     },
     "compatibility_notes": [
@@ -247,6 +350,7 @@
   "no_compromise_conditions": [
     "Return no_compromise if no candidate pipeline both matches an accepted output cap and satisfies CI/residual-disclosure constraints.",
     "Return insufficient_utility_evidence if the output cap/schema is accepted but no benchmark, calibration, or app-provided validation exists.",
-    "Do not select a semantic/privacy-minimized output solely because it is acceptable under CI if the downstream inference program cannot consume it."
+    "Do not select a semantic/privacy-minimized output solely because it is acceptable under CI if the downstream inference program cannot consume it.",
+    "For the default AV checkpoint, do not select audio-only, video-only, or blank-modality AV outputs unless the request/checkpoint metadata explicitly permits that degraded modality and validation utility passes."
   ]
 }

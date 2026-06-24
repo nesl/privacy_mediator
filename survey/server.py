@@ -34,7 +34,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_FLOW_FILE = ROOT / "data" / "ci_focused_user_study_context_only_dedup_32_no_output_readable.json"
+DEFAULT_FLOW_FILE = ROOT / "data" / "ci_focused_user_study_context.json"
 DEFAULT_DB = ROOT / "outputs" / "responses.db"
 # Runner usually writes this from project root. If server.py lives under survey/,
 # ROOT.parent is the project root.
@@ -48,6 +48,63 @@ TASK_LABEL_OVERRIDES = {
     "domestic_sound_monitoring": "Sound monitoring",
     "visitor_presence_detection": "Presence detection",
 }
+
+# Extra participant-facing output vocabulary that is intentionally kept outside
+# ci_focused_user_study_context.json, because that context file is used as a
+# computational scenario source.  The server merges these terms into the admin
+# glossary endpoint and uses the same term IDs in generated survey items.
+EXTRA_OUTPUT_DATA_GLOSSARY = [
+    {
+        "term": "raw_audio_video",
+        "label": "Video with sound",
+        "definition": "Moving video with synchronized sound from the monitoring device. It may show people and the surrounding scene, and the sound may include speech or conversation if people are talking.",
+    },
+    {
+        "term": "redacted_audio_video",
+        "label": "Video with sound, with faces and identifying details blurred",
+        "definition": "Moving video with synchronized sound where faces, tattoos, and readable personal text are blurred out. Clothing, posture, movement, room layout, and the audio may still remain.",
+    },
+    {
+        "term": "speech_filtered_audio_video",
+        "label": "Video with sound, with spoken words removed",
+        "definition": "Moving video with synchronized sound where speech-like parts of the audio are silenced so words should not be understandable. The video itself is not blurred, and other sounds may still be heard.",
+    },
+    {
+        "term": "redacted_filtered_audio_video",
+        "label": "Video with sound, with faces and identifying details blurred and spoken words removed",
+        "definition": "Moving video with synchronized sound where faces, tattoos, and readable personal text are blurred out, and speech-like parts of the audio are silenced so words should not be understandable. Clothing, posture, movement, room layout, and non-speech sounds may still remain.",
+    },
+]
+
+def merged_human_readable_glossary(flow_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the embedded glossary plus server-side output-data additions.
+
+    This avoids editing ci_focused_user_study_context.json while keeping the
+    admin/debug endpoint aligned with the output terms emitted by the survey
+    item generator.
+    """
+    raw = flow_data.get("human_readable_glossary", {}) if isinstance(flow_data, dict) else {}
+    glossary = json.loads(json.dumps(raw)) if raw else {"fields": {}}
+    fields = glossary.setdefault("fields", {})
+    output_terms = fields.setdefault("output_data", [])
+    by_term = {str(item.get("term")): item for item in output_terms if isinstance(item, dict) and item.get("term")}
+    for item in EXTRA_OUTPUT_DATA_GLOSSARY:
+        term = str(item["term"])
+        if term in by_term:
+            by_term[term].update(item)
+        else:
+            output_terms.append(dict(item))
+    notes = glossary.setdefault("revision_notes", [])
+    note = "Server merges synchronized video-with-sound output-data terms without modifying the computational context scenario file."
+    if note not in notes:
+        notes.append(note)
+    guidance = glossary.setdefault("display_guidance", {})
+    guidance.setdefault(
+        "audio_video_description",
+        "For video-with-sound outputs, state whether faces/identifying visual details are blurred and whether spoken words are removed. Mention that non-speech sounds may remain after speech filtering.",
+    )
+    return glossary
+
 
 @dataclass
 class Config:
@@ -359,8 +416,38 @@ def information_types_from_candidate(candidate: Optional[Dict[str, Any]], row: D
 
 
 
-def av_component_flags(final_cap: Dict[str, Any]) -> Dict[str, bool]:
-    """Detect whether an audio-video sample includes redaction or speech filtering."""
+def row_operator_ids(row: Optional[Dict[str, Any]] = None, candidate: Optional[Dict[str, Any]] = None) -> Set[str]:
+    """Return operator IDs from either a full candidate or a flattened summary row."""
+    ops: Set[str] = set()
+
+    def add_op(value: Any) -> None:
+        if isinstance(value, dict):
+            op = value.get("operator") or value.get("id") or value.get("op")
+            if op:
+                ops.add(str(op))
+        elif isinstance(value, str):
+            for part in value.split("->"):
+                part = part.strip()
+                if part:
+                    ops.add(part)
+
+    if candidate:
+        for op in candidate.get("operators") or candidate.get("pipeline") or []:
+            add_op(op)
+    if row:
+        add_op(row.get("operators"))
+    return ops
+
+
+def av_component_flags(final_cap: Dict[str, Any], row: Optional[Dict[str, Any]] = None, candidate: Optional[Dict[str, Any]] = None) -> Dict[str, bool]:
+    """Detect whether an audio-video sample includes redaction or speech filtering.
+
+    The generated summary can be flattened, so component-level properties may be
+    missing even when the operator path makes the transformation clear.  This
+    function therefore combines final-cap properties, matched cap names, schemas,
+    and the operator chain.  It intentionally does not modify the computational
+    scenario JSON.
+    """
     flags = {
         "has_visual": False,
         "has_audio": False,
@@ -376,17 +463,40 @@ def av_component_flags(final_cap: Dict[str, Any]) -> Dict[str, bool]:
         media = str(cap.get("media_type") or cap.get("semantic_type") or "")
         schema = str(cap.get("schema") or "")
         props = cap.get("properties") if isinstance(cap.get("properties"), dict) else {}
-        is_visual = media.startswith(("image/", "video/")) or any(x in schema for x in ["image", "video", "frame"])
-        is_audio = media.startswith("audio/") or "audio" in schema or "waveform" in schema
+        prop_values = " ".join(flatten_strings(props)).lower()
+        media_schema = f"{media} {schema} {prop_values}".lower()
+
+        is_visual = (
+            media.startswith(("image/", "video/"))
+            or any(x in schema.lower() for x in ["image", "video", "frame"])
+            or "visual" in media_schema
+        )
+        is_audio = (
+            media.startswith("audio/")
+            or "audio" in schema.lower()
+            or "waveform" in schema.lower()
+            or "sound" in media_schema
+        )
+
         if is_visual:
             flags["has_visual"] = True
-            if props.get("redacted"):
+            if (
+                props.get("redacted")
+                or props.get("visual_redacted")
+                or media in {"image/x-redacted", "video/x-redacted"}
+                or "redacted" in schema.lower()
+            ):
                 flags["redacted_visual"] = True
             else:
                 flags["raw_visual"] = True
         if is_audio:
             flags["has_audio"] = True
-            if props.get("speech_content_removed") or media == "audio/x-filtered":
+            if (
+                props.get("speech_content_removed")
+                or media == "audio/x-filtered"
+                or "speech_removed" in schema.lower()
+                or "speech_content_removed" in media_schema
+            ):
                 flags["speech_removed_audio"] = True
             else:
                 flags["raw_audio"] = True
@@ -394,13 +504,40 @@ def av_component_flags(final_cap: Dict[str, Any]) -> Dict[str, bool]:
             visit(component)
 
     visit(final_cap)
+
+    row = row or {}
+    t = cap_type(final_cap) or str(row.get("final_output_type") or "")
+    schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
+    matched = str(row.get("matched_output_cap") or "")
+    ops = row_operator_ids(row, candidate)
+    joined = " ".join([t, schema, matched, " ".join(sorted(ops))]).lower()
+
+    # YouHome AV samples are synchronized video-with-sound containers even if the
+    # flattened summary row does not expose nested image/audio component caps.
+    if t == "application/x-youhome-av-sample" or "youhome_av" in schema.lower() or "av_sample" in schema.lower():
+        flags["has_visual"] = True
+        flags["has_audio"] = True
+
+    if "op.av_visual_redact" in ops or "redacted_visual" in joined or "visual_redacted" in joined:
+        flags["redacted_visual"] = True
+    if "op.av_audio_speech_filter" in ops or "speech_filtered" in joined or "speech_removed" in joined or "speech_content_removed" in joined:
+        flags["speech_removed_audio"] = True
+
+    if flags["has_visual"] and not flags["redacted_visual"]:
+        flags["raw_visual"] = True
+    if flags["has_audio"] and not flags["speech_removed_audio"]:
+        flags["raw_audio"] = True
+    if flags["redacted_visual"]:
+        flags["raw_visual"] = False
+    if flags["speech_removed_audio"]:
+        flags["raw_audio"] = False
     return flags
 
 
 def is_audio_video_sample(final_cap: Dict[str, Any], row: Dict[str, Any]) -> bool:
     t = cap_type(final_cap) or str(row.get("final_output_type") or "")
     schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
-    flags = av_component_flags(final_cap)
+    flags = av_component_flags(final_cap, row)
     return (
         t == "application/x-youhome-av-sample"
         or "youhome_av" in schema
@@ -410,28 +547,24 @@ def is_audio_video_sample(final_cap: Dict[str, Any], row: Dict[str, Any]) -> boo
 
 
 
-def audio_video_output_label(final_cap: Dict[str, Any]) -> str:
+def audio_video_output_label(final_cap: Dict[str, Any], row: Optional[Dict[str, Any]] = None) -> str:
     """Participant-facing sentence for video-with-audio outputs."""
-    flags = av_component_flags(final_cap)
+    flags = av_component_flags(final_cap, row)
     if flags["redacted_visual"] and flags["speech_removed_audio"]:
         return "The shared data is video with sound; faces and identifying details are blurred, and spoken words are removed."
-    if flags["redacted_visual"] and flags["raw_audio"]:
-        return "The shared data is video with sound; faces and identifying details are blurred."
     if flags["redacted_visual"]:
         return "The shared data is video with sound; faces and identifying details are blurred."
-    if flags["speech_removed_audio"] and flags["raw_visual"]:
-        return "The shared data is video with sound; spoken words are removed, but the video is not blurred."
     if flags["speech_removed_audio"]:
-        return "The shared data is video with sound; spoken words are removed."
+        return "The shared data is video with sound; spoken words are removed, but the video is not blurred."
     return "The shared data is video with sound from the monitoring device."
 
 
-def audio_video_output_description(final_cap: Dict[str, Any]) -> str:
+def audio_video_output_description(final_cap: Dict[str, Any], row: Optional[Dict[str, Any]] = None) -> str:
     """Lay explanation for video-with-audio outputs that avoids repeating the main value."""
-    flags = av_component_flags(final_cap)
+    flags = av_component_flags(final_cap, row)
     parts = []
     if flags["redacted_visual"]:
-        parts.append("Faces, tattoos, and readable personal text are blurred out. Clothing, posture, and room layout may still be visible.")
+        parts.append("Faces, tattoos, and readable personal text are blurred out. Clothing, posture, movement, and room layout may still be visible.")
     elif flags["raw_visual"]:
         parts.append("The video may show people and the surrounding scene without visual blurring.")
     if flags["speech_removed_audio"]:
@@ -446,14 +579,14 @@ def human_output_label(final_cap: Dict[str, Any], info_types: Dict[str, List[str
     t = cap_type(final_cap) or str(row.get("final_output_type") or "")
     schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
     props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
-    redacted = bool(props.get("redacted"))
-    speech_removed = bool(props.get("speech_content_removed")) or t == "audio/x-filtered"
+    redacted = bool(props.get("redacted")) or t in {"image/x-redacted", "video/x-redacted"} or "redacted" in schema
+    speech_removed = bool(props.get("speech_content_removed")) or t == "audio/x-filtered" or "speech_removed" in schema
     fov_minimized = bool(props.get("field_of_view_minimized"))
 
     if t == "application/x-pose-keypoints" or "pose" in schema:
         return "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown."
     if is_audio_video_sample(final_cap, row):
-        return audio_video_output_label(final_cap)
+        return audio_video_output_label(final_cap, row)
     if t.startswith("image/"):
         if redacted:
             return "The shared data is camera images with faces and identifying details blurred."
@@ -492,8 +625,8 @@ def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
     if t == "application/x-pose-keypoints" or "pose" in schema:
         return ""
     if is_audio_video_sample(final_cap, row):
-        return audio_video_output_description(final_cap)
-    if t.startswith(("image/", "video/")) and props.get("redacted"):
+        return audio_video_output_description(final_cap, row)
+    if t.startswith(("image/", "video/")) and (props.get("redacted") or t in {"image/x-redacted", "video/x-redacted"} or "redacted" in schema):
         if t.startswith("image/"):
             return "These are separate camera images, not continuous video or audio. Faces, tattoos, and readable personal text are blurred out; clothing and room layout may still be visible."
         if t.startswith("video/"):
@@ -509,7 +642,7 @@ def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
         return "These are separate snapshots or low-frame-rate images, not a continuous recording."
     if t.startswith("video/"):
         return "This is video only; audio is not included."
-    if t == "audio/x-filtered" or props.get("speech_content_removed"):
+    if t == "audio/x-filtered" or props.get("speech_content_removed") or "speech_removed" in schema:
         return "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
     if t.startswith("audio/"):
         return "This means the named receiver gets an audio recording from a microphone. It may include speech, conversation, and other sounds in the area."
@@ -529,27 +662,60 @@ def privacy_class_from_output(final_cap: Dict[str, Any], row: Dict[str, Any]) ->
     t = cap_type(final_cap) or str(row.get("final_output_type") or "")
     schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
     props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
-    if t.startswith(("image/", "video/")) and not props.get("redacted"):
-        return "raw_media"
-    if t.startswith(("image/", "video/")) and props.get("redacted"):
-        return "redacted_media"
-    if t == "audio/x-filtered" or props.get("speech_content_removed"):
-        return "filtered_audio"
-    if t.startswith("audio/"):
-        return "raw_audio"
-    if "pose" in t or "pose" in schema:
-        return "derived_pose"
     if is_audio_video_sample(final_cap, row):
-        flags = av_component_flags(final_cap)
+        flags = av_component_flags(final_cap, row)
         if flags["redacted_visual"] and flags["speech_removed_audio"]:
             return "redacted_filtered_audio_video"
         if flags["redacted_visual"]:
             return "redacted_audio_video"
         if flags["speech_removed_audio"]:
             return "speech_filtered_audio_video"
-        return "audio_video_stream"
+        return "raw_audio_video"
+    if t.startswith(("image/", "video/")) and not (props.get("redacted") or t in {"image/x-redacted", "video/x-redacted"} or "redacted" in schema):
+        return "raw_media"
+    if t.startswith(("image/", "video/")) and (props.get("redacted") or t in {"image/x-redacted", "video/x-redacted"} or "redacted" in schema):
+        return "redacted_media"
+    if t == "audio/x-filtered" or props.get("speech_content_removed") or "speech_removed" in schema:
+        return "filtered_audio"
+    if t.startswith("audio/"):
+        return "raw_audio"
+    if "pose" in t or "pose" in schema:
+        return "derived_pose"
     if t.startswith("application/"):
         return "derived_or_semantic_output"
+    return "output_data"
+
+
+def output_data_term_from_output(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
+    """Return a stable readable-glossary term for the shared output."""
+    t = cap_type(final_cap) or str(row.get("final_output_type") or "")
+    schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
+    props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
+    if is_audio_video_sample(final_cap, row):
+        flags = av_component_flags(final_cap, row)
+        if flags["redacted_visual"] and flags["speech_removed_audio"]:
+            return "redacted_filtered_audio_video"
+        if flags["redacted_visual"]:
+            return "redacted_audio_video"
+        if flags["speech_removed_audio"]:
+            return "speech_filtered_audio_video"
+        return "raw_audio_video"
+    if t == "application/x-pose-keypoints" or "pose" in schema:
+        return "pose_keypoints"
+    if t.startswith("image/"):
+        return "redacted_image" if (props.get("redacted") or t == "image/x-redacted" or "redacted" in schema) else "raw_image"
+    if t.startswith("video/"):
+        return "redacted_video" if (props.get("redacted") or t == "video/x-redacted" or "redacted" in schema) else "raw_video"
+    if t == "audio/x-filtered" or props.get("speech_content_removed") or "speech_removed" in schema:
+        return "filtered_audio"
+    if t.startswith("audio/"):
+        return "raw_audio"
+    if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
+        return "occupancy"
+    if "sound" in t or "sound" in schema or "noise_event" in schema:
+        return "sound_label"
+    if "event" in t or "event" in schema or "activity" in t or "activity" in schema:
+        return "event_alert"
     return "output_data"
 
 
@@ -609,6 +775,7 @@ def build_output_variant_from_row(row: Dict[str, Any], pipeline_dir: Optional[Pa
         "output_signature": stable_hash_obj(signature_obj),
         "output_variant_label": label,
         "output_variant_description": output_description(final_cap, row),
+        "output_data_term": output_data_term_from_output(final_cap, row),
         "variant_privacy_class": privacy_class_from_output(final_cap, row),
         "final_output_cap": final_cap,
         "information_types": info_types,
@@ -2583,6 +2750,7 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
             "output_variant_id": (output_variant or {}).get("output_variant_id"),
             "output_variant_label": (output_variant or {}).get("output_variant_label"),
             "output_variant_description": (output_variant or {}).get("output_variant_description"),
+            "output_data_term": (output_variant or {}).get("output_data_term"),
             "variant_privacy_class": (output_variant or {}).get("variant_privacy_class"),
             "method_ids": method_ids,
             "method_count": len(method_ids),
@@ -2602,6 +2770,7 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
             "output_variant_id": (output_variant or {}).get("output_variant_id"),
             "output_variant_label": (output_variant or {}).get("output_variant_label"),
             "output_variant_description": (output_variant or {}).get("output_variant_description"),
+            "output_data_term": (output_variant or {}).get("output_data_term"),
             "variant_privacy_class": (output_variant or {}).get("variant_privacy_class"),
             "final_output_cap": (output_variant or {}).get("final_output_cap"),
             "information_types": (output_variant or {}).get("information_types"),
@@ -2922,7 +3091,7 @@ def make_handler(state: SurveyState):
             if path == "/admin/pipeline_rows.json":
                 return json_response(self, {"pipeline_load_info": state.pipeline_load_info, "rows": state.pipeline_rows})
             if path == "/admin/glossary.json":
-                return json_response(self, state.flow_data.get("human_readable_glossary", {}))
+                return json_response(self, merged_human_readable_glossary(state.flow_data))
             return json_response(self, {"error": "not found"}, 404)
 
         def handle_post(self) -> None:

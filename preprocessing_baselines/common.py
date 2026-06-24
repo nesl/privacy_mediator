@@ -187,6 +187,8 @@ def type_matches(upstream: str, downstream: str) -> bool:
         return True
     if downstream == "image/x-raw" and upstream in {"image/x-raw", "image/x-redacted"}:
         return True
+    if downstream == "audio/x-raw" and upstream in {"audio/x-raw", "audio/x-filtered"}:
+        return True
     return False
 
 
@@ -201,10 +203,167 @@ def goal_cap_matches(out_cap: Dict[str, Any], goal_cap: Dict[str, Any]) -> bool:
     return False
 
 
-def first_matching_accepted_cap(out_cap: Dict[str, Any], request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    for g in (request.get("utility_contract", {}) or {}).get("accepted_output_caps", []) or []:
-        if goal_cap_matches(out_cap, g):
-            return g
+def rejected_cap_matches(out_cap: Dict[str, Any], rejected_cap: Dict[str, Any]) -> bool:
+    """Return True when an explicitly rejected cap names this exact output.
+
+    Explicit rejections should be stricter than accepted-cap matching: do not
+    apply raw/redacted or raw/filtered interface compatibility here, otherwise a
+    request that rejects raw audio would accidentally reject speech-filtered
+    audio as well.
+    """
+    r_t = str(rejected_cap.get("semantic_type") or rejected_cap.get("media_type") or "")
+    if r_t and cap_type(out_cap) == r_t:
+        return True
+    r_schema = cap_schema(rejected_cap)
+    return bool(r_schema and cap_schema(out_cap) == r_schema)
+
+
+def request_checkpoint_metadata(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Collect checkpoint/runtime metadata used by conditional accepted caps."""
+    meta: Dict[str, Any] = {}
+    for key in ["checkpoint_metadata", "runtime_metadata"]:
+        value = request.get(key)
+        if isinstance(value, dict):
+            nested = value.get("checkpoint_metadata")
+            if isinstance(nested, dict):
+                meta.update(nested)
+            else:
+                meta.update(value)
+
+    downstream = ((request.get("utility_contract", {}) or {}).get("downstream_program", {}) or {})
+    if downstream.get("default_checkpoint_modality") and "modality" not in meta:
+        meta["modality"] = downstream["default_checkpoint_modality"]
+    return meta
+
+
+def accepted_cap_conditions_satisfied(goal_cap: Dict[str, Any], request: Dict[str, Any]) -> bool:
+    """Enforce conditional_on_checkpoint_metadata for accepted caps.
+
+    This prevents fixed-interface baselines from treating conditional audio-only
+    or video-only caps as eligible when the request's checkpoint is actually AV.
+    """
+    cond = goal_cap.get("conditional_on_checkpoint_metadata")
+    if not cond:
+        return True
+    meta = request_checkpoint_metadata(request)
+    for key, allowed_values in cond.items():
+        actual = meta.get(key)
+        if actual is None:
+            return False
+        allowed = {str(v).strip().lower() for v in as_list(allowed_values)}
+        actual_values = {str(v).strip().lower() for v in as_list(actual)}
+        if not (actual_values & allowed):
+            return False
+    return True
+
+
+def transformations_allowed_by_cap(goal_cap: Dict[str, Any], transforms: Optional[Sequence[str]] = None) -> bool:
+    forbidden = {str(t) for t in as_list(goal_cap.get("forbidden_transformations"))}
+    if not forbidden:
+        return True
+    return not (forbidden & {str(t) for t in (transforms or [])})
+
+
+def _inferred_output_property(out_cap: Dict[str, Any], key: str, transforms: Optional[Sequence[str]] = None) -> Any:
+    """Infer important output booleans from cap properties, components, and transforms."""
+    props = out_cap.get("properties", {}) or {}
+    if key in props:
+        return props.get(key)
+    transform_set = {str(t) for t in (transforms or [])}
+    components = props.get("components") if isinstance(props.get("components"), list) else []
+    component_types = {str(c.get("media_type") or c.get("semantic_type") or "") for c in components if isinstance(c, dict)}
+    if key == "youhome_av_compatible":
+        return cap_type(out_cap) == "application/x-youhome-av-sample" or bool(props.get("av_synchronized"))
+    if key in {"visual_redacted", "redacted"}:
+        return bool(component_types & {"image/x-redacted", "video/x-redacted"} or transform_set & {"face_blurred", "identity_removed", "visible_text_removed", "screen_content_removed", "body_blurred"})
+    if key in {"speech_content_removed", "audio_filtered"}:
+        return bool(component_types & {"audio/x-filtered"} or cap_type(out_cap) == "audio/x-filtered" or transform_set & {"speech_content_removed", "speech_content_minimized"})
+    return None
+
+
+def accepted_cap_properties_satisfied(out_cap: Dict[str, Any], goal_cap: Dict[str, Any], transforms: Optional[Sequence[str]] = None) -> bool:
+    """Require scalar accepted-cap properties to describe the actual output."""
+    goal_props = goal_cap.get("properties", {}) or {}
+    for key, expected in goal_props.items():
+        if isinstance(expected, (dict, list)):
+            continue
+        actual = _inferred_output_property(out_cap, str(key), transforms)
+        if isinstance(expected, bool):
+            if bool(actual) != expected:
+                return False
+        elif actual != expected:
+            return False
+    return True
+
+
+def _accepted_cap_specificity_score(out_cap: Dict[str, Any], goal_cap: Dict[str, Any], transforms: Optional[Sequence[str]] = None) -> Tuple[int, int, int, int]:
+    """Score how specifically an accepted cap describes the actual output."""
+    goal_props = goal_cap.get("properties", {}) or {}
+    matched = 0
+    declared = 0
+    for k, v in goal_props.items():
+        if isinstance(v, (dict, list)):
+            continue
+        declared += 1
+        actual = _inferred_output_property(out_cap, str(k), transforms)
+        if isinstance(v, bool):
+            if bool(actual) == v:
+                matched += 1
+        elif actual == v:
+            matched += 1
+    try:
+        priority = int(goal_cap.get("priority", 999))
+    except Exception:
+        priority = 999
+    return (matched, -(declared - matched), len(goal_props), -priority)
+
+
+def first_matching_accepted_cap(
+    out_cap: Dict[str, Any],
+    request: Dict[str, Any],
+    transforms: Optional[Sequence[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Find the best request accepted cap for a baseline output.
+
+    Mirrors the full mediator's compatibility checks closely enough for raw and
+    manual baselines:
+      * explicit rejections are respected;
+      * conditional caps are skipped unless checkpoint/runtime metadata matches;
+      * exact type/schema matches are preferred before loose interface matches;
+      * per-cap forbidden transformations are respected.
+    """
+    utility = request.get("utility_contract", {}) or {}
+    for rej in utility.get("explicitly_rejected_output_caps", []) or []:
+        if rejected_cap_matches(out_cap, rej):
+            return None
+
+    caps = [
+        c for c in utility.get("accepted_output_caps", []) or []
+        if accepted_cap_conditions_satisfied(c, request)
+        and transformations_allowed_by_cap(c, transforms)
+        and accepted_cap_properties_satisfied(out_cap, c, transforms)
+    ]
+    out_t = cap_type(out_cap)
+    out_schema = cap_schema(out_cap)
+
+    # Prefer exact advertised caps. This prevents, e.g., audio/x-filtered from
+    # matching a broader raw-audio cap before the explicit speech-removed cap.
+    # When multiple accepted caps share the same type/schema, prefer the one that
+    # is more specific to the actual output's properties.
+    exact_type_schema = [
+        cap for cap in caps
+        if out_t and out_t == cap_type(cap) and (not out_schema or not cap_schema(cap) or out_schema == cap_schema(cap))
+    ]
+    if exact_type_schema:
+        return max(exact_type_schema, key=lambda cap: _accepted_cap_specificity_score(out_cap, cap, transforms))
+
+    exact_schema = [cap for cap in caps if out_schema and out_schema == cap_schema(cap)]
+    if exact_schema:
+        return max(exact_schema, key=lambda cap: _accepted_cap_specificity_score(out_cap, cap, transforms))
+
+    loose_matches = [cap for cap in caps if goal_cap_matches(out_cap, cap)]
+    if loose_matches:
+        return max(loose_matches, key=lambda cap: _accepted_cap_specificity_score(out_cap, cap, transforms))
     return None
 
 
@@ -236,7 +395,14 @@ def infer_generator_path(explicit_path: Optional[str | Path] = None) -> Optional
         here.parent / "mediator" / "generate_pipeline_candidates.py",
         Path.cwd() / "generate_pipeline_candidates.py",
         Path.cwd() / "mediator" / "generate_pipeline_candidates.py",
+        Path("/mnt/data/generate_pipeline_candidates_final_cleanup.py"),
+        Path("/mnt/data/generate_pipeline_candidates_matched_cap_specificity.py"),
+        Path("/mnt/data/generate_pipeline_candidates_av_component_preserve_fixed.py"),
+        Path("/mnt/data/generate_pipeline_candidates_av_component_preserve.py"),
+        Path("/mnt/data/generate_pipeline_candidates_av_updated.py"),
+        Path("/mnt/data/generate_pipeline_candidates_patched.py"),
         Path("/mnt/data/generate_pipeline_candidates.py"),
+        Path("/mnt/data/generate_pipeline_candidates(12).py"),
         Path("/mnt/data/generate_pipeline_candidates(4).py"),
     ]
     for c in candidates:
@@ -279,6 +445,8 @@ def cap_content_type(cap: Dict[str, Any]) -> Optional[str]:
         return "video_content"
     if "image" in t or "frame" in schema:
         return "image_content"
+    if "youhome-av" in t or "youhome_av" in schema or t == "application/x-youhome-av-sample":
+        return "av_content"
     if "audio" in t:
         return "audio_content"
     return None
@@ -294,6 +462,19 @@ def allowed_source_cap(cap: Dict[str, Any], request: Dict[str, Any]) -> bool:
     if allowed_content:
         if content and content in allowed_content:
             return True
+        # Synchronized AV samples are compatible only when the request explicitly
+        # allows AV content or both visual and audio content.  Generic input_data
+        # is intentionally not enough, and a request forbidding audio/visual
+        # content rejects the AV container.
+        if content == "av_content":
+            if "audio_content" in forbidden_content or ({"image_content", "video_content"} & forbidden_content):
+                return False
+            if (
+                "av_content" in allowed_content
+                or ({"image_content", "video_content"} & allowed_content and "audio_content" in allowed_content)
+            ):
+                return True
+            return False
         # Sensor readings are generic input/environmental data.
         if cap_type(cap) == "application/x-sensor-reading" and "input_data" in allowed_content:
             return True
@@ -311,7 +492,23 @@ def infer_source_residual_from_cap(cap: Dict[str, Any], source_operator: Optiona
                 if k in residual:
                     residual[k] = normalize_risk(v)
             return residual
-    if content in {"video_content", "image_content"} or cap_type(cap) in {"video/x-raw", "image/x-raw"}:
+    if content == "av_content" or cap_type(cap) == "application/x-youhome-av-sample":
+        residual.update({
+            "identity": "high",
+            "face": "high",
+            "body_shape": "high",
+            "clothing": "high",
+            "gait": "medium",
+            "speech_content": "high",
+            "speaker_identity": "high",
+            "activity": "high",
+            "location": "medium",
+            "trajectory": "medium",
+            "co_presence": "high",
+            "visible_text": "medium",
+            "aggregate_presence": "high",
+        })
+    elif content in {"video_content", "image_content"} or cap_type(cap) in {"video/x-raw", "image/x-raw"}:
         residual.update({
             "identity": "high",
             "face": "high",
@@ -392,8 +589,22 @@ def source_candidates_from_catalog(operator_catalog: Dict[str, Any], request: Di
             ci_terms: Dict[str, List[str]] = {}
             ann = op.get("ci_annotations", {}) or {}
             for k, v in ann.items():
-                if k != "pipelineStage":
+                # Source annotations list all possible primitives; add only the
+                # primitive(s) corresponding to the selected source cap below.
+                if k not in {"pipelineStage", "informationType.sensorPrimitive", "sensingDataMetadata"}:
                     ci_terms[k] = sorted(set(flatten_terms(v)))
+            prims = flatten_terms((cap.get("properties", {}) or {}).get("sensorPrimitive"))
+            if not prims:
+                if cap_content_type(cap) == "video_content":
+                    prims = ["video_stream"]
+                elif cap_content_type(cap) == "image_content":
+                    prims = ["image_frame"]
+                elif cap_content_type(cap) == "audio_content":
+                    prims = ["audio_waveform"]
+                elif cap_content_type(cap) == "av_content":
+                    prims = ["image_frame", "audio_waveform"]
+            if prims:
+                ci_terms["informationType.sensorPrimitive"] = sorted(set(map(str, prims)))
             for tp in (request.get("ci_context", {}) or {}).get("transmissionPrinciple_assumed", []) or []:
                 ci_terms.setdefault("transmissionPrinciple", [])
                 if tp not in ci_terms["transmissionPrinciple"]:
@@ -415,6 +626,13 @@ def source_candidates_from_catalog(operator_catalog: Dict[str, Any], request: Di
     return out
 
 
+def normalize_final_output_cap_for_reporting(cap: Dict[str, Any], matched_cap: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    out = copy.deepcopy(cap)
+    if matched_cap and not out.get("schema") and matched_cap.get("schema"):
+        out["schema"] = matched_cap.get("schema")
+    return out
+
+
 def make_candidate_record(
     *,
     baseline_name: str,
@@ -430,7 +648,8 @@ def make_candidate_record(
     notes: Optional[Sequence[str]] = None,
     executable_under_catalog: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    match = matched_output_cap if matched_output_cap is not None else first_matching_accepted_cap(final_output_cap, request)
+    match = matched_output_cap if matched_output_cap is not None else first_matching_accepted_cap(final_output_cap, request, transforms=transforms)
+    final_cap_for_record = normalize_final_output_cap_for_reporting(final_output_cap, match)
     ci_serialized: Dict[str, List[str]] = {}
     for k, v in (ci_terms or {}).items():
         ci_serialized[k] = sorted(set(map(str, v)))
@@ -444,7 +663,7 @@ def make_candidate_record(
             residual_norm[a] = normalize_risk(residual[a])
     cid = f"baseline_{baseline_name}_" + stable_hash({
         "operators": ops,
-        "cap": final_output_cap,
+        "cap": final_cap_for_record,
         "residual": residual_norm,
     })
     rec = {
@@ -453,7 +672,7 @@ def make_candidate_record(
         "baseline": baseline_name,
         "matched_output_cap": match.get("cap_id") if match else None,
         "matched_output_schema": match.get("schema") if match else None,
-        "final_output_cap": final_output_cap,
+        "final_output_cap": final_cap_for_record,
         "operators": ops,
         "utility_capabilities": sorted(set(map(str, utility_capabilities or []))),
         "quality_status": quality_status or quality_status_for_request(request),

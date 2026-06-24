@@ -5,7 +5,7 @@ This module is intended to be run from the project root:
 
     python -m evaluation.generate_pipelines_for_all_contexts \
       --operators norms/operator_contracts.json \
-      --contexts survey/data/ci_focused_user_study_context_only_dedup_32_no_output_readable.json \
+      --contexts survey/data/ci_focused_user_study_context.json \
       --app-request-dir app_requests/templates \
       --candidate-generator mediator/generate_pipeline_candidates.py \
       --constraints norms/ci_constraints.json \
@@ -719,7 +719,7 @@ def make_run_specs(requested_baselines: Sequence[str], requested_ablations: Sequ
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Run all preprocessing baselines/full mediator over all context scenarios.")
-    p.add_argument("--contexts", default="survey/data/ci_focused_user_study_context_only_dedup_32_no_output_readable.json")
+    p.add_argument("--contexts", default="survey/data/ci_focused_user_study_context.json")
     p.add_argument("--app-request-dir", default="app_requests/templates")
     p.add_argument("--operators", required=True)
     p.add_argument("--candidate-generator", default="mediator/generate_pipeline_candidates.py")

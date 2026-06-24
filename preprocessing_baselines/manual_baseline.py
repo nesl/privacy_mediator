@@ -12,9 +12,9 @@ privacy-minimized semantic label/event when the downstream program expects media
 pose sequences, audio waveforms, or a multimodal AV sample.
 
 The candidate generator is used only as a compiler/type checker when possible.
-If the current symbolic catalog cannot express a required downstream interface
-(e.g., the YouHome audio+video sample packer), this baseline emits an explicit
-manual adapter candidate and marks it executable_under_catalog=false.
+For multimodal YouHome ADL, the current catalog models the synchronized AV
+sample as a source/interface-preserving representation and applies component-wise
+AV transforms rather than using a manual-only synchronization placeholder.
 """
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ SPACE_TASK_POLICIES: Tuple[SpaceTaskPolicy, ...] = (
         spaces=("bedroom", "bathroom", "patient_room", "workspace"),
         target_cap_types=("application/x-youhome-av-sample",),
         target_schema_keywords=("youhome_av_manifest_or_sample", "youhome_av"),
-        preferred_operator_ids=("manual.av_sync_packager", "op.region_mask_blur", "op.speech_content_removal", "op.sample", "op.window"),
+        preferred_operator_ids=("op.av_visual_redact", "op.av_audio_speech_filter", "op.youhome_av_adapter", "op.sample", "op.window"),
         required_downstream_interface="youhome_audio_video_sample_or_manifest",
         fallback_transforms=("face_blurred", "speech_content_removed", "synchronized_av_window", "data_minimized"),
         fallback_residual={"identity": "medium", "face": "low", "speech_content": "low", "speaker_identity": "low", "activity": "high", "location": "medium", "trajectory": "medium", "co_presence": "medium", "aggregate_presence": "high"},
@@ -137,7 +137,7 @@ SPACE_TASK_POLICIES: Tuple[SpaceTaskPolicy, ...] = (
         spaces=("common_area", "entrance", "kitchen", "living_room", "outdoor"),
         target_cap_types=("application/x-youhome-av-sample",),
         target_schema_keywords=("youhome_av_manifest_or_sample", "youhome_av"),
-        preferred_operator_ids=("manual.av_sync_packager", "op.sample", "op.window", "op.region_mask_blur", "op.speech_content_removal"),
+        preferred_operator_ids=("op.av_visual_redact", "op.youhome_av_adapter", "op.sample", "op.window"),
         required_downstream_interface="youhome_audio_video_sample_or_manifest",
         fallback_transforms=("synchronized_av_window", "data_minimized"),
         fallback_residual={"identity": "high", "face": "high", "speech_content": "medium", "speaker_identity": "medium", "activity": "high", "location": "medium", "trajectory": "medium", "co_presence": "medium", "aggregate_presence": "high"},
@@ -274,25 +274,136 @@ def rejected_cap_matches(out_cap: Dict[str, Any], rejected_cap: Dict[str, Any]) 
     return bool(r_schema and cap_schema(out_cap) == r_schema)
 
 
-def first_matching_accepted_cap(out_cap: Dict[str, Any], request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _lookup_metadata_value(request: Dict[str, Any], key: str) -> Any:
+    paths = [
+        ("utility_contract", "checkpoint_metadata", key),
+        ("utility_contract", "runtime_metadata", key),
+        ("utility_contract", "model_metadata", key),
+        ("checkpoint_metadata", key),
+        ("runtime_metadata", key),
+        ("model_metadata", key),
+    ]
+    for path in paths:
+        cur: Any = request
+        ok = True
+        for part in path:
+            if isinstance(cur, dict) and part in cur:
+                cur = cur[part]
+            else:
+                ok = False
+                break
+        if ok:
+            return cur
+    return None
+
+
+def accepted_cap_conditions_satisfied(cap: Dict[str, Any], request: Dict[str, Any]) -> bool:
+    cond = cap.get("conditional_on_checkpoint_metadata") or cap.get("conditional_on_runtime_metadata") or cap.get("conditional_on_metadata")
+    if not cond:
+        return True
+    if not isinstance(cond, dict):
+        return False
+    for k, expected in cond.items():
+        actual = _lookup_metadata_value(request, str(k))
+        expected_vals = set(map(str, as_list(expected)))
+        actual_vals = set(map(str, as_list(actual)))
+        if not actual_vals or not (actual_vals & expected_vals):
+            return False
+    return True
+
+
+def _accepted_cap_specificity_score(out_cap: Dict[str, Any], cap: Dict[str, Any], transforms: Optional[Sequence[str]] = None) -> Tuple[int, int, int, int]:
+    """Score how specifically an accepted cap describes the actual output."""
+    goal_props = cap.get("properties", {}) or {}
+    matched = 0
+    declared = 0
+    for k, v in goal_props.items():
+        if isinstance(v, (dict, list)):
+            continue
+        declared += 1
+        actual = _inferred_output_property(out_cap, str(k), transforms)
+        if isinstance(v, bool):
+            if bool(actual) == v:
+                matched += 1
+        elif actual == v:
+            matched += 1
+    terms = set(map(str, as_list(cap.get("required_transformations"))))
+    terms.update(map(str, as_list(cap.get("requiredTransformations"))))
+    terms.update(map(str, as_list(cap.get("required_transmissionPrinciple"))))
+    try:
+        priority = int(cap.get("priority", 999))
+    except Exception:
+        priority = 999
+    return (matched, -(declared - matched), len(terms), -priority)
+
+
+def transformations_allowed_by_cap(cap: Dict[str, Any], transforms: Optional[Sequence[str]]) -> bool:
+    if not transforms:
+        return True
+    forbidden = set(map(str, as_list(cap.get("forbidden_transformations"))))
+    return not (forbidden & set(map(str, transforms)))
+
+
+def _inferred_output_property(out_cap: Dict[str, Any], key: str, transforms: Optional[Sequence[str]] = None) -> Any:
+    """Infer important output booleans from cap properties, components, and transforms."""
+    props = out_cap.get("properties", {}) or {}
+    if key in props:
+        return props.get(key)
+    transform_set = {str(t) for t in (transforms or [])}
+    components = props.get("components") if isinstance(props.get("components"), list) else []
+    component_types = {str(c.get("media_type") or c.get("semantic_type") or "") for c in components if isinstance(c, dict)}
+    if key == "youhome_av_compatible":
+        return cap_type(out_cap) == "application/x-youhome-av-sample" or bool(props.get("av_synchronized"))
+    if key in {"visual_redacted", "redacted"}:
+        return bool(
+            component_types & {"image/x-redacted", "video/x-redacted"}
+            or transform_set & {"face_blurred", "identity_removed", "visible_text_removed", "screen_content_removed", "body_blurred"}
+        )
+    if key in {"speech_content_removed", "audio_filtered"}:
+        return bool(
+            component_types & {"audio/x-filtered"}
+            or cap_type(out_cap) == "audio/x-filtered"
+            or transform_set & {"speech_content_removed", "speech_content_minimized"}
+        )
+    return None
+
+
+def accepted_cap_properties_satisfied(out_cap: Dict[str, Any], cap: Dict[str, Any], transforms: Optional[Sequence[str]] = None) -> bool:
+    """Require scalar accepted-cap properties to describe the actual output."""
+    goal_props = cap.get("properties", {}) or {}
+    for key, expected in goal_props.items():
+        if isinstance(expected, (dict, list)):
+            continue
+        actual = _inferred_output_property(out_cap, str(key), transforms)
+        if isinstance(expected, bool):
+            if bool(actual) != expected:
+                return False
+        elif actual != expected:
+            return False
+    return True
+
+
+def first_matching_accepted_cap(out_cap: Dict[str, Any], request: Dict[str, Any], transforms: Optional[Sequence[str]] = None) -> Optional[Dict[str, Any]]:
     for rej in (request.get("utility_contract", {}) or {}).get("explicitly_rejected_output_caps", []) or []:
         if rejected_cap_matches(out_cap, rej):
             return None
-    caps = (request.get("utility_contract", {}) or {}).get("accepted_output_caps", []) or []
+    caps = [
+        c for c in (request.get("utility_contract", {}) or {}).get("accepted_output_caps", []) or []
+        if accepted_cap_conditions_satisfied(c, request)
+        and transformations_allowed_by_cap(c, transforms)
+        and accepted_cap_properties_satisfied(out_cap, c, transforms)
+    ]
     out_t = cap_type(out_cap)
     out_schema = cap_schema(out_cap)
-    # Prefer exact advertised caps over subtype/interface-compatible caps.  For example,
-    # audio/x-filtered should match the explicit speech-removed audio cap before the
-    # broader raw-audio interface cap.
-    for cap in caps:
-        if out_t and out_t == cap_type(cap) and (not out_schema or not cap_schema(cap) or out_schema == cap_schema(cap)):
-            return cap
-    for cap in caps:
-        if out_schema and out_schema == cap_schema(cap):
-            return cap
-    for cap in caps:
-        if goal_cap_matches(out_cap, cap):
-            return cap
+    exact = [cap for cap in caps if out_t and out_t == cap_type(cap) and (not out_schema or not cap_schema(cap) or out_schema == cap_schema(cap))]
+    if exact:
+        return max(exact, key=lambda cap: _accepted_cap_specificity_score(out_cap, cap, transforms))
+    exact_schema = [cap for cap in caps if out_schema and out_schema == cap_schema(cap)]
+    if exact_schema:
+        return max(exact_schema, key=lambda cap: _accepted_cap_specificity_score(out_cap, cap, transforms))
+    loose = [cap for cap in caps if goal_cap_matches(out_cap, cap)]
+    if loose:
+        return max(loose, key=lambda cap: _accepted_cap_specificity_score(out_cap, cap, transforms))
     return None
 
 
@@ -326,7 +437,11 @@ def load_generator(explicit_path: Optional[str | Path] = None):
         here.parent.parent / "generate_pipeline_candidates.py",
         Path.cwd() / "generate_pipeline_candidates.py",
         Path.cwd() / "mediator" / "generate_pipeline_candidates.py",
+        Path("/mnt/data/generate_pipeline_candidates_final_cleanup.py"),
+        Path("/mnt/data/generate_pipeline_candidates_matched_cap_specificity.py"),
+        Path("/mnt/data/generate_pipeline_candidates_av_component_preserve_fixed.py"),
         Path("/mnt/data/generate_pipeline_candidates.py"),
+        Path("/mnt/data/generate_pipeline_candidates(13).py"),
         Path("/mnt/data/generate_pipeline_candidates(5).py"),
     ])
     for p in candidates:
@@ -411,7 +526,7 @@ def run_symbolic_compiler(operator_catalog: Dict[str, Any], request: Dict[str, A
 
 def candidate_matches_policy_and_request(candidate: Dict[str, Any], policy: SpaceTaskPolicy, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cap = candidate.get("final_output_cap", {}) or {}
-    matched = first_matching_accepted_cap(cap, request)
+    matched = first_matching_accepted_cap(cap, request, transforms=candidate.get("transforms", []))
     if not matched:
         return None
     t = cap_type(cap)
@@ -429,7 +544,7 @@ def target_score(candidate: Dict[str, Any], policy: SpaceTaskPolicy, request: Di
     cap = candidate.get("final_output_cap", {}) or {}
     t = cap_type(cap)
     schema = cap_schema(cap).lower()
-    matched = first_matching_accepted_cap(cap, request)
+    matched = first_matching_accepted_cap(cap, request, transforms=candidate.get("transforms", []))
 
     type_rank = 999
     for i, target in enumerate(policy.target_cap_types):
@@ -439,7 +554,17 @@ def target_score(candidate: Dict[str, Any], policy: SpaceTaskPolicy, request: Di
 
     op_ids = [str(op.get("operator")) for op in candidate.get("operators", []) or []]
     preferred_missing = sum(1 for op in policy.preferred_operator_ids if op not in op_ids)
-    preferred_present = -sum(1 for op in policy.preferred_operator_ids if op in op_ids)
+    # Penalize extra transforms that are not part of the fixed manual policy.
+    # This keeps the manual baseline keyed to task+space rather than letting it
+    # become a least-revealing selector. For example, common-space ADL prefers
+    # visual redaction but does not automatically add speech filtering unless
+    # that operator is listed in the selected policy.
+    ignorable_ops = {"op.source", "op.route_publish"}
+    extra_transform_penalty = sum(
+        1
+        for op in op_ids
+        if op not in ignorable_ops and op not in set(policy.preferred_operator_ids)
+    )
 
     schema_rank = 999
     search = (schema + " " + str(candidate.get("matched_output_cap", "")).lower() + " " + str((matched or {}).get("schema", "")).lower())
@@ -451,6 +576,7 @@ def target_score(candidate: Dict[str, Any], policy: SpaceTaskPolicy, request: Di
     return (
         type_rank,
         preferred_missing,
+        extra_transform_penalty,
         accepted_cap_priority(request, matched),
         schema_rank,
         int(candidate.get("residual_score", residual_score(candidate.get("residual_disclosure", {})))),
@@ -468,7 +594,7 @@ def route_publish_operator(request: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def make_candidate_record(name: str, request: Dict[str, Any], operators: List[Dict[str, Any]], final_cap: Dict[str, Any], residual: Dict[str, Any], transforms: Sequence[str], utility_caps: Sequence[str], notes: Sequence[str], executable_under_catalog: bool) -> Dict[str, Any]:
-    matched = first_matching_accepted_cap(final_cap, request)
+    matched = first_matching_accepted_cap(final_cap, request, transforms=policy.fallback_transforms)
     residual_norm = init_residual("none")
     for a in RESIDUAL_ATTRIBUTES:
         if a in residual:
@@ -546,31 +672,72 @@ def fallback_candidate(request: Dict[str, Any], policy: SpaceTaskPolicy, resolve
         ]
         executable = True
     elif policy.task == "adl_recognition":
-        final_cap = {
+        # Model YouHome as an already synchronized AV sample, then apply
+        # component-wise, format-preserving transforms. This replaces the older
+        # manual-only av_sync_packager placeholder and keeps the output compatible
+        # with the fixed YouHome AV downstream interface.
+        av_source_cap = {
             "semantic_type": "application/x-youhome-av-sample",
             "schema": "youhome_av_manifest_or_sample",
+            "content_type": "av_content",
             "properties": {
                 "input_interface": "youhome_av_manifest",
+                "sensorPrimitive": ["image_frame", "audio_waveform"],
                 "components": [
-                    {"media_type": "video/x-raw", "schema": "youhome_video_frames", "properties": {"redacted": resolved_space in SENSITIVE_VISUAL_SPACES}},
-                    {"media_type": "audio/x-filtered" if resolved_space in SENSITIVE_AUDIO_SPACES else "audio/x-raw", "schema": "youhome_audio_waveform", "properties": {"speech_content_removed": resolved_space in SENSITIVE_AUDIO_SPACES}},
+                    {"media_type": "image/x-raw", "schema": "youhome_video_frames", "role": "visual"},
+                    {"media_type": "audio/x-raw", "schema": "youhome_audio_waveform", "role": "audio"},
                 ],
+                "av_synchronized": True,
+                "youhome_av_compatible": True,
             },
         }
+        visual_redact = resolved_space in SENSITIVE_VISUAL_SPACES
+        audio_filter = resolved_space in SENSITIVE_AUDIO_SPACES
+        final_cap = copy.deepcopy(av_source_cap)
         ops = [
-            {"operator": "op.source", "variant": "Source(video_frames)", "output_cap": {"media_type": "video/x-raw", "schema": "raw_video_stream", "content_type": "video_content"}, "parameters": {}},
-            {"operator": "op.source", "variant": "Source(audio_waveform)", "output_cap": {"media_type": "audio/x-raw", "schema": "raw_audio_waveform", "content_type": "audio_content"}, "parameters": {}},
-            {"operator": "manual.av_sync_packager", "variant": "Pack YouHome audio+video sample/manifest", "output_cap": final_cap, "parameters": {"requires_video": True, "requires_audio": True, "space": resolved_space}},
+            {"operator": "op.source", "variant": "Source(youhome_av_sample)", "output_cap": av_source_cap, "parameters": {}},
         ]
-        # Current symbolic/runtime catalog is single-stream and does not include a
-        # YouHome AV packer.  This is a manual pipeline spec that would need that
-        # adapter implemented to be executable.
-        executable = False
+        if visual_redact:
+            final_cap = {
+                "semantic_type": "application/x-youhome-av-sample",
+                "schema": "youhome_av_manifest_or_sample",
+                "properties": {
+                    "input_interface": "youhome_av_manifest",
+                    "sensorPrimitive": ["image_frame", "audio_waveform"],
+                    "components": [
+                        {"media_type": "image/x-redacted", "schema": "redacted_image_frame", "role": "visual"},
+                        {"media_type": "audio/x-raw", "schema": "youhome_audio_waveform", "role": "audio"},
+                    ],
+                    "visual_redacted": True,
+                    "redacted": True,
+                    "youhome_av_compatible": True,
+                },
+            }
+            ops.append({"operator": "op.av_visual_redact", "variant": "manual_space_task_av_visual_redact", "output_cap": copy.deepcopy(final_cap), "parameters": {"space": resolved_space, "preserve_av_interface": True}})
+        if audio_filter:
+            final_cap = {
+                "semantic_type": "application/x-youhome-av-sample",
+                "schema": "youhome_av_manifest_or_sample",
+                "properties": {
+                    "input_interface": "youhome_av_manifest",
+                    "sensorPrimitive": ["image_frame", "audio_waveform"],
+                    "components": [
+                        {"media_type": "image/x-redacted" if visual_redact else "image/x-raw", "schema": "redacted_image_frame" if visual_redact else "youhome_video_frames", "role": "visual"},
+                        {"media_type": "audio/x-filtered", "schema": "speech_removed_audio_waveform", "role": "audio"},
+                    ],
+                    "visual_redacted": bool(visual_redact),
+                    "speech_content_removed": True,
+                    "audio_filtered": True,
+                    "youhome_av_compatible": True,
+                },
+            }
+            ops.append({"operator": "op.av_audio_speech_filter", "variant": "manual_space_task_av_audio_speech_filter", "output_cap": copy.deepcopy(final_cap), "parameters": {"space": resolved_space, "preserve_av_interface": True}})
+        executable = True
     elif policy.task == "domestic_sound_monitoring":
         use_filtered = "audio/x-filtered" in policy.target_cap_types
         final_cap = {"media_type": "audio/x-filtered" if use_filtered else "audio/x-raw", "schema": "speech_removed_audio_waveform" if use_filtered else "raw_audio_waveform", "properties": {"speech_content_removed": use_filtered}}
         # Make sure final cap is accepted; if not, use the accepted cap verbatim.
-        if not first_matching_accepted_cap(final_cap, request):
+        if not first_matching_accepted_cap(final_cap, request, transforms=policy.fallback_transforms):
             final_cap = copy.deepcopy(target)
         ops = [
             {"operator": "op.source", "variant": "Source(audio_waveform)", "output_cap": {"media_type": "audio/x-raw", "schema": "raw_audio_waveform", "content_type": "audio_content"}, "parameters": {}},
@@ -579,7 +746,7 @@ def fallback_candidate(request: Dict[str, Any], policy: SpaceTaskPolicy, resolve
             ops.append({"operator": "op.speech_content_removal", "variant": "manual_space_task_speech_content_removal", "output_cap": final_cap, "parameters": {"preserve_waveform_interface": True}})
         executable = True
 
-    matched = first_matching_accepted_cap(final_cap, request)
+    matched = first_matching_accepted_cap(final_cap, request, transforms=policy.fallback_transforms)
     if not matched:
         return None
     return make_candidate_record(
@@ -595,6 +762,7 @@ def fallback_candidate(request: Dict[str, Any], policy: SpaceTaskPolicy, resolve
             f"Resolved key: task={resolved_task}, space={resolved_space}.",
             f"Policy: {policy.name}.",
             "The selected/fallback output is an input interface accepted by the downstream application request, not merely a minimized semantic label.",
+            "For ADL, fallback uses AV-sample component transforms rather than a manual-only AV synchronization placeholder.",
         ],
         executable,
     )

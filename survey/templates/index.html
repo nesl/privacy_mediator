@@ -40,27 +40,104 @@
       font-weight: 600;
       margin-bottom: 0.45rem;
     }
+
+
+    .intro-section {
+      margin: 1.1rem 0;
+      padding: 0.95rem 1rem;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 0.7rem;
+      background: rgba(255, 255, 255, 0.62);
+    }
+    .intro-section h2 {
+      margin: 0 0 0.45rem 0;
+      font-size: 1.05rem;
+    }
+    .intro-section p {
+      margin: 0.45rem 0;
+    }
+    .intro-section ul {
+      margin: 0.45rem 0 0.2rem 1.15rem;
+      padding: 0;
+    }
+    .intro-section li {
+      margin: 0.3rem 0;
+    }
+    .important-note {
+      border-left: 4px solid rgba(40, 120, 255, 0.48);
+      background: rgba(40, 120, 255, 0.07);
+    }
+    .consent-note {
+      border-left: 4px solid rgba(46, 125, 50, 0.45);
+      background: rgba(46, 125, 50, 0.07);
+    }
+    .contact-list {
+      margin-top: 0.45rem;
+    }
   </style>
 </head>
 <body>
   <main class="container">
     <section id="start-card" class="card">
       <h1>Smart-Space Data Sharing Survey</h1>
-      <p>
-        You will review short smart-space scenarios. In this survey, a smart-space system means a monitoring device used in a home, rental, workplace, school, care setting, public area, or research living space.
-      </p>
-      <p class="muted">
-        Some questions may belong to the same general scenario, such as a particular task in a particular setting, but show different details. When a row is marked <strong>Changed</strong>, it means that row differs from the previous question. For each question, rate the version shown on that page as its own complete situation.
-      </p>
-      <p class="muted">
-        Your task is to rate how appropriate it is for the listed data to be shared in each version. Assume that only the listed data is saved or shared, and that only the named receiver gets it unless another party is explicitly stated.
-      </p>
-      <p class="muted">
-        Give your own personal judgment from the perspective of the person the data is about.
-      </p>
-      <p class="muted">
-        This study was reviewed by the UCLA Institutional Review Board and certified as exempt from IRB review under 45 CFR 46.104(d)(2) (Exempt Category 2).
-      </p>
+
+      <section class="intro-section">
+        <h2>What this survey is about</h2>
+        <p>
+          You will review short smart-space scenarios. In this survey, a smart-space system means a monitoring device used in a home, rental, workplace, care setting, public area, or research living space.
+        </p>
+        <p>
+          The scenarios ask about whether a monitoring device should share a particular kind of data, such as camera images, audio, stick-figure body outlines, or video with sound.
+        </p>
+      </section>
+
+      <section class="intro-section">
+        <h2>What you will do</h2>
+        <ul>
+          <li>For each page, rate how appropriate it is for the listed data to be shared in that situation.</li>
+          <li>Assume that only the listed data is saved or shared, and that only the named receiver gets it unless another party is explicitly stated.</li>
+          <li>Give your own personal judgment from the perspective of the person the data is about.</li>
+          <li>Some questions may belong to the same general scenario but show different details. When a row is marked <strong>Changed</strong>, it means that row differs from the previous question. Please rate each page as its own complete situation.</li>
+        </ul>
+      </section>
+
+      <section class="intro-section important-note">
+        <h2>Attention checks and scenario checks</h2>
+        <p>
+          This survey includes attention checks. Some checks will explicitly tell you which answer to select. Please read each page carefully and follow the instructions.
+        </p>
+        <p>
+          In line with Prolific's attention-check policy, submissions may be rejected for failed attention checks when the checks meet Prolific's requirements. We review submissions fairly and holistically.
+        </p>
+        <p>
+          Some pages may also include short scenario-check questions that ask about information shown on the page. These are used to help assess understanding of the scenario and are recorded separately from attention checks.
+        </p>
+      </section>
+
+      <section class="intro-section consent-note">
+        <h2>Voluntary participation and agreement</h2>
+        <p>
+          Participation is voluntary. You may stop at any time by closing the survey or returning the study on Prolific. Your payment and study completion are handled through Prolific according to the study listing and Prolific's rules.
+        </p>
+        <p>
+          Please do not include names, addresses, phone numbers, or other identifying information in the optional note boxes.
+        </p>
+        <p>
+          By clicking <strong>Start survey</strong>, you confirm that you have read this information and agree to take part.
+        </p>
+      </section>
+
+      <section class="intro-section">
+        <h2>IRB exemption and questions</h2>
+        <p>
+          Exempt Certification: This research has been certified as exempt from IRB review by the UCLA Institutional Review Board under 45 CFR 46.104(d)(2) (Exempt Category 2).
+        </p>
+        <div class="contact-list">
+          <p><strong>Study contact:</strong> Brian Wang, <a href="mailto:wangbri1@g.ucla.edu">wangbri1@g.ucla.edu</a></p>
+          <p><strong>Questions about participant rights:</strong> UCLA Office of the Human Research Protection Program, <a href="mailto:ohrpp@research.ucla.edu">ohrpp@research.ucla.edu</a>, (310) 825-5344</p>
+        </div>
+      </section>
+
       <div class="form-row">
         <label for="participant-code">Participant code/number</label>
         <input id="participant-code" type="text" placeholder="Enter your participant code/number" required />

@@ -6,7 +6,8 @@
     "The core abstraction is a dataflow graph with typed ports. Ports advertise caps: media caps for stream-like data, semantic caps for derived observations/events, and policy/control caps for non-payload decisions.",
     "The design borrows GStreamer-style caps/ports for internal compatibility, WoT-style properties/actions/events for application-facing affordances, SOSA/SSN-style sensor/observation terms for sensing records, DPV terms for privacy/processing measures, ODRL-like terms for permissions/prohibitions/duties, and Peekaboo-style fixed chainable operators/manifests.",
     "Each operator declares input caps, output caps, parameters, transformation effects, residual disclosure effects, and utility capabilities. Pipeline composition is valid only when each downstream input cap is compatible with an upstream output cap or an explicit adapter exists.",
-    "Residual disclosure annotations are defaults/prior metadata; they should be calibrated by empirical leakage probes when data is available."
+    "Residual disclosure annotations are defaults/prior metadata; they should be calibrated by empirical leakage probes when data is available.",
+    "This revision adds synchronized AV-sample caps and component-wise AV transforms for fixed-interface multimodal downstream applications such as YouHome ADL."
   ],
   "source_registry": {
     "gstreamer": {
@@ -197,6 +198,11 @@
           "cap": "application/x-aggregate",
           "source": "dpv + smartpriv",
           "meaning": "Spatial/temporal/category aggregate derived from lower-level observations."
+        },
+        {
+          "cap": "application/x-youhome-av-sample",
+          "source": "smartpriv + gstreamer-style",
+          "meaning": "A synchronized audio/video sample or manifest item containing image/video frames and audio waveform references for a fixed-interface AV downstream model."
         }
       ]
     },
@@ -1376,6 +1382,77 @@
         "require_review"
       ],
       "default_residual_disclosure_effects": {}
+    },
+    {
+      "operator_class": "youhome_av_adapter",
+      "category": "dataflow_utility",
+      "source": "gstreamer + wot + smartpriv",
+      "display_name": "YouHome AV Adapter",
+      "description": "Normalizes a synchronized image/audio manifest or sample to the application/x-youhome-av-sample interface expected by a YouHome-style AV model.",
+      "input_caps": [
+        "application/x-youhome-av-sample",
+        "application/x-sensor-reading"
+      ],
+      "output_caps": [
+        "application/x-youhome-av-sample"
+      ],
+      "parameters": [
+        "preserve_alignment",
+        "target_schema"
+      ],
+      "utility_capabilities": [
+        "youhome_av_compatibility",
+        "format_preserving_av",
+        "adl_recognition"
+      ],
+      "transformation_effects": [
+        "synchronized_av_window",
+        "schema_normalization"
+      ],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "all_input_residual_attributes"
+        ]
+      }
+    },
+    {
+      "operator_class": "av_component_transformer",
+      "category": "multimodal_minimization",
+      "source": "gstreamer + dpv + smartpriv",
+      "display_name": "AV Component Transformer",
+      "description": "Applies privacy transformations to one component of a synchronized AV sample while preserving the downstream AV interface.",
+      "input_caps": [
+        "application/x-youhome-av-sample"
+      ],
+      "output_caps": [
+        "application/x-youhome-av-sample"
+      ],
+      "parameters": [
+        "target_component",
+        "method",
+        "preserve_shape"
+      ],
+      "utility_capabilities": [
+        "format_preserving_av",
+        "youhome_av_compatibility"
+      ],
+      "transformation_effects": [
+        "face_blurred",
+        "speech_content_removed",
+        "modality_suppressed"
+      ],
+      "default_residual_disclosure_effects": {
+        "reduce": [
+          "identity",
+          "face",
+          "speech_content",
+          "speaker_identity"
+        ],
+        "preserve": [
+          "activity",
+          "temporal_alignment"
+        ]
+      }
     }
   ],
   "application_contract_terms": {

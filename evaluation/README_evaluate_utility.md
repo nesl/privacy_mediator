@@ -2,7 +2,7 @@
 
 python -m evaluation.generate_pipelines_for_all_contexts \
   --operators norms/operator_contracts.json \
-  --contexts survey/data/ci_focused_user_study_context_only_dedup_32_no_output_readable.json \
+  --contexts survey/data/ci_focused_user_study_context.json \
   --app-request-dir app_requests/templates \
   --candidate-generator mediator/generate_pipeline_candidates.py \
   --constraints norms/ci_constraints.json \

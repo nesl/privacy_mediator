@@ -1008,6 +1008,208 @@ class SpeechContentRemovalOperator(Operator):
 
 
 # ---------------------------------------------------------------------------
+# Multimodal AV packaging and component-wise minimization
+# ---------------------------------------------------------------------------
+
+
+def _av_base_caps(existing: Dict[str, Any], **flags: Any) -> Dict[str, Any]:
+    """Return caps for a YouHome-compatible audio/video sample."""
+    props = dict(existing.get("properties", {}) or {})
+    props.update({k: v for k, v in flags.items() if v is not None})
+    props.setdefault("components", [
+        {"media_type": "image/x-raw", "schema": "youhome_video_frames", "role": "visual"},
+        {"media_type": "audio/x-raw", "schema": "youhome_audio_waveform", "role": "audio"},
+    ])
+    props.setdefault("sensorPrimitive", ["image_frame", "audio_waveform"])
+    return merge_caps(existing, {
+        "semantic_type": "application/x-youhome-av-sample",
+        "schema": "youhome_av_manifest_or_sample",
+        "properties": props,
+    })
+
+
+def _copy_av_data(data: Any) -> Any:
+    if isinstance(data, dict):
+        out: Dict[str, Any] = {}
+        for k, v in data.items():
+            if isinstance(v, np.ndarray):
+                out[k] = v.copy()
+            elif isinstance(v, list):
+                out[k] = [x.copy() if isinstance(x, np.ndarray) else x for x in v]
+            else:
+                out[k] = v
+        return out
+    return data
+
+
+def _av_frame_key(data: Any) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    for key in ["frames", "video_frames", "images", "image_frames"]:
+        if isinstance(data.get(key), list) and all(isinstance(x, np.ndarray) for x in data.get(key, [])):
+            return key
+    for key in ["frame", "image"]:
+        if isinstance(data.get(key), np.ndarray):
+            return key
+    return None
+
+
+def _av_get_frames(data: Any) -> List[np.ndarray]:
+    key = _av_frame_key(data)
+    if key is None or not isinstance(data, dict):
+        return []
+    value = data.get(key)
+    if isinstance(value, list):
+        return [x for x in value if isinstance(x, np.ndarray)]
+    if isinstance(value, np.ndarray):
+        return [value]
+    return []
+
+
+def _av_set_frames(data: Any, frames: List[np.ndarray]) -> Any:
+    out = _copy_av_data(data)
+    if not isinstance(out, dict):
+        return out
+    key = _av_frame_key(out) or "frames"
+    if key in {"frame", "image"}:
+        out[key] = frames[0] if frames else out.get(key)
+    else:
+        out[key] = frames
+    return out
+
+
+def _av_audio_key(data: Any) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    for key in ["audio", "waveform", "audio_waveform"]:
+        if isinstance(data.get(key), np.ndarray):
+            return key
+    return None
+
+
+def _av_get_audio(data: Any, metadata: Dict[str, Any]) -> Tuple[Optional[np.ndarray], int]:
+    key = _av_audio_key(data)
+    if key is None or not isinstance(data, dict):
+        return None, int(metadata.get("sample_rate") or metadata.get("sr") or 16000)
+    return np.asarray(data[key], dtype=np.float32), int(data.get("sample_rate") or metadata.get("sample_rate") or metadata.get("sr") or 16000)
+
+
+def _av_set_audio(data: Any, audio: np.ndarray, sr: int) -> Any:
+    out = _copy_av_data(data)
+    if not isinstance(out, dict):
+        return out
+    key = _av_audio_key(out) or "audio"
+    out[key] = audio
+    out["sample_rate"] = sr
+    return out
+
+
+@register
+class YouHomeAVAdapterOperator(Operator):
+    operator_id = "op.youhome_av_adapter"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        """Normalize a manifest/sample-like item into the YouHome AV sample cap.
+
+        This operator is an interface adapter: it does not infer activities or
+        alter content. It is useful when the runtime item already represents a
+        synchronized image/audio sample but its caps have not yet been normalized.
+        """
+        caps = _av_base_caps(item.caps, av_synchronized=True, youhome_av_compatible=True)
+        return item.clone(caps=caps, metadata={"av_adapter": "youhome_av_manifest_or_sample"})
+
+
+@register
+class AVVisualRedactOperator(Operator):
+    operator_id = "op.av_visual_redact"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        frames = _av_get_frames(item.data)
+        caps = _av_base_caps(
+            item.caps,
+            visual_redacted=True,
+            redacted=True,
+            youhome_av_compatible=True,
+        )
+        if not frames:
+            return item.clone(caps=caps, metadata={"av_visual_redact": "metadata_only_no_frame_payload"})
+        targets = self.params.get("targets") or self.params.get("target") or ["face", "screen"]
+        redact = RegionMaskBlurOperator(targets=targets, method=self.params.get("method", "blur"), strength=self.params.get("strength", 25))
+        redacted_frames: List[np.ndarray] = []
+        for frame in frames:
+            frame_item = DataItem(
+                caps={"media_type": "image/x-raw", "schema": "raw_image_frame"},
+                data=frame,
+                annotations=list(item.annotations),
+                metadata=dict(item.metadata),
+            )
+            out = redact.apply(frame_item)
+            redacted_frames.append(out.data if out is not None and isinstance(out.data, np.ndarray) else frame)
+        data = _av_set_frames(item.data, redacted_frames)
+        return item.clone(caps=caps, data=data, metadata={"av_visual_redacted": True, "redacted_frames": len(redacted_frames)})
+
+
+@register
+class AVAudioSpeechFilterOperator(Operator):
+    operator_id = "op.av_audio_speech_filter"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        audio, sr = _av_get_audio(item.data, item.metadata)
+        caps = _av_base_caps(
+            item.caps,
+            speech_content_removed=True,
+            audio_filtered=True,
+            youhome_av_compatible=True,
+        )
+        if audio is None:
+            return item.clone(caps=caps, metadata={"av_audio_speech_filter": "metadata_only_no_audio_payload"})
+        filt = SpeechContentRemovalOperator(mode=self.params.get("mode", "remove_speech_segments"))
+        audio_item = DataItem(caps={"media_type": "audio/x-raw", "schema": "raw_audio_waveform"}, data=audio, metadata={**dict(item.metadata), "sample_rate": sr})
+        out = filt.apply(audio_item)
+        filtered = out.data if out is not None and isinstance(out.data, np.ndarray) else audio
+        data = _av_set_audio(item.data, filtered, sr)
+        return item.clone(caps=caps, data=data, metadata={"av_audio_speech_filtered": True, "sample_rate": sr})
+
+
+@register
+class AVAudioSilenceOperator(Operator):
+    operator_id = "op.av_audio_silence"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        audio, sr = _av_get_audio(item.data, item.metadata)
+        caps = _av_base_caps(
+            item.caps,
+            audio_silenced=True,
+            speech_content_removed=True,
+            speaker_identity_removed=True,
+            youhome_av_compatible=True,
+        )
+        if audio is None:
+            return item.clone(caps=caps, metadata={"av_audio_silence": "metadata_only_no_audio_payload"})
+        data = _av_set_audio(item.data, np.zeros_like(audio), sr)
+        return item.clone(caps=caps, data=data, metadata={"av_audio_silenced": True, "sample_rate": sr})
+
+
+@register
+class AVVideoBlackoutOperator(Operator):
+    operator_id = "op.av_video_blackout"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        frames = _av_get_frames(item.data)
+        caps = _av_base_caps(
+            item.caps,
+            visual_suppressed=True,
+            video_blackout=True,
+            youhome_av_compatible=True,
+        )
+        if not frames:
+            return item.clone(caps=caps, metadata={"av_video_blackout": "metadata_only_no_frame_payload"})
+        blanked = [np.zeros_like(frame) for frame in frames]
+        data = _av_set_frames(item.data, blanked)
+        return item.clone(caps=caps, data=data, metadata={"av_video_blackout": True, "blanked_frames": len(blanked)})
+
+
+# ---------------------------------------------------------------------------
 # Derived representations and minimization
 # ---------------------------------------------------------------------------
 

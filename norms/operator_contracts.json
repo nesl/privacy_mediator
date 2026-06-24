@@ -108,6 +108,31 @@
         {
           "semantic_type": "application/x-sensor-reading",
           "schema": "scalar_or_event_sensor_reading"
+        },
+        {
+          "semantic_type": "application/x-youhome-av-sample",
+          "content_type": "av_content",
+          "schema": "youhome_av_manifest_or_sample",
+          "properties": {
+            "sensorPrimitive": [
+              "image_frame",
+              "audio_waveform"
+            ],
+            "components": [
+              {
+                "media_type": "image/x-raw",
+                "schema": "youhome_video_frames",
+                "role": "visual"
+              },
+              {
+                "media_type": "audio/x-raw",
+                "schema": "youhome_audio_waveform",
+                "role": "audio"
+              }
+            ],
+            "av_synchronized": true,
+            "youhome_av_compatible": true
+          }
         }
       ],
       "utility_capabilities": [
@@ -158,6 +183,21 @@
             "activity": "low",
             "location": "low",
             "aggregate_presence": "medium"
+          },
+          "av_content": {
+            "identity": "high",
+            "face": "high",
+            "body_shape": "high",
+            "clothing": "high",
+            "gait": "medium",
+            "speech_content": "high",
+            "speaker_identity": "high",
+            "activity": "high",
+            "location": "high",
+            "trajectory": "high",
+            "co_presence": "high",
+            "visible_text": "medium",
+            "aggregate_presence": "high"
           }
         },
         "notes": "Initial disclosure depends on device/modality/space metadata."
@@ -609,6 +649,459 @@
         "pipelineStage": "intermediate_representation"
       },
       "composition_notes": "Only valid if the adapter declares an explicit conversion from upstream caps to target caps."
+    },
+    {
+      "id": "op.youhome_av_adapter",
+      "label": "YouHome AV Adapter",
+      "category": "dataflow_utility",
+      "operator_kind": "adapter",
+      "vocabulary_sources": [
+        "GStreamer:caps adapter",
+        "WoT:manifest affordance",
+        "smartpriv:YouHome AV sample"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample"
+        },
+        {
+          "semantic_type": "application/x-sensor-reading",
+          "schema": "youhome_manifest_row"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample",
+          "schema": "youhome_av_manifest_or_sample",
+          "properties": {
+            "sensorPrimitive": [
+              "image_frame",
+              "audio_waveform"
+            ],
+            "components": [
+              {
+                "media_type": "image/x-raw",
+                "schema": "youhome_video_frames",
+                "role": "visual"
+              },
+              {
+                "media_type": "audio/x-raw",
+                "schema": "youhome_audio_waveform",
+                "role": "audio"
+              }
+            ],
+            "youhome_av_compatible": true
+          }
+        }
+      ],
+      "parameters": {
+        "preserve_alignment": "boolean",
+        "target_schema": "youhome_av_manifest_or_sample"
+      },
+      "utility_capabilities": [
+        "adl_recognition",
+        "av_adl_input_compatibility",
+        "youhome_av_compatibility",
+        "format_preserving_av",
+        "output_compatibility"
+      ],
+      "transformation_effects": [
+        "synchronized_av_window",
+        "schema_normalization"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {},
+        "reduce": {},
+        "preserve": [],
+        "add": {},
+        "notes": "Packaging preserves the underlying synchronized image/audio content and only normalizes the downstream interface."
+      },
+      "ci_annotations": {
+        "pipelineStage": "intermediate_representation",
+        "informationType.sensorPrimitive": [
+          "image_frame",
+          "audio_waveform"
+        ],
+        "transmissionPrinciple": [
+          "purpose_limited"
+        ]
+      },
+      "composition_notes": "Normalizes a manifest/sample-like item to the YouHome AV input interface. It is not an inference or privacy transformation by itself."
+    },
+    {
+      "id": "op.av_visual_redact",
+      "label": "AV Visual Redaction",
+      "category": "multimodal_minimization",
+      "operator_kind": "component_transformer",
+      "vocabulary_sources": [
+        "DPV:DataRedaction",
+        "GStreamer:component-preserving transform",
+        "smartpriv:AV component transform"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample",
+          "schema": "youhome_av_manifest_or_sample",
+          "properties": {
+            "sensorPrimitive": [
+              "image_frame",
+              "audio_waveform"
+            ],
+            "components": [
+              {
+                "media_type": "image/x-redacted",
+                "schema": "redacted_image_frame",
+                "role": "visual"
+              },
+              {
+                "media_type": "audio/x-raw",
+                "schema": "youhome_audio_waveform",
+                "role": "audio"
+              }
+            ],
+            "youhome_av_compatible": true,
+            "visual_redacted": true,
+            "redacted": true
+          }
+        }
+      ],
+      "parameters": {
+        "targets": "list of visual regions such as face, body, screen",
+        "method": [
+          "blur",
+          "mask",
+          "pixelate"
+        ],
+        "strength": "integer"
+      },
+      "utility_capabilities": [
+        "adl_recognition",
+        "av_adl_input_compatibility",
+        "youhome_av_compatibility",
+        "format_preserving_av",
+        "identity_reduction"
+      ],
+      "transformation_effects": [
+        "face_blurred",
+        "identity_removed",
+        "visible_text_removed",
+        "data_minimized"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {
+          "identity": "medium",
+          "face": "low",
+          "visible_text": "low",
+          "clothing": "medium"
+        },
+        "reduce": {
+          "body_shape": "by_1_level"
+        },
+        "preserve": [
+          "speech_content",
+          "speaker_identity",
+          "activity"
+        ],
+        "add": {
+          "transmissionPrinciple": [
+            "data_minimized"
+          ]
+        },
+        "notes": "Redacts visual components while preserving the synchronized AV manifest/sample interface."
+      },
+      "ci_annotations": {
+        "pipelineStage": "intermediate_representation",
+        "informationType.sensorPrimitive": [
+          "image_frame",
+          "audio_waveform"
+        ],
+        "transmissionPrinciple": [
+          "data_minimized",
+          "face_blurred"
+        ]
+      },
+      "composition_notes": "Can be followed by audio component transforms while staying compatible with a YouHome AV downstream model."
+    },
+    {
+      "id": "op.av_audio_speech_filter",
+      "label": "AV Audio Speech Filter",
+      "category": "multimodal_minimization",
+      "operator_kind": "component_transformer",
+      "vocabulary_sources": [
+        "DPV:DataMinimisation",
+        "GStreamer:audio filter",
+        "smartpriv:AV component transform"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample",
+          "schema": "youhome_av_manifest_or_sample",
+          "properties": {
+            "sensorPrimitive": [
+              "image_frame",
+              "audio_waveform"
+            ],
+            "components": [
+              {
+                "media_type": "image/x-raw",
+                "schema": "youhome_video_frames",
+                "role": "visual"
+              },
+              {
+                "media_type": "audio/x-filtered",
+                "schema": "speech_removed_audio_waveform",
+                "role": "audio"
+              }
+            ],
+            "youhome_av_compatible": true,
+            "speech_content_removed": true,
+            "audio_filtered": true
+          }
+        }
+      ],
+      "parameters": {
+        "mode": [
+          "remove_speech_segments",
+          "voice_anonymize"
+        ]
+      },
+      "utility_capabilities": [
+        "adl_recognition",
+        "av_adl_input_compatibility",
+        "youhome_av_compatibility",
+        "format_preserving_av",
+        "voice_privacy"
+      ],
+      "transformation_effects": [
+        "speech_content_removed",
+        "speech_content_minimized",
+        "data_minimized"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [],
+        "set": {
+          "speech_content": "low",
+          "speaker_identity": "low"
+        },
+        "reduce": {},
+        "preserve": [
+          "activity",
+          "identity",
+          "face"
+        ],
+        "add": {
+          "transmissionPrinciple": [
+            "speech_content_removed",
+            "data_minimized"
+          ]
+        },
+        "notes": "Filters the audio component but preserves synchronized AV shape and visual content."
+      },
+      "ci_annotations": {
+        "pipelineStage": "intermediate_representation",
+        "informationType.sensorPrimitive": [
+          "image_frame",
+          "audio_waveform"
+        ],
+        "transmissionPrinciple": [
+          "speech_content_removed",
+          "data_minimized"
+        ]
+      },
+      "composition_notes": "Useful when the downstream model needs an audio tensor but speech content should be minimized."
+    },
+    {
+      "id": "op.av_audio_silence",
+      "label": "AV Audio Silence",
+      "category": "multimodal_minimization",
+      "operator_kind": "component_suppressor",
+      "vocabulary_sources": [
+        "GStreamer:audio mute",
+        "smartpriv:modality suppression"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample",
+          "schema": "youhome_av_manifest_or_sample",
+          "properties": {
+            "sensorPrimitive": [
+              "image_frame",
+              "audio_waveform"
+            ],
+            "components": [
+              {
+                "media_type": "image/x-raw",
+                "schema": "youhome_video_frames",
+                "role": "visual"
+              },
+              {
+                "media_type": "audio/x-raw",
+                "schema": "youhome_audio_waveform",
+                "role": "audio"
+              }
+            ],
+            "youhome_av_compatible": true,
+            "audio_silenced": true,
+            "speech_content_removed": true,
+            "speaker_identity_removed": true
+          }
+        }
+      ],
+      "parameters": {
+        "fill_value": "number, default 0",
+        "preserve_shape": "boolean"
+      },
+      "utility_capabilities": [
+        "av_interface_preservation",
+        "modality_ablation_for_validation"
+      ],
+      "transformation_effects": [
+        "audio_silenced",
+        "speech_content_removed",
+        "speaker_identity_removed",
+        "modality_suppressed"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [
+          "speech_content",
+          "speaker_identity"
+        ],
+        "set": {},
+        "reduce": {
+          "co_presence": "by_1_level"
+        },
+        "preserve": [
+          "identity",
+          "face",
+          "activity"
+        ],
+        "add": {
+          "transmissionPrinciple": [
+            "speech_content_removed"
+          ]
+        },
+        "notes": "Preserves AV tensor/manifest shape but removes the audio payload. Use only when the app contract or validation permits missing/silent audio."
+      },
+      "ci_annotations": {
+        "pipelineStage": "intermediate_representation",
+        "transmissionPrinciple": [
+          "speech_content_removed",
+          "modality_suppressed"
+        ]
+      },
+      "composition_notes": "Primarily for controlled missing-modality or ablation settings; fixed AV contracts can forbid this transform."
+    },
+    {
+      "id": "op.av_video_blackout",
+      "label": "AV Video Blackout",
+      "category": "multimodal_minimization",
+      "operator_kind": "component_suppressor",
+      "vocabulary_sources": [
+        "GStreamer:video test/black frame",
+        "smartpriv:modality suppression"
+      ],
+      "input_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample"
+        }
+      ],
+      "output_caps": [
+        {
+          "semantic_type": "application/x-youhome-av-sample",
+          "schema": "youhome_av_manifest_or_sample",
+          "properties": {
+            "sensorPrimitive": [
+              "image_frame",
+              "audio_waveform"
+            ],
+            "components": [
+              {
+                "media_type": "image/x-raw",
+                "schema": "youhome_video_frames",
+                "role": "visual"
+              },
+              {
+                "media_type": "audio/x-raw",
+                "schema": "youhome_audio_waveform",
+                "role": "audio"
+              }
+            ],
+            "youhome_av_compatible": true,
+            "visual_suppressed": true,
+            "video_blackout": true
+          }
+        }
+      ],
+      "parameters": {
+        "fill_value": "number, default 0",
+        "preserve_shape": "boolean"
+      },
+      "utility_capabilities": [
+        "av_interface_preservation",
+        "modality_ablation_for_validation"
+      ],
+      "transformation_effects": [
+        "video_suppressed",
+        "visual_content_removed",
+        "modality_suppressed"
+      ],
+      "residual_disclosure_effect": {
+        "default_policy": "preserve_unmentioned",
+        "remove": [
+          "identity",
+          "face",
+          "body_shape",
+          "clothing",
+          "gait",
+          "visible_text",
+          "trajectory"
+        ],
+        "set": {},
+        "reduce": {
+          "location": "by_1_level",
+          "co_presence": "by_1_level"
+        },
+        "preserve": [
+          "speech_content",
+          "speaker_identity",
+          "activity"
+        ],
+        "add": {
+          "transmissionPrinciple": [
+            "data_minimized"
+          ]
+        },
+        "notes": "Preserves AV tensor/manifest shape but removes visual payload. Use only when the app contract or validation permits missing/blank video."
+      },
+      "ci_annotations": {
+        "pipelineStage": "intermediate_representation",
+        "transmissionPrinciple": [
+          "data_minimized",
+          "modality_suppressed"
+        ]
+      },
+      "composition_notes": "Primarily for controlled missing-modality or ablation settings; fixed AV contracts can forbid this transform."
     },
     {
       "id": "op.person_object_detector",
@@ -1256,7 +1749,9 @@
           "media_type": "audio/x-filtered",
           "properties": {
             "speech_content_removed": true
-          }
+          },
+          "schema": "speech_removed_audio_waveform",
+          "content_type": "audio_content"
         },
         {
           "semantic_type": "application/x-redacted-transcript"
