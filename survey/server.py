@@ -25,7 +25,7 @@ Outputs:
 """
 from __future__ import annotations
 
-import argparse, csv, hashlib, json, mimetypes, random, sqlite3, time, uuid
+import argparse, csv, hashlib, json, mimetypes, os, random, sqlite3, time, uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,6 +40,14 @@ DEFAULT_DB = ROOT / "outputs" / "responses.db"
 # ROOT.parent is the project root.
 DEFAULT_PIPELINE_OUTPUT_DIR = ROOT.parent / "runs" / "context_pipeline_generation"
 OFFLINE_METHODS = ["raw", "manual", "direct_llm", "full_mediator"]
+
+# Server-side only: this Prolific completion URL is intentionally not embedded in
+# index.html.  The browser is redirected through /api/session/<id>/complete_redirect
+# after the server has recorded that the assigned survey is complete.
+PROLIFIC_COMPLETION_URL = os.environ.get(
+    "PROLIFIC_COMPLETION_URL",
+    "https://app.prolific.com/submissions/complete?cc=C1FYCZFY",
+)
 
 # Participant-facing task labels. These do not change the normalized task values
 # stored in the scenario JSON or exported in machine-readable fields.
@@ -1309,6 +1317,24 @@ def update_session_progress(db_path: Path, session_id: str, total_assigned: int)
         "completed_at_ms": completed_at,
     }
 
+
+
+
+def session_is_complete(db_path: Path, session_id: str) -> Tuple[bool, Optional[str]]:
+    """Return whether the participant has answered every assigned item."""
+    session = get_session(db_path, session_id)
+    if not session:
+        return False, None
+    assigned_count = len(session.get("assignment") or [])
+    answered_count = len(get_responses_for_session(db_path, session_id))
+    return assigned_count > 0 and answered_count >= assigned_count, session.get("participant_id")
+
+
+def redirect_response(handler: BaseHTTPRequestHandler, location: str, status: int = 302) -> None:
+    handler.send_response(status)
+    handler.send_header("Location", location)
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
 
 def assign_items(
     items: List[Dict[str, Any]],
@@ -3205,6 +3231,18 @@ def make_handler(state: SurveyState):
 
         def handle_session_get(self, path: str) -> None:
             parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[3] == "complete_redirect":
+                complete, participant_id = session_is_complete(state.config.db_path, parts[2])
+                if not participant_id:
+                    return json_response(self, {"error": "unknown session"}, 404)
+                if not complete:
+                    return json_response(self, {"error": "session is not complete yet"}, 403)
+                return redirect_response(self, PROLIFIC_COMPLETION_URL)
+            if len(parts) == 4 and parts[3] == "completion_status":
+                complete, participant_id = session_is_complete(state.config.db_path, parts[2])
+                if not participant_id:
+                    return json_response(self, {"error": "unknown session"}, 404)
+                return json_response(self, {"completed": complete, "participant_id": participant_id, "redirect_path": f"/api/session/{parts[2]}/complete_redirect" if complete else None})
             if len(parts) == 3:
                 session = get_session(state.config.db_path, parts[2])
                 if not session:

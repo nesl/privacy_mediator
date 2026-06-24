@@ -206,7 +206,7 @@
     <section id="done-card" class="card hidden">
       <h1>Thank you</h1>
       <p>You have completed the assigned survey questions.</p>
-      <p class="muted">Your responses have been saved on the survey server.</p>
+      <p class="muted">Your responses have been saved. You will be redirected to Prolific to record completion.</p>
     </section>
   </main>
   <script>
@@ -252,11 +252,20 @@
       // The existing app.js starts the session by POSTing to /api/start.  This
       // wrapper appends Prolific URL parameters to that request without requiring
       // changes to the rest of the front-end code.
+      function sessionIdFromSubmitUrl(url) {
+        const match = String(url || "").match(/\/api\/session\/([^/]+)\/submit(?:$|[?#])/);
+        return match ? decodeURIComponent(match[1]) : "";
+      }
+
       const originalFetch = window.fetch;
       window.fetch = function (input, init) {
+        let requestUrl = "";
+        let isStartRequest = false;
+        let submitSessionId = "";
         try {
-          const url = (typeof input === "string") ? input : (input && input.url) || "";
-          const isStartRequest = url.endsWith("/api/start") || url === "/api/start";
+          requestUrl = (typeof input === "string") ? input : (input && input.url) || "";
+          isStartRequest = requestUrl.endsWith("/api/start") || requestUrl === "/api/start";
+          submitSessionId = sessionIdFromSubmitUrl(requestUrl);
           if (isStartRequest && init && init.body) {
             const body = JSON.parse(init.body);
             body.prolific_pid = body.prolific_pid || prolific.prolific_pid;
@@ -275,7 +284,25 @@
         } catch (err) {
           // If the request is not JSON or not the start request, leave it unchanged.
         }
-        return originalFetch.call(this, input, init);
+
+        const responsePromise = originalFetch.call(this, input, init);
+        if (!submitSessionId) {
+          return responsePromise;
+        }
+        return responsePromise.then(function (response) {
+          try {
+            response.clone().json().then(function (data) {
+              if (data && data.completed) {
+                window.setTimeout(function () {
+                  window.location.assign("/api/session/" + encodeURIComponent(submitSessionId) + "/complete_redirect");
+                }, 350);
+              }
+            }).catch(function () {});
+          } catch (err) {
+            // Leave normal survey behavior unchanged if completion detection fails.
+          }
+          return response;
+        });
       };
 
       if (document.readyState === "loading") {
