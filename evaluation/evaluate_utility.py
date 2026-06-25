@@ -77,7 +77,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-EVALUATE_UTILITY_PATCH_VERSION = "2026-06-fall-pose-log-preflight-deps"
+EVALUATE_UTILITY_PATCH_VERSION = "2026-06-adl-youhome-av-preserve-audio-root"
 
 try:
     from tqdm.auto import tqdm
@@ -625,6 +625,91 @@ def is_video_cap(cap: Optional[Dict[str, Any]]) -> bool:
 
 def is_audio_cap(cap: Optional[Dict[str, Any]]) -> bool:
     return cap_type(cap).startswith("audio/") or "audio" in cap_schema(cap)
+
+
+def is_youhome_av_cap(cap: Optional[Dict[str, Any]]) -> bool:
+    """Return True for the YouHome ADL AV interface used by generated pipelines.
+
+    The generator represents ADL-compatible outputs as an application-level AV
+    sample rather than as a plain image/video/audio media cap.  Downstream
+    inference still consumes a YouHome manifest containing visual and audio
+    paths, so the utility evaluator must treat this cap as materializable.
+    """
+    if not cap:
+        return False
+    t = cap_type(cap)
+    s = cap_schema(cap)
+    content_type = str(cap.get("content_type") or "")
+    props = cap.get("properties") if isinstance(cap.get("properties"), dict) else {}
+    if t == "application/x-youhome-av-sample":
+        return True
+    if s in {"youhome_av_manifest_or_sample", "youhome_av_manifest", "youhome_av_sample"}:
+        return True
+    if "youhome_av" in s:
+        return True
+    if content_type == "av_content" and bool(props.get("youhome_av_compatible")):
+        return True
+    return False
+
+
+def metric_int_value(result: Dict[str, Any], key: str) -> Optional[int]:
+    """Best-effort integer extraction from flattened or nested metric fields."""
+    if key in result and result.get(key) not in (None, ""):
+        try:
+            return int(float(str(result.get(key))))
+        except Exception:
+            pass
+    downstream = result.get("downstream") if isinstance(result.get("downstream"), dict) else {}
+    metrics = downstream.get("metrics") if isinstance(downstream.get("metrics"), dict) else {}
+    nested_key = key[len("metric_"):] if key.startswith("metric_") else key
+    if isinstance(metrics, dict) and nested_key in metrics and metrics.get(nested_key) not in (None, ""):
+        try:
+            return int(float(str(metrics.get(nested_key))))
+        except Exception:
+            pass
+    metrics_json = downstream.get("metrics_json") if isinstance(downstream, dict) else None
+    if metrics_json and Path(str(metrics_json)).exists():
+        try:
+            loaded = load_json(metrics_json)
+            if isinstance(loaded, dict) and nested_key in loaded and loaded.get(nested_key) not in (None, ""):
+                return int(float(str(loaded.get(nested_key))))
+        except Exception:
+            pass
+    return None
+
+
+def existing_result_has_known_adl_missing_audio_bug(result: Dict[str, Any], row: "MethodRow") -> bool:
+    """Detect old resumed ADL runs where AV manifests lost their audio root.
+
+    Earlier versions of the evaluator accepted application/x-youhome-av-sample
+    by routing it through generic media materialization, but returned
+    data_root=None.  The preprocessed manifest therefore kept relative
+    audio_path values that the YouHome dataset could not resolve, producing
+    missing_audio_samples == n.  Such rows are operationally 'ok' but should be
+    invalidated and recomputed with the fixed AV adapter.
+    """
+    if row.task != "adl_recognition":
+        return False
+    cap = {
+        "semantic_type": row.final_output_type if str(row.final_output_type).startswith("application/") else None,
+        "media_type": row.final_output_type if not str(row.final_output_type).startswith("application/") else None,
+        "schema": row.final_output_schema,
+    }
+    if not is_youhome_av_cap(cap):
+        return False
+
+    prep = result.get("preprocessing") if isinstance(result.get("preprocessing"), dict) else {}
+    prep_status = str(prep.get("preprocessing_status") or result.get("preprocessing_status") or "")
+    # Raw/no-transform ADL outputs are expected to use the original manifest and
+    # should not be invalidated.
+    if "passthrough_raw_or_no_transform" in prep_status:
+        return False
+
+    missing_audio = metric_int_value(result, "metric_missing_audio_samples")
+    n = metric_int_value(result, "metric_n")
+    if missing_audio is None or n in (None, 0):
+        return False
+    return missing_audio >= n
 
 
 def has_pipeline_stage(spec: Optional[Dict[str, Any]], operator_id: str) -> bool:
@@ -2169,6 +2254,40 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
         prep["preprocessing_status"] = "audio_preprocessed_test_split"
         return out_manifest, None, prep
 
+    # YouHome ADL AV outputs are application-level caps, but the downstream
+    # classifier consumes the usual YouHome manifest with both visual and audio
+    # paths.  Generic media materialization previously returned data_root=None,
+    # which made the preserved relative audio_path values unresolvable and caused
+    # every preprocessed ADL row to report missing_audio_samples == n.
+    #
+    # We cannot assume the generated pipelines can be regenerated, so adapt the
+    # existing spec at evaluation time: materialize whatever visual/audio paths
+    # the runtime can produce, preserve companion modality columns from the
+    # source manifest, and keep the original data_root so untouched relative
+    # paths remain resolvable by YouHomeAVDataset.
+    if row.task == "adl_recognition" and is_youhome_av_cap(final_cap):
+        out_manifest = work_dir / "preprocessed_manifest.csv"
+        transformed = transform_manifest_with_pipeline(
+            manifest_for_eval,
+            data_root,
+            Path(row.pipeline_spec_json),
+            out_manifest,
+            work_dir / "preprocessed_youhome_av",
+            task=row.task,
+            split=None,
+            max_samples=None,
+            max_frames_per_sample=args.max_frames_per_sample,
+            dry_run=args.dry_run,
+        )
+        prep.update(transformed)
+        prep["preprocessing_status"] = "youhome_av_preprocessed_test_split"
+        prep["youhome_av_adapter"] = {
+            "policy": "materialize selected pipeline while preserving source companion modality paths",
+            "returned_data_root": str(data_root) if data_root else None,
+            "reason": "preserved relative audio_path/frame_dir/video_path entries need the original YouHome data root",
+        }
+        return out_manifest, data_root, prep
+
     # Visitor / ADL media outputs: materialize transformed manifest and use that.
     if is_image_cap(final_cap) or is_video_cap(final_cap) or is_audio_cap(final_cap):
         out_manifest = work_dir / "preprocessed_manifest.csv"
@@ -2186,6 +2305,8 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
         )
         prep.update(transformed)
         prep["preprocessing_status"] = "media_preprocessed_test_split"
+        # For single-modality transformed outputs we use absolute materialized
+        # paths and do not need the original data root.  ADL AV is handled above.
         return out_manifest, None, prep
 
     # Semantic outputs are not directly consumable by the attached downstream
@@ -2369,6 +2490,13 @@ def load_existing_completed_result(args: argparse.Namespace, row: MethodRow, cac
     # accidentally reusing a stale file after renaming methods or changing out_dir.
     if str(result.get("scenario_id")) != str(row.scenario_id) or str(result.get("method_id")) != str(row.method_id):
         progress_write(f"[resume] existing result identity mismatch in {result_path}; rerunning")
+        return None
+
+    if existing_result_has_known_adl_missing_audio_bug(result, row):
+        progress_write(
+            f"[resume] existing ADL AV result has missing_audio_samples == n; "
+            f"rerunning {row.scenario_id}/{row.method_id} with fixed YouHome AV manifest adapter"
+        )
         return None
 
     downstream = result.get("downstream") or {}
