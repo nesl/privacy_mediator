@@ -54,6 +54,21 @@ ATTRIBUTE_TO_INFORMATION_TYPE = {
 }
 
 
+CAP_TYPE_ALIASES = {
+    "application/x-sound-event-label": "application/x-sound-event",
+    "application/x-occupancy-count": "application/x-occupancy",
+    "application/x-binary-occupancy": "application/x-occupancy",
+    "application/x-activity-label": "application/x-activity-event",
+    "application/x-safety-event": "application/x-activity-event",
+    "application/x-security-event": "application/x-activity-event",
+}
+
+
+def normalize_cap_type(value: Any) -> str:
+    t = str(value or "").strip()
+    return CAP_TYPE_ALIASES.get(t, t)
+
+
 def load_json(path: str | Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -150,7 +165,7 @@ def all_present(flow: Dict[str, Any], dotted: str, required: Iterable[str]) -> b
 
 
 def detect_content_type_from_cap(cap: Dict[str, Any]) -> List[str]:
-    t = cap.get("semantic_type") or cap.get("media_type") or ""
+    t = normalize_cap_type(cap.get("semantic_type") or cap.get("media_type") or "")
     schema = cap.get("schema") or ""
     out: Set[str] = set()
     if t.startswith("video/") or "video" in t or "clip" in schema:
@@ -249,6 +264,16 @@ def construct_ci_flow(candidate: Dict[str, Any], request: Dict[str, Any], enviro
         transmission.update(as_str_list(sensor_stream.get("transmissionPrinciple")))
 
     information_type = merge_information_types(candidate)
+    final_cap = candidate.get("final_output_cap", {}) or {}
+    cap_props = final_cap.get("properties", {}) or {}
+    matched_meta = candidate.get("matched_output_metadata", {}) or {}
+    role = str(cap_props.get("representationRole") or cap_props.get("representation_role") or matched_meta.get("boundary_role") or "")
+    if cap_props.get("is_final_task_decision") is True or role == "final_task_decision_boundary":
+        transmission.add("final_task_decision")
+    if role in {"semantic_primitive", "aggregate_summary", "coarse_event_primitive", "reusable_perceptual_primitive"}:
+        transmission.add("semantic_minimization")
+    if role == "aggregate_summary":
+        transmission.add("aggregate_only")
     attributes = sorted(set(information_type["sensorPrimitive"] + information_type["interpretedObservation"] + information_type["inferredInformationType"]))
 
     metadata: Dict[str, Any] = {}
@@ -279,7 +304,7 @@ def construct_ci_flow(candidate: Dict[str, Any], request: Dict[str, Any], enviro
         "residual_disclosure": candidate.get("residual_disclosure", {}) or {},
         "final_output_cap": candidate.get("final_output_cap", {}) or {},
         "transforms": candidate.get("transforms", []) or [],
-        "tags": sorted(set(as_str_list(candidate.get("tags")))),
+        "tags": sorted(set(as_str_list(candidate.get("tags"))) | ({"semantic_minimized_flow"} if "semantic_minimization" in transmission else set())),
     }
 
 
@@ -777,6 +802,176 @@ def select_best(evaluations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return feasible[0]
 
 
+
+def _candidate_final_cap(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    return candidate.get("final_output_cap", {}) or {}
+
+
+def _candidate_cap_type(candidate: Dict[str, Any]) -> str:
+    cap = _candidate_final_cap(candidate)
+    return normalize_cap_type(cap.get("semantic_type") or cap.get("media_type") or "")
+
+
+def _candidate_cap_schema(candidate: Dict[str, Any]) -> str:
+    return str(_candidate_final_cap(candidate).get("schema") or "")
+
+
+def _candidate_operator_count(candidate: Dict[str, Any]) -> int:
+    return len(candidate.get("operators", []) or [])
+
+
+def _candidate_residual_score(candidate: Dict[str, Any]) -> int:
+    return int(candidate.get("residual_score", risk_score(candidate.get("residual_disclosure", {}) or {})))
+
+
+def _candidate_utility_priority(candidate: Dict[str, Any]) -> int:
+    """Lower is better.  Accepted-output caps commonly use priority fields."""
+    sources = [
+        candidate.get("matched_output_metadata", {}) or {},
+        _candidate_final_cap(candidate).get("properties", {}) or {},
+        _candidate_final_cap(candidate),
+    ]
+    for src in sources:
+        for key in ("utility_priority", "priority", "output_priority"):
+            if key in src:
+                try:
+                    return int(src.get(key))
+                except Exception:
+                    pass
+    return 999
+
+
+def _candidate_representation_role(candidate: Dict[str, Any]) -> str:
+    cap = _candidate_final_cap(candidate)
+    props = cap.get("properties", {}) or {}
+    meta = candidate.get("matched_output_metadata", {}) or {}
+    role = (
+        props.get("representationRole")
+        or props.get("representation_role")
+        or meta.get("boundary_role")
+        or meta.get("representation_role")
+    )
+    if role:
+        return str(role)
+    t = _candidate_cap_type(candidate)
+    schema = _candidate_cap_schema(candidate).lower()
+    if t.startswith(("image/", "video/", "audio/")):
+        if "redacted" in t or "filtered" in t or "redacted" in schema or "speech_removed" in schema:
+            return "format_preserving_redaction"
+        return "raw_or_media_compatible"
+    if "aggregate" in t or "aggregate" in schema or "summary" in schema:
+        return "aggregate_summary"
+    if "activity" in t or "safety" in t or "security" in t or schema in {"activity_label", "fall_or_safety_event"}:
+        return "task_decision_or_event"
+    if t.startswith("application/"):
+        return "semantic_primitive"
+    return "unknown"
+
+
+def _candidate_llm_bucket(candidate: Dict[str, Any]) -> str:
+    """Bucket candidates by app-facing interface so LLM judging is not residual-only."""
+    return "|".join([
+        _candidate_representation_role(candidate),
+        _candidate_cap_type(candidate),
+        _candidate_cap_schema(candidate),
+        str(candidate.get("matched_output_cap") or ""),
+    ])
+
+
+def _candidate_shortlist_sort_key(candidate: Dict[str, Any]) -> Tuple[int, int, int]:
+    # Utility priority first, then residual risk, then simpler chains.
+    return (_candidate_utility_priority(candidate), _candidate_residual_score(candidate), _candidate_operator_count(candidate))
+
+
+def select_candidates_for_llm(
+    candidates: List[Dict[str, Any]],
+    top_k_for_llm: Optional[int],
+    strategy: str = "diverse",
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Return candidates to send to the optional LLM norm judge.
+
+    Previous versions used only the lowest residual-score candidates.  That is
+    efficient, but in flexible-output experiments it can hide richer utility
+    interfaces from the LLM and reinforce collapse to a single most-minimized
+    representation.  The default strategy therefore takes the best candidate per
+    app-facing output bucket, then fills remaining slots with residual-best and
+    utility-priority-best candidates.
+    """
+    strategy = str(strategy or "diverse").strip().lower()
+    if not candidates:
+        return [], {"strategy": strategy, "requested_top_k": top_k_for_llm, "selected_count": 0, "buckets": []}
+    if top_k_for_llm is None or top_k_for_llm <= 0 or strategy == "all":
+        return list(candidates), {
+            "strategy": "all" if strategy == "all" else strategy,
+            "requested_top_k": top_k_for_llm,
+            "selected_count": len(candidates),
+            "candidate_count": len(candidates),
+            "buckets": [],
+            "note": "No positive top_k_for_llm was supplied, so every candidate is eligible for LLM judgment.",
+        }
+    k = min(int(top_k_for_llm), len(candidates))
+    if strategy in {"residual", "risk", "lowest_residual"}:
+        chosen = sorted(candidates, key=lambda c: (_candidate_residual_score(c), _candidate_utility_priority(c), _candidate_operator_count(c)))[:k]
+        return chosen, {
+            "strategy": "residual",
+            "requested_top_k": top_k_for_llm,
+            "selected_count": len(chosen),
+            "candidate_count": len(candidates),
+            "buckets": [],
+        }
+
+    chosen: List[Dict[str, Any]] = []
+    chosen_ids: set[int] = set()
+    bucket_rows: List[Dict[str, Any]] = []
+    by_bucket: Dict[str, List[Dict[str, Any]]] = {}
+    for c in candidates:
+        by_bucket.setdefault(_candidate_llm_bucket(c), []).append(c)
+
+    # First pass: one strong representative per output family/schema/role.
+    for bucket, items in sorted(by_bucket.items(), key=lambda kv: (min(_candidate_shortlist_sort_key(c) for c in kv[1]), kv[0])):
+        best = sorted(items, key=_candidate_shortlist_sort_key)[0]
+        if id(best) not in chosen_ids:
+            chosen.append(best)
+            chosen_ids.add(id(best))
+            bucket_rows.append({
+                "bucket": bucket,
+                "pipeline_id": best.get("pipeline_id"),
+                "cap_type": _candidate_cap_type(best),
+                "schema": _candidate_cap_schema(best),
+                "role": _candidate_representation_role(best),
+                "residual_score": _candidate_residual_score(best),
+                "utility_priority": _candidate_utility_priority(best),
+                "n_bucket_candidates": len(items),
+            })
+        if len(chosen) >= k:
+            break
+
+    # Second pass: guarantee the absolute residual-best candidates are present.
+    for c in sorted(candidates, key=lambda c: (_candidate_residual_score(c), _candidate_utility_priority(c), _candidate_operator_count(c))):
+        if len(chosen) >= k:
+            break
+        if id(c) not in chosen_ids:
+            chosen.append(c)
+            chosen_ids.add(id(c))
+
+    # Third pass: guarantee high-utility-priority candidates are present.
+    for c in sorted(candidates, key=lambda c: (_candidate_utility_priority(c), _candidate_residual_score(c), _candidate_operator_count(c))):
+        if len(chosen) >= k:
+            break
+        if id(c) not in chosen_ids:
+            chosen.append(c)
+            chosen_ids.add(id(c))
+
+    return chosen, {
+        "strategy": "diverse",
+        "requested_top_k": top_k_for_llm,
+        "selected_count": len(chosen),
+        "candidate_count": len(candidates),
+        "unique_buckets_seen": len(by_bucket),
+        "buckets": bucket_rows[:50],
+        "note": "Diverse shortlist chooses representatives by output cap/schema/representation role before filling by residual and utility priority.",
+    }
+
 def evaluate_candidates(
     candidate_output: Dict[str, Any],
     request: Dict[str, Any],
@@ -788,17 +983,26 @@ def evaluate_candidates(
     llm_temperature: float = 0.0,
     llm_confidence_threshold: float = 0.75,
     top_k_for_llm: Optional[int] = None,
+    llm_shortlist_strategy: str = "diverse",
     ci_mode: str = "full",
     collapse_stages: bool = False,
 ) -> Dict[str, Any]:
     candidates = candidate_output.get("candidates", []) or []
-    candidates_for_llm = candidates
-    if use_llm and top_k_for_llm is not None:
-        candidates_for_llm = sorted(candidates, key=lambda c: c.get("residual_score", risk_score(c.get("residual_disclosure", {}))))[:top_k_for_llm]
-    llm_ids = {id(c) for c in candidates_for_llm}
     ci_mode = normalize_ci_mode(ci_mode)
     if ci_mode == "llm_only":
         use_llm = True
+    candidates_for_llm, llm_shortlist_diagnostics = select_candidates_for_llm(
+        candidates,
+        top_k_for_llm=top_k_for_llm,
+        strategy=llm_shortlist_strategy,
+    ) if use_llm else ([], {
+        "strategy": llm_shortlist_strategy,
+        "requested_top_k": top_k_for_llm,
+        "selected_count": 0,
+        "candidate_count": len(candidates),
+        "note": "LLM judging disabled.",
+    })
+    llm_ids = {id(c) for c in candidates_for_llm}
     evals = [
         evaluate_candidate(
             c, request, constraints, environment, sensor_stream,
@@ -835,6 +1039,9 @@ def evaluate_candidates(
             "use_llm": use_llm,
             "llm_model": llm_model if use_llm else None,
             "llm_confidence_threshold": llm_confidence_threshold if use_llm else None,
+            "top_k_for_llm": top_k_for_llm if use_llm else None,
+            "llm_shortlist_strategy": llm_shortlist_strategy if use_llm else None,
+            "llm_shortlist_diagnostics": llm_shortlist_diagnostics,
             "templates_ignored": True,
             "ci_mode": ci_mode,
             "collapse_stages": collapse_stages or ci_mode == "no_staged_flows",
@@ -862,6 +1069,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--llm-temperature", type=float, default=0.0)
     p.add_argument("--llm-confidence-threshold", type=float, default=0.75)
     p.add_argument("--top-k-for-llm", type=int)
+    p.add_argument("--llm-shortlist-strategy", default="diverse", choices=["diverse", "residual", "all"], help="How to choose candidates for optional LLM norm judgment when --top-k-for-llm is set.")
     p.add_argument("--ci-mode", default="full", choices=["full", "no_hard_rules", "llm_only", "no_staged_flows"], help="Ablation mode for CI evaluation.")
     p.add_argument("--collapse-stages", action="store_true", help="Ablation: collapse staged flows to output_to_application before rule evaluation.")
     args = p.parse_args(argv)
@@ -876,6 +1084,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         llm_temperature=args.llm_temperature,
         llm_confidence_threshold=args.llm_confidence_threshold,
         top_k_for_llm=args.top_k_for_llm,
+        llm_shortlist_strategy=args.llm_shortlist_strategy,
         ci_mode=args.ci_mode,
         collapse_stages=args.collapse_stages,
     )

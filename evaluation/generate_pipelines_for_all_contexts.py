@@ -4,14 +4,14 @@
 This module is intended to be run from the project root:
 
     python -m evaluation.generate_pipelines_for_all_contexts \
-      --operators norms/operator_contracts.json \
+      --request-mode flexible \
       --contexts survey/data/ci_focused_user_study_context.json \
       --app-request-dir app_requests/templates \
       --candidate-generator mediator/generate_pipeline_candidates.py \
-      --constraints norms/ci_constraints.json \
+      --constraints norms/ci_constraints_flexible.json \
       --evaluator mediator/contextual_integrity_evaluator.py \
       --selector mediator/pipeline_selection.py \
-      --out-dir runs/context_pipeline_generation
+      --out-dir runs/flexible_context_pipeline_generation
 
 For each context scenario, the script:
   1. loads the task-specific downstream app request;
@@ -34,10 +34,41 @@ import inspect
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import traceback
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+try:
+    from .pipeline_artifact_compaction import (
+        compact_candidate,
+        compact_candidate_generation_result,
+        compact_ci_evaluation_result,
+        compact_mediator_result,
+        compact_pipeline_selection_result,
+        compact_probe_stage_result,
+        condense_run_tree,
+    )
+except Exception:  # Allow direct execution from a checkout or patched file copy.
+    try:
+        from pipeline_artifact_compaction import (  # type: ignore
+            compact_candidate,
+            compact_candidate_generation_result,
+            compact_ci_evaluation_result,
+            compact_mediator_result,
+            compact_pipeline_selection_result,
+            compact_probe_stage_result,
+            condense_run_tree,
+        )
+    except Exception:  # pragma: no cover - compaction is best-effort.
+        compact_candidate = None  # type: ignore
+        compact_candidate_generation_result = None  # type: ignore
+        compact_ci_evaluation_result = None  # type: ignore
+        compact_mediator_result = None  # type: ignore
+        compact_pipeline_selection_result = None  # type: ignore
+        compact_probe_stage_result = None  # type: ignore
+        condense_run_tree = None  # type: ignore
 
 try:
     from tqdm.auto import tqdm as _tqdm
@@ -78,12 +109,39 @@ def make_progress(total: int, enabled: bool = True):
     return _SimpleProgress(total, enabled=True)
 
 
-TASK_TO_REQUEST_FILENAME: Dict[str, str] = {
-    "visitor_presence_detection": "request_app_visitor_chokepoint_downstream_compatible.json",
-    "fall_detection": "request_app_fall_le2i_pose_downstream_compatible.json",
-    "adl_recognition": "request_app_adl_youhome_av_downstream_compatible.json",
-    "domestic_sound_monitoring": "request_app_domestic_audio_chimehome_downstream_compatible.json",
+TASK_TO_REQUEST_FILENAME_BY_MODE: Dict[str, Dict[str, str]] = {
+    "downstream_compatible": {
+        "visitor_presence_detection": "request_app_visitor_chokepoint_downstream_compatible.json",
+        "fall_detection": "request_app_fall_le2i_pose_downstream_compatible.json",
+        "adl_recognition": "request_app_adl_youhome_av_downstream_compatible.json",
+        "domestic_sound_monitoring": "request_app_domestic_audio_chimehome_downstream_compatible.json",
+    },
+    "flexible": {
+        "visitor_presence_detection": "request_app_visitor_chokepoint_flexible.json",
+        "fall_detection": "request_app_fall_le2i_flexible.json",
+        "adl_recognition": "request_app_adl_youhome_av_flexible.json",
+        "domestic_sound_monitoring": "request_app_domestic_audio_chimehome_flexible.json",
+    },
 }
+
+DEFAULT_OPERATOR_CONTRACT_BY_MODE: Dict[str, str] = {
+    "downstream_compatible": "norms/operator_contracts.json",
+    "flexible": "norms/operator_contracts_flexible.json",
+}
+
+DEFAULT_CONSTRAINTS_BY_MODE: Dict[str, str] = {
+    "downstream_compatible": "norms/ci_constraints.json",
+    "flexible": "norms/ci_constraints_flexible.json",
+}
+
+DEFAULT_OUT_DIR_BY_MODE: Dict[str, str] = {
+    "downstream_compatible": "runs/context_pipeline_generation",
+    "flexible": "runs/flexible_context_pipeline_generation",
+}
+
+# Backward-compatible name used by older callers.  The active mapping is chosen
+# by --request-mode in resolve_request_path().
+TASK_TO_REQUEST_FILENAME: Dict[str, str] = TASK_TO_REQUEST_FILENAME_BY_MODE["flexible"]
 
 DEFAULT_BASELINES = ["raw", "manual", "direct_llm", "full_mediator"]
 
@@ -140,7 +198,15 @@ def import_module_or_path(module_name: str, optional_path: Optional[str | Path] 
         p = Path(optional_path)
         if p.exists():
             return import_module_from_path(module_name.replace(".", "_"), p)
-    return importlib.import_module(module_name)
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        # The preprocessing baseline package for this repo is preprocessing_baselines.*.
+        # Do not silently fall back to baselines.preprocessing.*, because that creates
+        # duplicate namespaces and can make experiments import stale baseline code.
+        # If the package is not importable, pass --manual-module/--direct-llm-module
+        # with explicit file paths or run from the project root.
+        raise
 
 
 def as_list(x: Any) -> List[Any]:
@@ -213,21 +279,34 @@ def scenario_space(scenario: Dict[str, Any]) -> str:
     return normalize_term(scenario_ci_params(scenario).get("space"))
 
 
-def resolve_request_path(task: str, app_request_dir: str | Path, explicit: Dict[str, Optional[str]]) -> Path:
+def resolve_request_path(
+    task: str,
+    app_request_dir: str | Path,
+    explicit: Dict[str, Optional[str]],
+    request_mode: str = "flexible",
+) -> Path:
     if explicit.get(task):
         p = Path(str(explicit[task]))
         if p.exists():
             return p
         raise FileNotFoundError(f"Explicit request path for task {task} does not exist: {p}")
 
-    fname = TASK_TO_REQUEST_FILENAME.get(task)
+    mode = str(request_mode or "flexible").strip().lower()
+    mapping = TASK_TO_REQUEST_FILENAME_BY_MODE.get(mode)
+    if mapping is None:
+        raise KeyError(f"Unknown request mode {request_mode!r}; expected one of {sorted(TASK_TO_REQUEST_FILENAME_BY_MODE)}")
+
+    fname = mapping.get(task)
     if not fname:
-        raise KeyError(f"No app-request filename mapping for task {task!r}")
+        raise KeyError(f"No app-request filename mapping for task {task!r} in request mode {mode!r}")
 
     candidates = [
         Path(app_request_dir) / fname,
         Path("app_requests/templates") / fname,
+        Path("app_requests/flexible") / fname,
+        Path("flexible_app_requests") / fname,
         Path("app_requests_downstream_compatible") / fname,
+        Path("/mnt/data/flexible_app_requests") / fname,
         Path("/mnt/data/app_requests_downstream_compatible") / fname,
         Path("/mnt/data") / fname,
     ]
@@ -235,7 +314,8 @@ def resolve_request_path(task: str, app_request_dir: str | Path, explicit: Dict[
         if p.exists():
             return p
     raise FileNotFoundError(
-        f"Could not find app request for task {task!r}. Tried: " + ", ".join(str(p) for p in candidates)
+        f"Could not find app request for task {task!r} in request mode {mode!r}. Tried: "
+        + ", ".join(str(p) for p in candidates)
     )
 
 
@@ -439,10 +519,24 @@ def make_stage_specs_from_candidate(cand: Dict[str, Any]) -> List[Dict[str, Any]
     return stages
 
 
-def write_pipeline_code_and_metadata(cand: Optional[Dict[str, Any]], result: Dict[str, Any], out_dir: Path) -> Dict[str, str]:
-    """Write selected candidate metadata plus a simple executable wrapper when possible."""
+def write_pipeline_code_and_metadata(
+    cand: Optional[Dict[str, Any]],
+    result: Dict[str, Any],
+    out_dir: Path,
+    *,
+    artifact_detail: str = "compact",
+) -> Dict[str, str]:
+    """Write selected candidate metadata plus a simple executable wrapper when possible.
+
+    In compact mode, result.json keeps only the selected candidate, counts, and
+    lightweight diagnostics. The full candidate/CI traces are intentionally not
+    persisted because they can reach hundreds of MB over full sweeps.
+    """
     paths: Dict[str, str] = {}
-    write_json(result, out_dir / "result.json")
+    result_to_write = result
+    if artifact_detail != "full" and compact_mediator_result is not None:
+        result_to_write = compact_mediator_result(result) or result
+    write_json(result_to_write, out_dir / "result.json")
     paths["result_json"] = str(out_dir / "result.json")
 
     if not cand:
@@ -450,7 +544,10 @@ def write_pipeline_code_and_metadata(cand: Optional[Dict[str, Any]], result: Dic
         paths["note"] = str(out_dir / "NO_SELECTED_PIPELINE.txt")
         return paths
 
-    write_json(cand, out_dir / "selected_pipeline.json")
+    selected_to_write = cand
+    if artifact_detail != "full" and compact_candidate is not None:
+        selected_to_write = compact_candidate(cand) or cand
+    write_json(selected_to_write, out_dir / "selected_pipeline.json")
     paths["selected_pipeline_json"] = str(out_dir / "selected_pipeline.json")
 
     stages = make_stage_specs_from_candidate(cand)
@@ -550,18 +647,22 @@ def run_manual_baseline(manual_module, operator_catalog: Dict[str, Any], request
     raise AttributeError("Manual baseline module exposes neither run_baseline nor run_manual_baseline.")
 
 
-def run_direct_llm_baseline(direct_module, operator_catalog: Dict[str, Any], request: Dict[str, Any], environment: Dict[str, Any], candidate_generator: Optional[str], max_depth: int, max_states: int, llm_model: str, llm_temperature: float, openai_api_key: Optional[str]) -> Dict[str, Any]:
-    return direct_module.run_direct_llm_baseline(
-        operator_catalog=operator_catalog,
-        request=request,
-        environment=environment,
-        candidate_generator_path=candidate_generator,
-        max_depth=max_depth,
-        max_states=max_states,
-        llm_model=llm_model,
-        llm_temperature=llm_temperature,
-        openai_api_key=openai_api_key,
-    )
+def run_direct_llm_baseline(direct_module, operator_catalog: Dict[str, Any], request: Dict[str, Any], environment: Dict[str, Any], candidate_generator: Optional[str], max_depth: int, max_states: int, llm_model: str, llm_temperature: float, openai_api_key: Optional[str], include_debug_artifacts: bool = False) -> Dict[str, Any]:
+    kwargs = {
+        "operator_catalog": operator_catalog,
+        "request": request,
+        "environment": environment,
+        "candidate_generator_path": candidate_generator,
+        "max_depth": max_depth,
+        "max_states": max_states,
+        "llm_model": llm_model,
+        "llm_temperature": llm_temperature,
+        "openai_api_key": openai_api_key,
+        "include_debug_artifacts": include_debug_artifacts,
+    }
+    sig = inspect.signature(direct_module.run_direct_llm_baseline)
+    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return direct_module.run_direct_llm_baseline(**filtered)
 
 
 def run_full_mediator(
@@ -590,6 +691,7 @@ def run_full_mediator(
         "llm_temperature": args.llm_temperature,
         "llm_confidence_threshold": args.llm_confidence_threshold,
         "top_k_for_llm": args.top_k_for_llm,
+        "llm_shortlist_strategy": args.llm_shortlist_strategy,
         "probe_artifacts_path": args.probe_artifacts,
         "probe_config_path": args.probe_config,
         "probe_package_dir": args.probe_package_dir,
@@ -689,6 +791,59 @@ def parse_ablation_modes(value: Optional[str]) -> List[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def load_existing_summary_rows(out_root: Path) -> List[Dict[str, Any]]:
+    path = out_root / "summary.json"
+    if not path.exists():
+        return []
+    try:
+        data = load_json(path)
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def row_key(row: Dict[str, Any]) -> Tuple[str, str]:
+    return (str(row.get("scenario_id") or ""), str(row.get("method_id") or row.get("baseline") or ""))
+
+
+def compact_direct_llm_diagnostics_for_summary(diag: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(diag, dict):
+        return {}
+    skip = {"llm_prompt", "llm_raw_response", "llm_extracted_json_text"}
+    return {k: v for k, v in diag.items() if k not in skip}
+
+
+def write_direct_llm_debug_artifacts(result: Dict[str, Any], out_dir: Path) -> Dict[str, str]:
+    """Persist direct-LLM prompt/raw-response debug text outside compact result.json."""
+    paths: Dict[str, str] = {}
+    diag = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    debug_items = [
+        ("llm_prompt", "direct_llm_prompt.txt"),
+        ("llm_raw_response", "direct_llm_raw_response.txt"),
+        ("llm_extracted_json_text", "direct_llm_extracted_json.txt"),
+    ]
+    for key, filename in debug_items:
+        val = diag.get(key)
+        if val is None:
+            continue
+        path = out_dir / filename
+        write_text(str(val), path)
+        paths[filename] = str(path)
+    if paths:
+        diag.setdefault("debug_artifacts", {}).update(paths)
+        # Keep result.json compact and avoid copying huge prompt/raw response into it.
+        for key, _ in debug_items:
+            diag.pop(key, None)
+    return paths
+
+
+def should_fail_on_direct_llm_result(result: Dict[str, Any], enabled: bool) -> bool:
+    if not enabled:
+        return False
+    d = decision_text(result or {})
+    return d in {"llm_error", "invalid_or_no_pipeline", "error"}
+
+
 def make_run_specs(requested_baselines: Sequence[str], requested_ablations: Sequence[str]) -> List[Dict[str, Any]]:
     specs: List[Dict[str, Any]] = []
     for baseline in requested_baselines:
@@ -721,16 +876,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Run all preprocessing baselines/full mediator over all context scenarios.")
     p.add_argument("--contexts", default="survey/data/ci_focused_user_study_context.json")
     p.add_argument("--app-request-dir", default="app_requests/templates")
-    p.add_argument("--operators", required=True)
+    p.add_argument(
+        "--request-mode",
+        choices=sorted(TASK_TO_REQUEST_FILENAME_BY_MODE.keys()),
+        default="flexible",
+        help=(
+            "Which task-to-app-request mapping to use. "
+            "'flexible' selects the *_flexible.json app contracts and defaults to "
+            "norms/operator_contracts_flexible.json, norms/ci_constraints_flexible.json, "
+            "and runs/flexible_context_pipeline_generation. "
+            "'downstream_compatible' preserves the older fixed-interface contracts."
+        ),
+    )
+    p.add_argument("--operators", default=None, help="Operator-contract JSON. Defaults depend on --request-mode.")
     p.add_argument("--candidate-generator", default="mediator/generate_pipeline_candidates.py")
-    p.add_argument("--constraints", default="norms/ci_constraints.json")
+    p.add_argument("--constraints", default=None, help="CI constraints JSON. Defaults depend on --request-mode.")
     p.add_argument("--evaluator", default="mediator/contextual_integrity_evaluator.py")
     p.add_argument("--selector", default="mediator/pipeline_selection.py")
     p.add_argument("--selection-config", default=None)
 
     p.add_argument("--raw-module", default=None, help="Optional path to raw_baseline.py; defaults to preprocessing_baselines.raw_baseline")
     p.add_argument("--manual-module", default=None, help="Optional path to manual_baseline.py; defaults to preprocessing_baselines.manual_baseline")
-    p.add_argument("--direct-llm-module", default=None, help="Optional path to direct_llm_baseline.py")
+    p.add_argument("--direct-llm-module", default=None, help="Optional path to direct_llm_baseline.py; defaults to preprocessing_baselines.direct_llm_baseline")
     p.add_argument("--full-mediator-module", default="mediator/full_mediator.py", help="Path to full_mediator.py")
 
     p.add_argument("--visitor-request", default=None)
@@ -740,6 +907,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     p.add_argument("--baselines", default=",".join(DEFAULT_BASELINES), help="Comma list: raw,manual,direct_llm,full_mediator")
     p.add_argument(
+        "--direct-llm-only",
+        action="store_true",
+        help="Convenience mode: rerun only the direct_llm baseline, disable ablations, and preserve existing summary rows for other methods.",
+    )
+    p.add_argument(
+        "--direct-llm-fail-fast",
+        action="store_true",
+        help="When running direct_llm, stop immediately if it returns llm_error, invalid_or_no_pipeline, or error.",
+    )
+    p.add_argument(
+        "--direct-llm-debug-artifacts",
+        action="store_true",
+        help="Write direct_llm_prompt.txt, direct_llm_raw_response.txt, and direct_llm_extracted_json.txt beside each direct_llm result.",
+    )
+    p.add_argument(
+        "--preserve-existing-summary",
+        action="store_true",
+        help="When running a subset of methods/scenarios, merge new rows into existing summary/context_summary files instead of dropping unrun methods.",
+    )
+    p.add_argument(
         "--ablations",
         default=",".join(DEFAULT_ABLATION_MODES),
         help=(
@@ -748,7 +935,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ),
     )
     p.add_argument("--scenario-ids", default=None, help="Optional comma-separated subset of scenario ids")
-    p.add_argument("--out-dir", default="runs/context_pipeline_generation")
+    p.add_argument("--out-dir", default=None, help="Output root. Defaults depend on --request-mode.")
+    p.add_argument(
+        "--artifact-detail",
+        choices=["compact", "full"],
+        default="compact",
+        help=(
+            "How much debug data to write. compact (default) omits full candidate lists, "
+            "per-candidate CI flows, and full selector rankings; full preserves old verbose artifacts."
+        ),
+    )
+    p.add_argument(
+        "--no-replace-existing",
+        action="store_true",
+        help="Do not remove an existing per-method output directory before writing a new run.",
+    )
+    p.add_argument(
+        "--condense-existing-runs",
+        action="store_true",
+        help="Before running, compact existing large JSON artifacts under --out-dir in place.",
+    )
+    p.add_argument(
+        "--condense-existing-only",
+        action="store_true",
+        help="Compact existing artifacts under --out-dir and exit without generating new pipelines.",
+    )
     p.add_argument("--max-depth", type=int, default=7)
     p.add_argument("--max-states", type=int, default=25000)
 
@@ -758,6 +969,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--full-mediator-use-llm", action="store_true")
     p.add_argument("--llm-confidence-threshold", type=float, default=0.75)
     p.add_argument("--top-k-for-llm", type=int, default=None)
+    p.add_argument("--llm-shortlist-strategy", default="diverse", choices=["diverse", "residual", "all"], help="How full_mediator shortlists candidates for optional LLM norm judgment.")
 
     p.add_argument("--probe-artifacts", default=None)
     p.add_argument("--probe-config", default=None)
@@ -768,8 +980,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--no-progress", action="store_true", help="Disable tqdm/simple progress display")
     args = p.parse_args(argv)
 
+    mode = str(args.request_mode or "flexible").strip().lower()
+    if args.operators is None:
+        args.operators = DEFAULT_OPERATOR_CONTRACT_BY_MODE[mode]
+    if args.constraints is None:
+        args.constraints = DEFAULT_CONSTRAINTS_BY_MODE[mode]
+    if args.out_dir is None:
+        args.out_dir = DEFAULT_OUT_DIR_BY_MODE[mode]
+
     if args.openai_api_key:
         os.environ["OPENAI_API_KEY"] = args.openai_api_key
+
+    if args.direct_llm_only:
+        args.baselines = "direct_llm"
+        args.ablations = "none"
+        args.preserve_existing_summary = True
+        args.direct_llm_debug_artifacts = True
+        args.direct_llm_fail_fast = True
 
     requested_baselines = parse_list_arg(args.baselines, DEFAULT_BASELINES)
     # Backwards-compatible alias from the older runner/package.
@@ -780,6 +1007,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     out_root = Path(args.out_dir)
     out_root.mkdir(parents=True, exist_ok=True)
+
+    if (args.condense_existing_runs or args.condense_existing_only) and condense_run_tree is not None:
+        report = condense_run_tree(out_root, progress=not args.no_progress)
+        write_json(report, out_root / "condense_existing_report.json")
+        print(json.dumps({"condensed_existing_runs": report}, indent=2), file=sys.stderr)
+    elif args.condense_existing_runs or args.condense_existing_only:
+        print("WARNING: artifact compaction helpers were unavailable; skipping --condense-existing-runs", file=sys.stderr)
+
+    if args.condense_existing_only:
+        return 0
 
     context_doc = load_json(args.contexts)
     scenarios_all = iter_context_scenarios(context_doc)
@@ -805,13 +1042,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "domestic_sound_monitoring": args.audio_request,
     }
 
+    existing_rows = load_existing_summary_rows(out_root) if args.preserve_existing_summary else []
+    current_method_ids = {str(s["method_id"]) for s in run_specs}
+    selected_sids = {sid for _, sid, _ in scenarios}
     all_rows: List[Dict[str, Any]] = []
+    processed_sids: set[str] = set()
     index: Dict[str, Any] = {
         "schema_version": "context_pipeline_generation_index_v1",
         "contexts_file": str(args.contexts),
         "out_dir": str(out_root),
+        "request_mode": mode,
+        "operators_path": str(args.operators),
+        "constraints_path": str(args.constraints),
         "baselines": requested_baselines,
         "ablations": requested_ablations,
+        "artifact_detail": args.artifact_detail,
+        "replace_existing": not args.no_replace_existing,
         "methods": [
             {
                 "method_id": s["method_id"],
@@ -836,20 +1082,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             request_dir = context_dir / "request"
             request_dir.mkdir(parents=True, exist_ok=True)
 
-            app_request_path = resolve_request_path(task, args.app_request_dir, explicit_requests)
+            app_request_path = resolve_request_path(task, args.app_request_dir, explicit_requests, request_mode=mode)
             app_request = load_json(app_request_path)
             context_request = overlay_context_on_app_request(app_request, scenario, sid)
             request_path = request_dir / "context_app_request.json"
             write_json(context_request, request_path)
             write_json(scenario, request_dir / "context_scenario.json")
 
-            context_rows: List[Dict[str, Any]] = []
+            processed_sids.add(sid)
+            context_rows: List[Dict[str, Any]] = [
+                r for r in existing_rows
+                if str(r.get("scenario_id") or "") == sid
+                and str(r.get("method_id") or r.get("baseline") or "") not in current_method_ids
+            ]
             index["contexts"][sid] = {
                 "task": task,
                 "space": space,
                 "context_family": scenario.get("context_family"),
                 "request_path": str(request_path),
                 "source_app_request_path": str(app_request_path),
+                "request_mode": mode,
                 "methods": {},
                 "baselines": {},
                 "ablations": {},
@@ -862,6 +1114,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ablation_mode = spec.get("ablation_mode")
                 method_dir = context_dir.joinpath(*spec["dir_parts"])
                 baseline_dir = method_dir  # Backward-compatible local variable used by writer code.
+                if not args.no_replace_existing and baseline_dir.exists():
+                    shutil.rmtree(baseline_dir)
                 baseline_dir.mkdir(parents=True, exist_ok=True)
                 progress.set_postfix_str(f"{sid} {method_id}")
                 result: Optional[Dict[str, Any]] = None
@@ -894,21 +1148,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                             llm_model=args.llm_model,
                             llm_temperature=args.llm_temperature,
                             openai_api_key=args.openai_api_key,
+                            include_debug_artifacts=args.direct_llm_debug_artifacts,
                         )
                     elif baseline == "full_mediator":
                         result = run_full_mediator(full_module, args, request_path, baseline_dir)
                     elif method_kind == "ablation":
                         result = run_full_mediator(full_module, args, request_path, baseline_dir, ablation_mode=str(ablation_mode))
-                        # Mirror full_mediator's usual stage files for easier inspection.
+                        # Mirror full_mediator's usual stage files, but compact by default.
                         if result:
+                            sid_selected = selected_pipeline_id(result)
                             if result.get("candidate_generation_result") is not None:
-                                write_json(result["candidate_generation_result"], baseline_dir / "candidate_pipelines.json")
+                                data = result["candidate_generation_result"]
+                                if args.artifact_detail != "full" and compact_candidate_generation_result is not None:
+                                    data = compact_candidate_generation_result(data, selected_id=sid_selected) or data
+                                write_json(data, baseline_dir / "candidate_pipelines.json")
                             if result.get("ci_evaluation_result") is not None:
-                                write_json(result["ci_evaluation_result"], baseline_dir / "ci_evaluation.json")
+                                data = result["ci_evaluation_result"]
+                                if args.artifact_detail != "full" and compact_ci_evaluation_result is not None:
+                                    data = compact_ci_evaluation_result(data) or data
+                                write_json(data, baseline_dir / "ci_evaluation.json")
                             if result.get("pipeline_selection_result") is not None:
-                                write_json(result["pipeline_selection_result"], baseline_dir / "pipeline_selection.json")
+                                data = result["pipeline_selection_result"]
+                                if args.artifact_detail != "full" and compact_pipeline_selection_result is not None:
+                                    data = compact_pipeline_selection_result(data) or data
+                                write_json(data, baseline_dir / "pipeline_selection.json")
                             if result.get("privacy_probe_stage_result") is not None:
-                                write_json(result["privacy_probe_stage_result"], baseline_dir / "privacy_probe_stage_result.json")
+                                data = result["privacy_probe_stage_result"]
+                                if args.artifact_detail != "full" and compact_probe_stage_result is not None:
+                                    data = compact_probe_stage_result(data) or data
+                                write_json(data, baseline_dir / "privacy_probe_stage_result.json")
                     else:
                         raise ValueError(f"Unknown baseline {baseline!r}")
                 except Exception as exc:  # Keep sweeping through all contexts unless fail-fast.
@@ -932,8 +1200,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     if args.fail_fast:
                         raise
 
+                if baseline == "direct_llm" and result:
+                    write_direct_llm_debug_artifacts(result, baseline_dir)
                 cand = selected_candidate(result or {})
-                paths = write_pipeline_code_and_metadata(cand, result or {}, baseline_dir)
+                paths = write_pipeline_code_and_metadata(cand, result or {}, baseline_dir, artifact_detail=args.artifact_detail)
                 fields = candidate_summary_fields(cand)
                 row: Dict[str, Any] = {
                     "scenario_id": sid,
@@ -974,9 +1244,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 elif method_kind == "ablation":
                     index["contexts"][sid]["ablations"][str(ablation_mode)] = row
                 progress.update(1)
+                if baseline == "direct_llm" and should_fail_on_direct_llm_result(result or {}, args.direct_llm_fail_fast):
+                    write_context_summary(context_dir, scenario, context_rows)
+                    write_csv(context_rows, context_dir / "context_summary.csv")
+                    raise RuntimeError(
+                        f"direct_llm failed for {sid} with decision={decision_text(result or {})!r}. "
+                        f"See {paths.get('result_json')} and any direct_llm_* debug artifacts in {baseline_dir}."
+                    )
 
             write_context_summary(context_dir, scenario, context_rows)
             write_csv(context_rows, context_dir / "context_summary.csv")
+
+    if args.preserve_existing_summary:
+        for r in existing_rows:
+            sid_existing = str(r.get("scenario_id") or "")
+            mid_existing = str(r.get("method_id") or r.get("baseline") or "")
+            if sid_existing not in processed_sids:
+                all_rows.append(r)
+            elif mid_existing not in current_method_ids:
+                # Already included in that context's merged context_rows.
+                continue
 
     write_json(index, out_root / "index.json")
     write_json(all_rows, out_root / "summary.json")

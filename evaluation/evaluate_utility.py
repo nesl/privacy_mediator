@@ -3,7 +3,7 @@
 
 This script is designed to run from the project root after
 ``evaluation.generate_pipelines_for_all_contexts`` has produced a directory such
-as ``runs/context_pipeline_generation``.  It discovers selected pipeline specs
+as ``runs/context_pipeline_generation`` or ``runs/flexible_context_pipeline_generation``.  It discovers selected pipeline specs
 for baselines and full-mediator ablations, optionally materializes transformed
 manifests/data for each task, invokes the task-specific downstream inference
 scripts, and writes a flat utility summary.
@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from collections import Counter
 import csv
 import dataclasses
 import hashlib
@@ -77,7 +78,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-EVALUATE_UTILITY_PATCH_VERSION = "2026-06-adl-youhome-av-preserve-audio-root"
+EVALUATE_UTILITY_PATCH_VERSION = "2026-06-flexible-cross-run-reuse-v5"
 
 try:
     from tqdm.auto import tqdm
@@ -104,6 +105,200 @@ def progress_write(msg: str) -> None:
             tqdm.write(str(msg))  # type: ignore[union-attr]
         except Exception:
             print(str(msg), file=sys.stderr, flush=True)
+    else:
+        # Keep important debug breadcrumbs visible even when tqdm is disabled.
+        print(str(msg), file=sys.stderr, flush=True)
+
+
+def json_safe(obj: Any) -> Any:
+    """Best-effort conversion for debug records written before native calls."""
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {str(k): json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [json_safe(x) for x in obj]
+    return repr(obj)
+
+
+def append_jsonl(record: Dict[str, Any], path: str | Path) -> None:
+    """Append one fsynced JSONL record so native crashes still leave breadcrumbs."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(json_safe(record), sort_keys=False, default=str)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except Exception:
+            pass
+
+
+def write_json_fsynced(data: Any, path: str | Path) -> None:
+    """Write JSON and fsync it; used for last-attempt breadcrumbs before C/C++ calls."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(json_safe(data), f, indent=2, sort_keys=False, default=str)
+        f.write("\n")
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except Exception:
+            pass
+    os.replace(tmp, path)
+
+
+def preprocess_debug_enabled(args: Optional[argparse.Namespace] = None) -> bool:
+    if args is None:
+        return True
+    return not bool(getattr(args, "no_preprocess_debug", False))
+
+
+def emit_preprocess_debug(
+    debug_dir: Optional[str | Path],
+    record: Dict[str, Any],
+    *,
+    last: bool = True,
+    echo: bool = True,
+) -> None:
+    """Write durable preprocessing debug breadcrumbs and optionally echo a compact line."""
+    if debug_dir is None:
+        return
+    d = Path(debug_dir)
+    rec = {"ts_ms": now_ms(), **record}
+    try:
+        append_jsonl(rec, d / "preprocess_debug.jsonl")
+        if last:
+            write_json_fsynced(rec, d / "last_preprocess_attempt.json")
+    except Exception as exc:
+        print(f"[preprocess-debug] failed to write debug record to {d}: {exc!r}", file=sys.stderr, flush=True)
+    if echo:
+        sample = rec.get("sample_id")
+        path = rec.get("resolved_input_path") or rec.get("input_path")
+        phase = rec.get("phase")
+        task = rec.get("task")
+        scenario = rec.get("scenario_id")
+        method = rec.get("method_id")
+        print(
+            f"[preprocess-debug] {scenario or ''}/{method or ''} task={task or ''} "
+            f"phase={phase or ''} sample={sample or ''} input={path or ''}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def compact_manifest_row(row: Dict[str, Any], max_value_len: int = 500) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in row.items():
+        text = str(v)
+        out[str(k)] = text if len(text) <= max_value_len else text[:max_value_len] + "…"
+    return out
+
+
+def debug_record_for_manifest_row(
+    *,
+    phase: str,
+    task: str,
+    row_index: int,
+    row: Dict[str, Any],
+    data_root: Optional[str | Path],
+    manifest_path: Optional[str | Path] = None,
+    filtered_manifest_path: Optional[str | Path] = None,
+    spec_path: Optional[str | Path] = None,
+    out_base: Optional[str | Path] = None,
+    scenario_id: Optional[str] = None,
+    method_id: Optional[str] = None,
+    final_output_type: Optional[str] = None,
+    final_output_schema: Optional[str] = None,
+) -> Dict[str, Any]:
+    sample_id = str(row.get("sample_id") or row.get("chunk_id") or row.get("video_id") or row.get("id") or row_index)
+    in_path = resolve_manifest_media_path(row, data_root)
+    rec: Dict[str, Any] = {
+        "phase": phase,
+        "scenario_id": scenario_id,
+        "method_id": method_id,
+        "task": task,
+        "row_index": row_index,
+        "sample_id": sample_id,
+        "source_manifest": str(manifest_path) if manifest_path else None,
+        "filtered_manifest": str(filtered_manifest_path) if filtered_manifest_path else None,
+        "source_data_root": str(data_root) if data_root else None,
+        "pipeline_spec": str(spec_path) if spec_path else None,
+        "out_base": str(out_base) if out_base else None,
+        "final_output_type": final_output_type,
+        "final_output_schema": final_output_schema,
+        "resolved_input_path": str(in_path) if in_path else None,
+        "resolved_input_exists": bool(in_path.exists()) if in_path else False,
+        "resolved_input_is_dir": bool(in_path.is_dir()) if in_path and in_path.exists() else False,
+        "resolved_input_suffix": str(in_path.suffix).lower() if in_path and not in_path.is_dir() else None,
+        "resolved_media_type": media_type_for_path(in_path, task) if in_path else None,
+        "row": compact_manifest_row(row),
+    }
+    return rec
+
+
+def write_manifest_input_debug(
+    *,
+    debug_dir: Optional[str | Path],
+    rows: Sequence[Dict[str, Any]],
+    data_root: Optional[str | Path],
+    task: str,
+    manifest_path: str | Path,
+    filtered_manifest_path: str | Path,
+    scenario_id: Optional[str],
+    method_id: Optional[str],
+    final_output_type: Optional[str],
+    final_output_schema: Optional[str],
+) -> None:
+    if debug_dir is None:
+        return
+    d = Path(debug_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "phase": "source_manifest_inputs_summary",
+        "scenario_id": scenario_id,
+        "method_id": method_id,
+        "task": task,
+        "source_manifest": str(manifest_path),
+        "filtered_manifest": str(filtered_manifest_path),
+        "source_data_root": str(data_root) if data_root else None,
+        "num_rows": len(rows),
+        "final_output_type": final_output_type,
+        "final_output_schema": final_output_schema,
+        "debug_files": {
+            "inputs_jsonl": str(d / "preprocess_inputs.jsonl"),
+            "events_jsonl": str(d / "preprocess_debug.jsonl"),
+            "last_attempt_json": str(d / "last_preprocess_attempt.json"),
+        },
+    }
+    emit_preprocess_debug(d, summary, last=False, echo=False)
+    inputs_path = d / "preprocess_inputs.jsonl"
+    # Overwrite this per-method input listing for the current run.
+    try:
+        inputs_path.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+    for i, row in enumerate(rows):
+        rec = debug_record_for_manifest_row(
+            phase="source_manifest_input",
+            task=task,
+            row_index=i,
+            row=row,
+            data_root=data_root,
+            manifest_path=manifest_path,
+            filtered_manifest_path=filtered_manifest_path,
+            scenario_id=scenario_id,
+            method_id=method_id,
+            final_output_type=final_output_type,
+            final_output_schema=final_output_schema,
+        )
+        append_jsonl(rec, inputs_path)
+    print(f"[preprocess-debug] wrote input path listing: {inputs_path}", file=sys.stderr, flush=True)
 
 
 class PreprocessingStageError(RuntimeError):
@@ -652,6 +847,83 @@ def is_youhome_av_cap(cap: Optional[Dict[str, Any]]) -> bool:
     return False
 
 
+
+
+FLEXIBLE_SEMANTIC_OUTPUT_TYPES = {
+    "application/x-detections",
+    "application/x-occupancy",
+    "application/x-occupancy-count",
+    "application/x-binary-occupancy",
+    "application/x-sound-event",
+    "application/x-sound-event-label",
+    "application/x-decibel-level",
+    "application/x-activity-event",
+    "application/x-activity-label",
+    "application/x-safety-event",
+    "application/x-security-event",
+    "application/x-aggregate",
+    "application/x-motion-features",
+    "application/x-multimodal-primitives",
+}
+
+FLEXIBLE_SEMANTIC_SCHEMAS = {
+    "object_detections",
+    "person_detections",
+    "occupancy_count",
+    "room_occupied",
+    "sound_event_label",
+    "decibel_level_duration",
+    "activity_label",
+    "fall_or_safety_event",
+    "person_at_door_or_intrusion_event",
+    "aggregate_summary",
+    "motion_features",
+    "multimodal_primitives",
+}
+
+SEMANTIC_CAP_ALIASES = {
+    "application/x-sound-event-label": "application/x-sound-event",
+    "application/x-occupancy-count": "application/x-occupancy",
+    "application/x-binary-occupancy": "application/x-occupancy",
+    "application/x-activity-label": "application/x-activity-event",
+    "application/x-safety-event": "application/x-activity-event",
+    "application/x-security-event": "application/x-activity-event",
+}
+
+
+def canonical_semantic_type(t: str) -> str:
+    return SEMANTIC_CAP_ALIASES.get(str(t or ""), str(t or ""))
+
+
+def is_flexible_semantic_cap(cap: Optional[Dict[str, Any]]) -> bool:
+    if not cap:
+        return False
+    t = cap_type(cap)
+    s = cap_schema(cap)
+    if t in FLEXIBLE_SEMANTIC_OUTPUT_TYPES or canonical_semantic_type(t) in FLEXIBLE_SEMANTIC_OUTPUT_TYPES:
+        return True
+    if s in FLEXIBLE_SEMANTIC_SCHEMAS:
+        return True
+    props = cap.get("properties") if isinstance(cap.get("properties"), dict) else {}
+    inner = props.get("source_semantic_type") or props.get("semantic_type")
+    return bool(inner and str(inner) in FLEXIBLE_SEMANTIC_OUTPUT_TYPES)
+
+
+def task_supports_semantic_adapter(task: str, cap: Optional[Dict[str, Any]]) -> bool:
+    if not is_flexible_semantic_cap(cap):
+        return False
+    t = canonical_semantic_type(cap_type(cap))
+    s = cap_schema(cap)
+    if task == "visitor_presence_detection":
+        return t in {"application/x-detections", "application/x-occupancy", "application/x-aggregate"} or s in {"object_detections", "person_detections", "occupancy_count", "room_occupied", "aggregate_summary"}
+    if task == "fall_detection":
+        return t in {"application/x-activity-event", "application/x-aggregate", "application/x-motion-features"} or s in {"fall_or_safety_event", "activity_label", "aggregate_summary", "motion_features"}
+    if task == "domestic_sound_monitoring":
+        return t in {"application/x-sound-event", "application/x-decibel-level", "application/x-aggregate"} or s in {"sound_event_label", "decibel_level_duration", "aggregate_summary"}
+    if task == "adl_recognition":
+        return t in {"application/x-activity-event", "application/x-detections", "application/x-sound-event", "application/x-aggregate", "application/x-multimodal-primitives"} or s in {"activity_label", "object_detections", "sound_event_label", "aggregate_summary", "multimodal_primitives"}
+    return False
+
 def metric_int_value(result: Dict[str, Any], key: str) -> Optional[int]:
     """Best-effort integer extraction from flattened or nested metric fields."""
     if key in result and result.get(key) not in (None, ""):
@@ -922,8 +1194,10 @@ def task_config_errors(args: argparse.Namespace, task: str) -> List[str]:
             errors.append("missing --fall-infer-module/--fall-infer-script")
         if not args.fall_checkpoint:
             errors.append("missing --fall-checkpoint")
-        if not args.fall_label_map:
-            errors.append("missing --fall-label-map")
+        # If --fall-label-map is missing, infer_fall() will generate a temporary
+        # label map from the manifest. Prefer an explicit training-time label_map
+        # for publication-quality numbers because class-index order must match
+        # the checkpoint.
         # Pose extraction is required when the manifest does not already contain
         # keypoints_path, or when a pipeline outputs image/video for fall.
         if args.fall_manifest and not manifest_has_nonempty_column(args.fall_manifest, "keypoints_path"):
@@ -943,8 +1217,9 @@ def task_config_errors(args: argparse.Namespace, task: str) -> List[str]:
             errors.append("missing --youhome-infer-module/--youhome-infer-script")
         if not args.youhome_checkpoint:
             errors.append("missing --youhome-checkpoint")
-        if not args.youhome_label_map:
-            errors.append("missing --youhome-label-map")
+        # If --youhome-label-map is missing, infer_youhome() will generate a
+        # temporary label map from the manifest label/activity column. Prefer an
+        # explicit training-time label_map for publication-quality numbers.
     else:
         errors.append(f"unsupported task {task!r}")
     return errors
@@ -999,6 +1274,223 @@ def run_cmd(cmd: Sequence[str], cwd: Optional[str | Path], log_path: Path, dry_r
             result["error_summary"] = lines[-1][:1000]
     return result
 
+
+
+
+def ffmpeg_extract_video_frames(
+    video_path: str | Path,
+    frame_dir: str | Path,
+    *,
+    cwd: Optional[str | Path] = None,
+    log_path: Optional[str | Path] = None,
+    dry_run: bool = False,
+    max_frames: Optional[int] = None,
+    debug_dir: Optional[str | Path] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Extract a video-only frame directory with ffmpeg, bypassing fragile in-process AVI decode.
+
+    Some LE2I AVI files contain malformed/nonstandard audio streams.  OpenCV can
+    report that the video opens and then abort the whole Python interpreter with
+    native heap corruption when it touches container/audio metadata.  Running
+    ffmpeg as a subprocess with ``-map 0:v:0 -an`` isolates decoder failures and
+    forces video-only extraction before any runtime/operator code reads frames.
+    """
+    video_path = Path(video_path)
+    frame_dir = Path(frame_dir)
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    if log_path is None:
+        log_path = frame_dir.parent / (frame_dir.name + ".ffmpeg.log")
+    log_path = Path(log_path)
+
+    # Start from a clean directory so stale frames do not make a failed extract
+    # look successful.
+    if not dry_run:
+        for old in frame_dir.glob("*.jpg"):
+            try:
+                old.unlink()
+            except Exception:
+                pass
+
+    output_pattern = str(frame_dir / "%06d.jpg")
+    cmd: List[str] = [
+        "ffmpeg",
+        "-hide_banner",
+        "-y",
+        "-err_detect",
+        "ignore_err",
+        "-fflags",
+        "+genpts",
+        "-i",
+        str(video_path),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-vsync",
+        "0",
+    ]
+    if max_frames is not None and max_frames > 0:
+        cmd.extend(["-frames:v", str(max_frames)])
+    cmd.append(output_pattern)
+
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "before_ffmpeg_video_frame_extract",
+        "resolved_input_path": str(video_path),
+        "resolved_input_exists": video_path.exists(),
+        "resolved_media_type": "video/x-raw",
+        "ffmpeg_frame_dir": str(frame_dir),
+        "ffmpeg_log": str(log_path),
+        "ffmpeg_cmd": cmd,
+        "max_frames": max_frames,
+    }, last=True, echo=True)
+
+    run = run_cmd(cmd, cwd=cwd, log_path=log_path, dry_run=dry_run)
+    frames = [] if dry_run else sorted(frame_dir.glob("*.jpg"))
+    status = "ok" if (dry_run or (run.get("returncode") == 0 and len(frames) > 0)) else "error"
+    info = {
+        "status": status,
+        "video_path": str(video_path),
+        "frame_dir": str(frame_dir),
+        "num_frames": len(frames),
+        "ffmpeg": run,
+        "ffmpeg_log": str(log_path),
+        "used_video_only_decode": True,
+        "max_frames": max_frames,
+    }
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "after_ffmpeg_video_frame_extract",
+        "resolved_input_path": str(video_path),
+        "ffmpeg_frame_dir": str(frame_dir),
+        "ffmpeg_log": str(log_path),
+        "ffmpeg_status": status,
+        "num_extracted_frames": len(frames),
+        "returncode": run.get("returncode"),
+    }, last=(status != "ok"), echo=True)
+    return info
+
+
+def sanitize_fall_video_manifest_with_ffmpeg(
+    args: argparse.Namespace,
+    manifest: str | Path,
+    data_root: Optional[str | Path],
+    out_manifest: str | Path,
+    frame_root: str | Path,
+    *,
+    log_dir: Optional[str | Path] = None,
+    dry_run: bool = False,
+    debug_dir: Optional[str | Path] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+) -> Tuple[Path, Dict[str, Any]]:
+    """Rewrite a LE2I manifest so video rows point to ffmpeg-extracted frame dirs.
+
+    The downstream pose extractor is then given frame_dir rows and no video_path,
+    avoiding direct OpenCV/FFmpeg AVI decode inside Python.  Rows that already
+    have keypoints_path or frame_dir are preserved.
+    """
+    manifest = Path(manifest)
+    out_manifest = Path(out_manifest)
+    frame_root = Path(frame_root)
+    log_base = Path(log_dir) if log_dir is not None else out_manifest.parent
+    rows, fieldnames = read_csv_rows(manifest, max_rows=None)
+    new_rows: List[Dict[str, Any]] = []
+    records: List[Dict[str, Any]] = []
+    failures: List[Dict[str, Any]] = []
+    extracted = 0
+    unchanged = 0
+
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "sanitize_fall_video_manifest_start",
+        "manifest": str(manifest),
+        "out_manifest": str(out_manifest),
+        "frame_root": str(frame_root),
+        "data_root": str(data_root) if data_root else None,
+        "num_rows": len(rows),
+        "max_frames_per_sample": getattr(args, "max_frames_per_sample", None),
+    }, last=False, echo=True)
+
+    for i, row in enumerate(rows):
+        new_row: Dict[str, Any] = dict(row)
+        sample_id = str(row.get("sample_id") or row.get("video_id") or row.get("id") or i)
+        existing_frame_dir = str(row.get("frame_dir") or "").strip()
+        existing_keypoints = str(row.get("keypoints_path") or "").strip()
+        in_path = resolve_manifest_media_path(row, data_root)
+        row_ctx = {**(debug_context or {}), "sample_id": sample_id, "row_index": i}
+
+        if existing_keypoints or existing_frame_dir or in_path is None or in_path.is_dir() or in_path.suffix.lower() not in VIDEO_EXTS:
+            unchanged += 1
+            emit_preprocess_debug(debug_dir, {
+                **row_ctx,
+                "phase": "sanitize_fall_video_manifest_row_unchanged",
+                "resolved_input_path": str(in_path) if in_path else None,
+                "reason": "existing_keypoints_or_frame_dir_or_not_video",
+                "has_keypoints_path": bool(existing_keypoints),
+                "has_frame_dir": bool(existing_frame_dir),
+            }, last=False, echo=False)
+            new_rows.append(new_row)
+            continue
+
+        safe_sample = re.sub(r"[^A-Za-z0-9_.-]+", "_", sample_id).strip("_") or f"row_{i}"
+        frames_dir = frame_root / safe_sample
+        log_path = log_base / "ffmpeg_frame_extract" / f"{safe_sample}.log"
+        rec = ffmpeg_extract_video_frames(
+            in_path,
+            frames_dir,
+            cwd=args.project_root,
+            log_path=log_path,
+            dry_run=dry_run,
+            max_frames=getattr(args, "max_frames_per_sample", None),
+            debug_dir=debug_dir,
+            debug_context={**row_ctx, "phase_context": "sanitize_fall_video_manifest"},
+        )
+        rec["sample_id"] = sample_id
+        rec["row_index"] = i
+        records.append(rec)
+        if rec.get("status") == "ok":
+            extracted += 1
+            new_row["frame_dir"] = str(frames_dir)
+            # Keep the source path for debugging but prevent downstream scripts
+            # from opening the fragile AVI when frame_dir is available.
+            new_row["source_video_path"] = str(in_path)
+            if "video_path" in new_row:
+                new_row["video_path"] = ""
+            if "path" in new_row and str(new_row.get("path") or "") == str(row.get("video_path") or ""):
+                new_row["path"] = ""
+            new_row["ffmpeg_frame_extract_status"] = "ok"
+            new_row["ffmpeg_frame_count"] = str(rec.get("num_frames", 0))
+        else:
+            new_row["ffmpeg_frame_extract_status"] = "error"
+            new_row["preprocess_error"] = "ffmpeg_video_frame_extract_failed"
+            failures.append(rec)
+        new_rows.append(new_row)
+
+    fields = list(fieldnames)
+    for extra in ["frame_dir", "source_video_path", "ffmpeg_frame_extract_status", "ffmpeg_frame_count", "preprocess_error"]:
+        if extra not in fields:
+            fields.append(extra)
+    write_csv_rows(new_rows, out_manifest, fields)
+    records_path = out_manifest.with_suffix(".ffmpeg_frames.json")
+    write_json(records, records_path)
+    info = {
+        "status": "ok" if not failures else "error",
+        "source_manifest": str(manifest),
+        "sanitized_manifest": str(out_manifest),
+        "frame_root": str(frame_root),
+        "num_rows": len(rows),
+        "num_videos_extracted": extracted,
+        "num_rows_unchanged": unchanged,
+        "num_failures": len(failures),
+        "records_json": str(records_path),
+        "data_root_after_sanitize": None,
+    }
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "sanitize_fall_video_manifest_done",
+        **info,
+    }, last=bool(failures), echo=True)
+    return out_manifest, info
 
 def command_base(module: Optional[str], script: Optional[str | Path], python_exe: str) -> List[str]:
     if module:
@@ -1100,56 +1592,310 @@ def _path_or_none(value: Any) -> Optional[Path]:
     return p
 
 
-def discover_method_rows(pipeline_root: Path) -> List[MethodRow]:
+def _infer_task_from_summary_row(row: Dict[str, Any]) -> str:
+    """Best-effort task inference for nested summary_by_context rows."""
+    explicit = str(row.get("task") or "").strip()
+    if explicit:
+        return explicit
+    parts: List[str] = []
+    for key in ["request_id", "result_json", "selected_pipeline_json", "pipeline_spec_json", "matched_output_cap", "matched_output_schema", "final_output_type", "final_output_schema", "output_dir"]:
+        value = row.get(key)
+        if value:
+            parts.append(str(value))
+    # Compact result.json often contains request_id/task even if summary_by_context does not.
+    result_json = row.get("result_json")
+    if result_json and Path(str(result_json)).exists():
+        try:
+            result = load_json(str(result_json))
+            parts.extend(str(result.get(k) or "") for k in ["request_id", "task", "scenario_id"])
+            if isinstance(result.get("request_identity"), dict):
+                parts.extend(str(v) for v in result["request_identity"].values())
+        except Exception:
+            pass
+    text = " ".join(parts).lower()
+    if any(x in text for x in ["fall", "le2i", "pose_keypoints", "fall_or_safety_event", "raw_video_stream"]):
+        return "fall_detection"
+    if any(x in text for x in ["youhome", "adl", "av_manifest", "youhome_av", "activity_label"]):
+        return "adl_recognition"
+    if any(x in text for x in ["chime", "chimehome", "domestic_audio", "home_audio", "sound_event", "audio_waveform", "speech_removed", "decibel"]):
+        return "domestic_sound_monitoring"
+    if any(x in text for x in ["chokepoint", "visitor", "occupancy", "object_detections", "room_occupied", "raw_image_frame", "redacted_image_frame"]):
+        return "visitor_presence_detection"
+    return ""
+
+
+def _rows_from_summary_by_context(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for sid, methods in sorted((data or {}).items()):
+        if not isinstance(methods, dict):
+            continue
+        for method_key, row in sorted(methods.items()):
+            if not isinstance(row, dict):
+                continue
+            r = dict(row)
+            r.setdefault("scenario_id", sid)
+            if method_key.startswith("ablation:"):
+                mode = method_key.split(":", 1)[1]
+                r.setdefault("method_id", method_key)
+                r.setdefault("method_kind", "ablation")
+                r.setdefault("baseline", method_key)
+                r.setdefault("ablation_mode", mode)
+            else:
+                r.setdefault("method_id", method_key)
+                r.setdefault("method_kind", "baseline")
+                r.setdefault("baseline", method_key)
+            if not r.get("method_output_dir") and r.get("output_dir"):
+                r["method_output_dir"] = r.get("output_dir")
+            if not r.get("task"):
+                r["task"] = _infer_task_from_summary_row(r)
+            rows.append(r)
+    return rows
+
+
+def _row_truthy(value: Any) -> bool:
+    return value not in (None, "", [], {})
+
+
+def _row_score_for_discovery(row: Dict[str, Any]) -> int:
+    """Score how complete a discovered pipeline row is for merge-mode discovery."""
+    score = 0
+    for key in [
+        "scenario_id",
+        "task",
+        "method_id",
+        "method_kind",
+        "baseline",
+        "decision",
+        "method_output_dir",
+        "result_json",
+        "selected_pipeline_json",
+        "pipeline_spec_json",
+        "final_output_type",
+        "final_output_schema",
+        "matched_output_cap",
+        "matched_output_schema",
+        "operators",
+    ]:
+        if _row_truthy(row.get(key)):
+            score += 1
+    # Prefer rows whose referenced files actually exist; summary rows can be stale.
+    for key in ["result_json", "selected_pipeline_json", "pipeline_spec_json", "method_output_dir"]:
+        value = row.get(key)
+        try:
+            if value and Path(str(value)).exists():
+                score += 3
+        except Exception:
+            pass
+    return score
+
+
+def _normalize_discovered_method_id(row: Dict[str, Any]) -> str:
+    method_id = str(row.get("method_id") or row.get("baseline") or "").strip()
+    ablation_mode = row.get("ablation_mode")
+    if ablation_mode not in (None, "") and not method_id.startswith("ablation:"):
+        method_id = f"ablation:{ablation_mode}"
+    return method_id
+
+
+def _merge_discovered_row_dicts(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge two discovery rows for the same scenario/method, preserving the better row."""
+    merged = dict(primary)
+    for key, value in secondary.items():
+        if not _row_truthy(merged.get(key)) and _row_truthy(value):
+            merged[key] = value
+    # For path fields, prefer an existing path from either row.
+    for key in ["method_output_dir", "result_json", "selected_pipeline_json", "pipeline_spec_json"]:
+        vals = [primary.get(key), secondary.get(key)]
+        existing = None
+        for v in vals:
+            try:
+                if v and Path(str(v)).exists():
+                    existing = v
+                    break
+            except Exception:
+                pass
+        if existing:
+            merged[key] = existing
+    # Keep a small provenance note so utility_eval_plan.json can explain why raw/manual are found.
+    sources: List[str] = []
+    for r in [primary, secondary]:
+        src = r.get("_discovery_source")
+        if isinstance(src, list):
+            sources.extend(str(x) for x in src)
+        elif src:
+            sources.append(str(src))
+    if sources:
+        merged["_discovery_source"] = sorted(set(sources))
+    return merged
+
+
+def _rows_from_pipeline_run_scan(pipeline_root: Path) -> List[Dict[str, Any]]:
+    """
+    Scan the concrete run directories directly.  This is intentionally used even
+    when summary.json/summary_by_context.json exists, because summary files can
+    be stale or can omit core baselines such as raw/manual after partial reruns.
+    """
+    rows: List[Dict[str, Any]] = []
+
+    def _selected_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
+        selected = result.get("selected_candidate") or result.get("selected_pipeline") or {}
+        if not selected and isinstance(result.get("decision"), dict):
+            selected = result.get("decision", {}).get("selected_candidate") or {}
+        return selected if isinstance(selected, dict) else {}
+
+    def _decision_from_result(result: Dict[str, Any]) -> str:
+        decision = result.get("decision")
+        if isinstance(decision, dict):
+            return str(decision.get("decision") or decision.get("status") or "")
+        return str(decision or result.get("status") or "")
+
+    for p in sorted(pipeline_root.glob("S*/baselines/*/result.json")):
+        method_dir = p.parent
+        scenario_id = p.parents[2].name
+        method_id = method_dir.name
+        try:
+            result = load_json(p)
+        except Exception:
+            result = {}
+        selected = _selected_from_result(result)
+        final_cap = selected.get("final_output_cap") or result.get("final_output_cap") or {}
+        rows.append({
+            "scenario_id": scenario_id,
+            "task": str(result.get("task") or ""),
+            "method_id": method_id,
+            "method_kind": "baseline",
+            "baseline": method_id,
+            "ablation_mode": None,
+            "method_output_dir": str(method_dir),
+            "output_dir": str(method_dir),
+            "result_json": str(p),
+            "selected_pipeline_json": str(method_dir / "selected_pipeline.json") if (method_dir / "selected_pipeline.json").exists() else None,
+            "pipeline_spec_json": str(method_dir / "pipeline_spec.json") if (method_dir / "pipeline_spec.json").exists() else None,
+            "final_output_type": cap_type(final_cap),
+            "final_output_schema": cap_schema(final_cap),
+            "matched_output_cap": selected.get("matched_output_cap") or result.get("matched_output_cap"),
+            "matched_output_schema": selected.get("matched_output_schema") or result.get("matched_output_schema"),
+            "operators": " -> ".join(str(op.get("operator") or op.get("operator_id") or "") for op in (selected.get("operators") or []) if isinstance(op, dict)),
+            "decision": _decision_from_result(result),
+            "_discovery_source": "filesystem_scan",
+        })
+
+    for p in sorted(pipeline_root.glob("S*/ablations/*/result.json")):
+        method_dir = p.parent
+        scenario_id = p.parents[2].name
+        ablation_mode = method_dir.name
+        method_id = f"ablation:{ablation_mode}"
+        try:
+            result = load_json(p)
+        except Exception:
+            result = {}
+        selected = _selected_from_result(result)
+        final_cap = selected.get("final_output_cap") or result.get("final_output_cap") or {}
+        rows.append({
+            "scenario_id": scenario_id,
+            "task": str(result.get("task") or ""),
+            "method_id": method_id,
+            "method_kind": "ablation",
+            "baseline": method_id,
+            "ablation_mode": ablation_mode,
+            "method_output_dir": str(method_dir),
+            "output_dir": str(method_dir),
+            "result_json": str(p),
+            "selected_pipeline_json": str(method_dir / "selected_pipeline.json") if (method_dir / "selected_pipeline.json").exists() else None,
+            "pipeline_spec_json": str(method_dir / "pipeline_spec.json") if (method_dir / "pipeline_spec.json").exists() else None,
+            "final_output_type": cap_type(final_cap),
+            "final_output_schema": cap_schema(final_cap),
+            "matched_output_cap": selected.get("matched_output_cap") or result.get("matched_output_cap"),
+            "matched_output_schema": selected.get("matched_output_schema") or result.get("matched_output_schema"),
+            "operators": " -> ".join(str(op.get("operator") or op.get("operator_id") or "") for op in (selected.get("operators") or []) if isinstance(op, dict)),
+            "decision": _decision_from_result(result),
+            "_discovery_source": "filesystem_scan",
+        })
+    return rows
+
+
+def discover_method_rows(pipeline_root: Path, discovery_mode: str = "merge") -> List[MethodRow]:
+    """
+    Discover selected pipeline rows for utility evaluation.
+
+    v16 behavior: default merge mode combines summary.json, summary_by_context.json,
+    and a filesystem scan.  This prevents partial/stale summaries from silently
+    omitting core baselines such as raw/manual while still preserving compact
+    summary metadata when it is available.
+    """
+    discovery_mode = str(discovery_mode or "merge").strip().lower()
+    if discovery_mode not in {"merge", "summary", "scan"}:
+        raise ValueError(f"Unknown --pipeline-discovery mode: {discovery_mode}")
+
     summary_path = pipeline_root / "summary.json"
-    if summary_path.exists():
-        rows = load_json(summary_path)
-    else:
-        # Conservative fallback: scan selected_pipeline.json locations.
-        rows = []
-        for p in pipeline_root.glob("S*/baselines/*/result.json"):
-            method_dir = p.parent
-            scenario_id = p.parents[2].name
-            method_id = method_dir.name
-            result = load_json(p)
-            selected = result.get("selected_candidate") or {}
-            final_cap = selected.get("final_output_cap") or {}
-            rows.append({
-                "scenario_id": scenario_id,
-                "task": "",
-                "method_id": method_id,
-                "method_kind": "baseline",
-                "baseline": method_id,
-                "method_output_dir": str(method_dir),
-                "result_json": str(p),
-                "selected_pipeline_json": str(method_dir / "selected_pipeline.json") if (method_dir / "selected_pipeline.json").exists() else None,
-                "pipeline_spec_json": str(method_dir / "pipeline_spec.json") if (method_dir / "pipeline_spec.json").exists() else None,
-                "final_output_type": cap_type(final_cap),
-                "final_output_schema": cap_schema(final_cap),
-                "decision": result.get("decision", {}).get("decision") if isinstance(result.get("decision"), dict) else result.get("decision"),
-            })
-        for p in pipeline_root.glob("S*/ablations/*/result.json"):
-            method_dir = p.parent
-            scenario_id = p.parents[2].name
-            ablation_mode = method_dir.name
-            result = load_json(p)
-            selected = result.get("selected_candidate") or {}
-            final_cap = selected.get("final_output_cap") or {}
-            rows.append({
-                "scenario_id": scenario_id,
-                "task": "",
-                "method_id": f"ablation:{ablation_mode}",
-                "method_kind": "ablation",
-                "baseline": f"ablation:{ablation_mode}",
-                "ablation_mode": ablation_mode,
-                "method_output_dir": str(method_dir),
-                "result_json": str(p),
-                "selected_pipeline_json": str(method_dir / "selected_pipeline.json") if (method_dir / "selected_pipeline.json").exists() else None,
-                "pipeline_spec_json": str(method_dir / "pipeline_spec.json") if (method_dir / "pipeline_spec.json").exists() else None,
-                "final_output_type": cap_type(final_cap),
-                "final_output_schema": cap_schema(final_cap),
-                "decision": result.get("decision", {}).get("decision") if isinstance(result.get("decision"), dict) else result.get("decision"),
-            })
+    summary_by_context_path = pipeline_root / "summary_by_context.json"
+    raw_rows: List[Dict[str, Any]] = []
+
+    if discovery_mode in {"merge", "summary"}:
+        if summary_path.exists():
+            loaded = load_json(summary_path)
+            if isinstance(loaded, dict) and all(isinstance(v, dict) for v in loaded.values()):
+                summary_rows = _rows_from_summary_by_context(loaded)
+            else:
+                summary_rows = list(loaded or [])
+            for r in summary_rows:
+                if isinstance(r, dict):
+                    rr = dict(r)
+                    rr.setdefault("_discovery_source", "summary.json")
+                    raw_rows.append(rr)
+        if summary_by_context_path.exists():
+            for r in _rows_from_summary_by_context(load_json(summary_by_context_path)):
+                rr = dict(r)
+                rr.setdefault("_discovery_source", "summary_by_context.json")
+                raw_rows.append(rr)
+
+    if discovery_mode in {"merge", "scan"}:
+        raw_rows.extend(_rows_from_pipeline_run_scan(pipeline_root))
+
+    # If summary mode found nothing, keep the old conservative fallback behavior.
+    if not raw_rows and discovery_mode == "summary":
+        raw_rows = _rows_from_pipeline_run_scan(pipeline_root)
+
+    # Dedupe by scenario+method. Prefer the more complete row, then backfill
+    # missing fields from the other sources.
+    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for r in raw_rows:
+        if not isinstance(r, dict):
+            continue
+        if not r.get("scenario_id"):
+            # Try to recover scenario id from output/result paths.
+            for key in ["output_dir", "method_output_dir", "result_json"]:
+                val = str(r.get(key) or "")
+                m = re.search(r"/(S\d{3,})/", "/" + val.strip("/"))
+                if m:
+                    r["scenario_id"] = m.group(1)
+                    break
+        method_id = _normalize_discovered_method_id(r)
+        if method_id:
+            r["method_id"] = method_id
+        if not r.get("method_kind"):
+            r["method_kind"] = "ablation" if str(method_id).startswith("ablation:") else "baseline"
+        if not r.get("baseline"):
+            r["baseline"] = method_id
+        if str(method_id).startswith("ablation:") and not r.get("ablation_mode"):
+            r["ablation_mode"] = str(method_id).split(":", 1)[1]
+        if not r.get("method_output_dir") and r.get("output_dir"):
+            r["method_output_dir"] = r.get("output_dir")
+        if not r.get("task"):
+            r["task"] = _infer_task_from_summary_row(r)
+        key = (str(r.get("scenario_id") or ""), str(method_id or ""))
+        if not key[0] or not key[1]:
+            continue
+        prev = by_key.get(key)
+        if prev is None:
+            by_key[key] = dict(r)
+        else:
+            if _row_score_for_discovery(r) >= _row_score_for_discovery(prev):
+                by_key[key] = _merge_discovered_row_dicts(dict(r), prev)
+            else:
+                by_key[key] = _merge_discovered_row_dicts(prev, dict(r))
+
+    rows = [by_key[k] for k in sorted(by_key.keys())]
 
     out: List[MethodRow] = []
     for r in rows:
@@ -1161,6 +1907,8 @@ def discover_method_rows(pipeline_root: Path) -> List[MethodRow]:
                 candidate = pipeline_root.parent.parent / method_output_dir
                 if candidate.exists():
                     method_output_dir = candidate
+        if not r.get("task"):
+            r["task"] = _infer_task_from_summary_row(r)
         out.append(MethodRow(
             scenario_id=str(r.get("scenario_id") or ""),
             task=str(r.get("task") or ""),
@@ -1178,7 +1926,6 @@ def discover_method_rows(pipeline_root: Path) -> List[MethodRow]:
             raw=dict(r),
         ))
     return out
-
 
 # ---------------------------------------------------------------------------
 # Runtime preprocessing helpers
@@ -1279,12 +2026,19 @@ class RuntimeAdapter:
                 self.save_image(frame, frame_dir / f"{i:06d}.jpg")  # type: ignore[misc]
             return {"kind": "frame_dir", "path": str(frame_dir), "caps": caps}
 
-        # Generic JSON fallback.
+        # Generic JSON fallback. Flexible app requests may intentionally
+        # publish semantic primitives (detections, occupancy, sound events,
+        # activity labels, aggregates). Preserve the payload so task-specific
+        # semantic adapters can evaluate utility without rerunning a legacy
+        # media-consuming downstream model.
         out_path = output_base.with_suffix(".json")
         if hasattr(item, "to_jsonable"):
-            obj = item.to_jsonable(include_payload=False)
+            try:
+                obj = item.to_jsonable(include_payload=True)
+            except TypeError:
+                obj = item.to_jsonable()
         else:
-            obj = {"caps": caps, "data_repr": repr(data)[:1000]}
+            obj = {"caps": caps, "data": data, "data_repr": repr(data)[:1000]}
         write_json(obj, out_path)
         return {"kind": "json", "path": str(out_path), "caps": caps}
 
@@ -1334,7 +2088,16 @@ def media_type_for_path(path: Path, task: str) -> str:
     return "application/octet-stream"
 
 
-def transform_image_dir(runtime: RuntimeAdapter, pipe: Any, in_dir: Path, out_dir: Path, max_frames: Optional[int], task: str) -> Dict[str, Any]:
+def transform_image_dir(
+    runtime: RuntimeAdapter,
+    pipe: Any,
+    in_dir: Path,
+    out_dir: Path,
+    max_frames: Optional[int],
+    task: str,
+    debug_dir: Optional[str | Path] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     frames = sorted_images(in_dir)
     original_frame_count = len(frames)
@@ -1342,6 +2105,8 @@ def transform_image_dir(runtime: RuntimeAdapter, pipe: Any, in_dir: Path, out_di
         frames = frames[:max_frames]
     saved = 0
     errors: List[str] = []
+    output_kinds: List[str] = []
+    json_paths: List[str] = []
     progress_write(
         f"[frames] sample_dir={in_dir.name}: transforming {len(frames)}/{original_frame_count} image frames "
         f"(the frame progress-bar denominator is frames in this one sample; "
@@ -1365,20 +2130,116 @@ def transform_image_dir(runtime: RuntimeAdapter, pipe: Any, in_dir: Path, out_di
             except Exception:
                 pass
         try:
+            emit_preprocess_debug(debug_dir, {
+                **(debug_context or {}),
+                "phase": "before_frame_runtime_process",
+                "task": task,
+                "frame_path": str(img),
+                "resolved_input_path": str(img),
+                "resolved_input_exists": img.exists(),
+                "resolved_input_suffix": img.suffix.lower(),
+                "resolved_media_type": "image/x-raw",
+                "output_base": str(out_dir / img.stem),
+            }, last=True, echo=False)
             item = runtime.item_from_path(img, media_type="image/x-raw")
             out = pipe.process(item)
             if out is None:
                 continue
             meta = runtime.save_output_item(out, out_dir / img.stem, preferred_kind="image")
+            output_kinds.append(str(meta.get("kind") or ""))
+            if meta.get("kind") == "json" and meta.get("path"):
+                json_paths.append(str(meta.get("path")))
             saved += 1
         except Exception as exc:
+            emit_preprocess_debug(debug_dir, {
+                **(debug_context or {}),
+                "phase": "frame_runtime_process_error",
+                "task": task,
+                "frame_path": str(img),
+                "resolved_input_path": str(img),
+                "error": repr(exc),
+                "traceback": traceback.format_exc(),
+            }, last=True, echo=True)
             errors.append(f"{img}: {exc!r}")
-    return {"kind": "frame_dir", "path": str(out_dir), "num_inputs": len(frames), "num_outputs": saved, "errors": errors[:20]}
+    kind = "semantic_dir" if json_paths and len(json_paths) >= max(1, saved) else "frame_dir"
+    return {
+        "kind": kind,
+        "path": str(out_dir),
+        "num_inputs": len(frames),
+        "num_outputs": saved,
+        "errors": errors[:20],
+        "output_kinds": sorted(set(output_kinds)),
+        "json_paths": json_paths[:20],
+        "num_json_outputs": len(json_paths),
+    }
 
 
-def transform_single_media(runtime: RuntimeAdapter, pipe: Any, in_path: Path, out_base: Path, task: str) -> Dict[str, Any]:
-    item = runtime.item_from_path(in_path, media_type=media_type_for_path(in_path, task))
+def transform_single_media(
+    runtime: RuntimeAdapter,
+    pipe: Any,
+    in_path: Path,
+    out_base: Path,
+    task: str,
+    debug_dir: Optional[str | Path] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
+    max_frames_per_sample: Optional[int] = None,
+) -> Dict[str, Any]:
+    media_type = media_type_for_path(in_path, task)
+
+    # Avoid direct in-process decode of LE2I AVI files.  Some files expose a
+    # malformed audio stream that OpenCV/FFmpeg can touch even for video reads,
+    # causing native heap corruption.  Extract video-only JPEG frames with
+    # ffmpeg in a subprocess, then run the runtime pipeline over images.
+    if task == "fall_detection" and in_path.suffix.lower() in VIDEO_EXTS:
+        frames_dir = out_base.parent / (out_base.stem + "_ffmpeg_frames")
+        ffmpeg_log = out_base.parent / (out_base.stem + ".ffmpeg_frames.log")
+        extract_info = ffmpeg_extract_video_frames(
+            in_path,
+            frames_dir,
+            cwd=_RUNTIME_PROJECT_ROOT,
+            log_path=ffmpeg_log,
+            dry_run=False,
+            max_frames=max_frames_per_sample,
+            debug_dir=debug_dir,
+            debug_context={**(debug_context or {}), "task": task, "phase_context": "runtime_single_media_video_sanitize"},
+        )
+        if extract_info.get("status") != "ok":
+            return {"kind": "none", "path": None, "num_outputs": 0, "ffmpeg_frame_extract": extract_info, "error": "ffmpeg_video_frame_extract_failed"}
+        rec = transform_image_dir(
+            runtime,
+            pipe,
+            frames_dir,
+            out_base.parent / (out_base.stem + "_runtime_frames"),
+            max_frames=None,
+            task=task,
+            debug_dir=debug_dir,
+            debug_context={**(debug_context or {}), "task": task, "source_video_path": str(in_path), "ffmpeg_frame_dir": str(frames_dir)},
+        )
+        rec["ffmpeg_frame_extract"] = extract_info
+        rec["source_video_path"] = str(in_path)
+        return rec
+
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "before_single_media_runtime_process",
+        "task": task,
+        "resolved_input_path": str(in_path),
+        "resolved_input_exists": in_path.exists(),
+        "resolved_input_is_dir": in_path.is_dir(),
+        "resolved_input_suffix": in_path.suffix.lower(),
+        "resolved_media_type": media_type,
+        "output_base": str(out_base),
+    }, last=True, echo=True)
+    item = runtime.item_from_path(in_path, media_type=media_type)
     out = pipe.process(item)
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "after_single_media_runtime_process",
+        "task": task,
+        "resolved_input_path": str(in_path),
+        "output_base": str(out_base),
+        "returned_none": out is None,
+    }, last=True, echo=False)
     if out is None:
         return {"kind": "none", "path": None, "num_outputs": 0}
     preferred = "audio" if in_path.suffix.lower() in AUDIO_EXTS else "auto"
@@ -1396,6 +2257,8 @@ def transform_manifest_with_pipeline(
     max_samples: Optional[int] = None,
     max_frames_per_sample: Optional[int] = None,
     dry_run: bool = False,
+    debug_dir: Optional[str | Path] = None,
+    debug_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     rows, fieldnames = read_csv_rows(manifest_path, max_rows=None)
     if split:
@@ -1403,6 +2266,21 @@ def transform_manifest_with_pipeline(
     split_filtered_count = len(rows)
     if max_samples is not None:
         rows = rows[:max_samples]
+
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "transform_manifest_start",
+        "task": task,
+        "manifest_path": str(manifest_path),
+        "source_data_root": str(data_root) if data_root else None,
+        "pipeline_spec": str(spec_path),
+        "out_manifest_path": str(out_manifest_path),
+        "out_data_dir": str(out_data_dir),
+        "split": split,
+        "max_samples": max_samples,
+        "rows_to_transform": len(rows),
+        "rows_after_split": split_filtered_count,
+    }, last=False, echo=True)
 
     progress_write(
         f"[preprocess] task={task}: transforming {len(rows)} manifest rows/samples "
@@ -1415,8 +2293,21 @@ def transform_manifest_with_pipeline(
         return {"status": "dry_run", "manifest": str(out_manifest_path), "num_rows": len(rows), "num_transformed": 0}
 
     runtime = RuntimeAdapter()
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "before_load_runtime_pipeline",
+        "task": task,
+        "pipeline_spec": str(spec_path),
+        "out_manifest_path": str(out_manifest_path),
+    }, last=True, echo=True)
     progress_write(f"[preprocess] loading runtime pipeline spec={spec_path}")
     pipe = runtime.pipeline_from_spec(spec_path)
+    emit_preprocess_debug(debug_dir, {
+        **(debug_context or {}),
+        "phase": "after_load_runtime_pipeline",
+        "task": task,
+        "pipeline_spec": str(spec_path),
+    }, last=False, echo=True)
     progress_write(f"[preprocess] loaded runtime pipeline spec={spec_path}")
     new_rows: List[Dict[str, Any]] = []
     transform_records: List[Dict[str, Any]] = []
@@ -1441,6 +2332,28 @@ def transform_manifest_with_pipeline(
                 pass
         in_path = resolve_manifest_media_path(row, data_root)
         new_row: Dict[str, Any] = dict(row)
+        row_debug_context = {
+            **(debug_context or {}),
+            "pipeline_spec": str(spec_path),
+            "out_manifest_path": str(out_manifest_path),
+            "out_data_dir": str(out_data_dir),
+        }
+        row_debug = debug_record_for_manifest_row(
+            phase="before_sample_preprocess",
+            task=task,
+            row_index=i,
+            row=row,
+            data_root=data_root,
+            manifest_path=manifest_path,
+            filtered_manifest_path=manifest_path,
+            spec_path=spec_path,
+            scenario_id=row_debug_context.get("scenario_id"),
+            method_id=row_debug_context.get("method_id"),
+            final_output_type=row_debug_context.get("final_output_type"),
+            final_output_schema=row_debug_context.get("final_output_schema"),
+        )
+        row_debug.update(row_debug_context)
+        emit_preprocess_debug(debug_dir, row_debug, last=True, echo=True)
         if in_path is None:
             new_row["preprocess_error"] = "missing_input"
             if hasattr(iterator, "set_postfix_str"):
@@ -1460,15 +2373,37 @@ def transform_manifest_with_pipeline(
         try:
             if in_path.is_dir():
                 out_dir = sample_base / "frames"
-                rec = transform_image_dir(runtime, pipe, in_path, out_dir, max_frames_per_sample, task)
-                new_row["frame_dir"] = str(out_dir)
+                rec = transform_image_dir(
+                    runtime,
+                    pipe,
+                    in_path,
+                    out_dir,
+                    max_frames_per_sample,
+                    task,
+                    debug_dir=debug_dir,
+                    debug_context={**row_debug_context, "sample_id": sample_id, "row_index": i, "source_input_path": str(in_path)},
+                )
+                if rec.get("kind") == "semantic_dir":
+                    new_row["semantic_dir"] = str(out_dir)
+                    new_row["preprocessed_json_dir"] = str(out_dir)
+                else:
+                    new_row["frame_dir"] = str(out_dir)
                 # Avoid stale source columns that can be preferred by downstream scripts.
                 if "video_path" in new_row:
                     new_row["video_path"] = ""
                 if "image_path" in new_row:
                     new_row["image_path"] = ""
             else:
-                rec = transform_single_media(runtime, pipe, in_path, sample_base / "output", task)
+                rec = transform_single_media(
+                    runtime,
+                    pipe,
+                    in_path,
+                    sample_base / "output",
+                    task,
+                    debug_dir=debug_dir,
+                    debug_context={**row_debug_context, "sample_id": sample_id, "row_index": i, "source_input_path": str(in_path)},
+                    max_frames_per_sample=max_frames_per_sample,
+                )
                 kind = rec.get("kind")
                 out_path = str(rec.get("path") or "")
                 if kind == "image":
@@ -1495,6 +2430,16 @@ def transform_manifest_with_pipeline(
             rec["input_path"] = str(in_path)
             transform_records.append(rec)
         except Exception as exc:
+            emit_preprocess_debug(debug_dir, {
+                **(row_debug_context if 'row_debug_context' in locals() else (debug_context or {})),
+                "phase": "sample_preprocess_python_error",
+                "task": task,
+                "sample_id": sample_id,
+                "row_index": i,
+                "resolved_input_path": str(in_path) if in_path is not None else None,
+                "error": repr(exc),
+                "traceback": traceback.format_exc(),
+            }, last=True, echo=True)
             new_row["preprocess_error"] = repr(exc)
             transform_records.append({
                 "sample_id": sample_id,
@@ -1522,6 +2467,8 @@ def transform_manifest_with_pipeline(
         "num_transformed": transformed,
         "num_missing_inputs": unresolved,
         "transform_records_json": str(out_manifest_path.with_suffix(".transforms.json")),
+        "preprocess_debug_jsonl": str(Path(debug_dir) / "preprocess_debug.jsonl") if debug_dir is not None else None,
+        "last_preprocess_attempt_json": str(Path(debug_dir) / "last_preprocess_attempt.json") if debug_dir is not None else None,
     }
 
 
@@ -1594,15 +2541,64 @@ def run_fall_extract_pose(
     retained_log_dir.mkdir(parents=True, exist_ok=True)
     extract_log = retained_log_dir / "extract_pose.log"
 
+    debug_dir = retained_log_dir if preprocess_debug_enabled(args) else None
+    sanitize_info: Optional[Dict[str, Any]] = None
+    manifest_for_pose = Path(manifest)
+    data_root_for_pose: Optional[str | Path] = data_root
+
+    # Default to evaluator-side video sanitization for LE2I.  It rewrites video
+    # rows to ffmpeg-extracted frame_dir rows before the downstream pose script
+    # can open fragile AVI files through OpenCV.  The existing
+    # --no-sanitize-videos flag disables this if you specifically want the old
+    # behavior for comparison.
+    if not getattr(args, "no_sanitize_videos", False):
+        sanitized_manifest = out_dir / "manifest_video_sanitized_for_pose.csv"
+        frame_root = out_dir / "ffmpeg_video_frames_for_pose"
+        manifest_for_pose, sanitize_info = sanitize_fall_video_manifest_with_ffmpeg(
+            args,
+            manifest,
+            data_root,
+            sanitized_manifest,
+            frame_root,
+            log_dir=retained_log_dir,
+            dry_run=dry_run,
+            debug_dir=debug_dir,
+            debug_context={
+                "task": "fall_detection",
+                "phase_context": "before_downstream_pose_extract",
+                "manifest_for_eval": str(manifest),
+                "data_root": str(data_root) if data_root else None,
+            },
+        )
+        data_root_for_pose = None
+        if sanitize_info.get("status") != "ok":
+            # Still run pose extraction only in dry-run mode.  In real mode a
+            # failed frame extraction means the pose manifest cannot be safely
+            # produced.
+            if not dry_run:
+                return pose_manifest, {
+                    "extract_pose_status": "error",
+                    "extract_pose": {"returncode": None, "error_summary": "ffmpeg video sanitization failed before pose extraction"},
+                    "extract_pose_log": str(extract_log),
+                    "pose_manifest": str(pose_manifest),
+                    "pose_manifest_exists": False,
+                    "pose_dir": str(pose_dir),
+                    "video_sanitize": sanitize_info,
+                }
+
     cmd = command_base(args.fall_extract_pose_module, args.fall_extract_pose_script, args.python)
     supported = supported_cli_flags(cmd, cwd=args.project_root)
-    cmd.extend(["--manifest", str(manifest), "--output-dir", str(pose_dir), "--updated-manifest", str(pose_manifest)])
-    append_if_supported(cmd, supported, "--data-root", data_root)
+    cmd.extend(["--manifest", str(manifest_for_pose), "--output-dir", str(pose_dir), "--updated-manifest", str(pose_manifest)])
+    append_if_supported(cmd, supported, "--data-root", data_root_for_pose)
     append_if_supported(cmd, supported, "--model", args.fall_pose_model)
     append_if_supported(cmd, supported, "--device", normalized_device(args.device, ultralytics=True))
     append_if_supported(cmd, supported, "--stride", args.fall_pose_stride)
     append_if_supported(cmd, supported, "--max-frames", args.max_frames_per_sample)
-    append_bool_if_supported(cmd, supported, "--no-sanitize-videos", args.no_sanitize_videos)
+    # Do not pass --no-sanitize-videos when the evaluator already sanitized the
+    # manifest.  If the downstream script has its own sanitizer, allowing it is
+    # harmless for frame_dir rows and gives another safety net.
+    if getattr(args, "no_sanitize_videos", False):
+        append_bool_if_supported(cmd, supported, "--no-sanitize-videos", True)
     run = run_cmd(cmd, cwd=args.project_root, log_path=extract_log, dry_run=dry_run)
 
     output_exists = bool(pose_manifest.exists()) if not dry_run else True
@@ -1617,6 +2613,9 @@ def run_fall_extract_pose(
         "pose_manifest": str(pose_manifest),
         "pose_manifest_exists": output_exists,
         "pose_dir": str(pose_dir),
+        "pose_input_manifest": str(manifest_for_pose),
+        "pose_input_data_root": str(data_root_for_pose) if data_root_for_pose else None,
+        "video_sanitize": sanitize_info,
     }
 
 
@@ -1641,8 +2640,9 @@ def _ensure_fall_pose_manifest_ready(args: argparse.Namespace, pose_manifest: Pa
 def infer_fall(args: argparse.Namespace, manifest: Path, data_root: Optional[str | Path], out_dir: Path, dry_run: bool) -> Dict[str, Any]:
     if not args.fall_infer_module and not args.fall_infer_script:
         raise ValueError("fall_detection requires --fall-infer-module or --fall-infer-script")
-    if not args.fall_checkpoint or not args.fall_label_map:
-        raise ValueError("fall_detection requires --fall-checkpoint and --fall-label-map")
+    if not args.fall_checkpoint:
+        raise ValueError("fall_detection requires --fall-checkpoint")
+    label_map_path = ensure_task_label_map(args, "fall_detection", manifest, out_dir)
     output_csv = out_dir / "predictions.csv"
     video_output_csv = out_dir / "predictions_video.csv"
     metrics_json = out_dir / "metrics.json"
@@ -1650,7 +2650,7 @@ def infer_fall(args: argparse.Namespace, manifest: Path, data_root: Optional[str
     cmd.extend([
         "--manifest", str(manifest),
         "--checkpoint", str(args.fall_checkpoint),
-        "--label-map", str(args.fall_label_map),
+        "--label-map", str(label_map_path),
         "--output-csv", str(output_csv),
         "--video-output-csv", str(video_output_csv),
         "--metrics-json", str(metrics_json),
@@ -1694,15 +2694,16 @@ def infer_home_audio(args: argparse.Namespace, manifest: Path, out_dir: Path, dr
 def infer_youhome(args: argparse.Namespace, manifest: Path, data_root: Optional[str | Path], out_dir: Path, dry_run: bool) -> Dict[str, Any]:
     if not args.youhome_infer_module and not args.youhome_infer_script:
         raise ValueError("adl_recognition requires --youhome-infer-module or --youhome-infer-script")
-    if not args.youhome_checkpoint or not args.youhome_label_map:
-        raise ValueError("adl_recognition requires --youhome-checkpoint and --youhome-label-map")
+    if not args.youhome_checkpoint:
+        raise ValueError("adl_recognition requires --youhome-checkpoint")
+    label_map_path = ensure_task_label_map(args, "adl_recognition", manifest, out_dir)
     output_csv = out_dir / "predictions.csv"
     metrics_json = out_dir / "metrics.json"
     cmd = command_base(args.youhome_infer_module, args.youhome_infer_script, args.python)
     cmd.extend([
         "--manifest", str(manifest),
         "--checkpoint", str(args.youhome_checkpoint),
-        "--label-map", str(args.youhome_label_map),
+        "--label-map", str(label_map_path),
         "--output-csv", str(output_csv),
         "--metrics-json", str(metrics_json),
     ])
@@ -2105,6 +3106,8 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
         "schema": row.final_output_schema,
     }
 
+    debug_dir = Path(log_dir) if (log_dir is not None and preprocess_debug_enabled(args)) else None
+
     filtered_manifest = work_dir / "source_manifest_eval_split.csv"
     filter_info = filter_manifest_rows(
         manifest,
@@ -2122,6 +3125,41 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
         "preprocessing_status": "not_started",
         "evaluation_split": args.split,
         "source_manifest_filter": filter_info,
+        "preprocess_debug_dir": str(debug_dir) if debug_dir is not None else None,
+        "preprocess_debug_jsonl": str(debug_dir / "preprocess_debug.jsonl") if debug_dir is not None else None,
+        "preprocess_inputs_jsonl": str(debug_dir / "preprocess_inputs.jsonl") if debug_dir is not None else None,
+        "last_preprocess_attempt_json": str(debug_dir / "last_preprocess_attempt.json") if debug_dir is not None else None,
+    }
+
+    # Durable breadcrumb listing all input paths in the filtered split.  This is
+    # written before any runtime/operator call so native crashes still leave the
+    # exact video/audio/frame path that was about to be processed.
+    try:
+        debug_rows, _debug_fields = read_csv_rows(filtered_manifest, max_rows=None)
+        write_manifest_input_debug(
+            debug_dir=debug_dir,
+            rows=debug_rows,
+            data_root=data_root,
+            task=row.task,
+            manifest_path=manifest,
+            filtered_manifest_path=filtered_manifest,
+            scenario_id=row.scenario_id,
+            method_id=row.method_id,
+            final_output_type=cap_type(final_cap),
+            final_output_schema=cap_schema(final_cap),
+        )
+    except Exception as exc:
+        progress_write(f"[preprocess-debug] failed to write source input path listing for {row.scenario_id}/{row.method_id}: {exc!r}")
+
+    debug_context = {
+        "scenario_id": row.scenario_id,
+        "method_id": row.method_id,
+        "task": row.task,
+        "final_output_type": cap_type(final_cap),
+        "final_output_schema": cap_schema(final_cap),
+        "source_manifest": str(manifest),
+        "filtered_manifest": str(filtered_manifest),
+        "source_data_root": str(data_root) if data_root else None,
     }
 
     # Fall raw/no-transform needs special handling: the downstream app contains
@@ -2150,6 +3188,7 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
                 prep["source_pose_manifest_filter"] = pose_filter_info
                 return pose_filtered_manifest, None, prep
 
+        emit_preprocess_debug(debug_dir, {**debug_context, "phase": "before_run_fall_extract_pose", "manifest_for_eval": str(manifest_for_eval), "data_root": str(data_root) if data_root else None}, last=True, echo=True)
         pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run, log_dir=log_dir)
         prep.update(pose_info)
         _ensure_fall_pose_manifest_ready(args, pose_manifest, pose_info, prep, "raw_media_downstream_yolo_pose_failed")
@@ -2184,10 +3223,14 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
                     max_samples=None,
                     max_frames_per_sample=args.max_frames_per_sample,
                     dry_run=args.dry_run,
+                    debug_dir=debug_dir,
+                    debug_context={**debug_context, "preprocess_branch": "pre_pose_media"},
                 )
                 prep["pre_pose_preprocessing"] = pre_result
+                emit_preprocess_debug(debug_dir, {**debug_context, "phase": "before_run_fall_extract_pose", "manifest_for_eval": str(pre_manifest), "data_root": None, "after_pre_pose_preprocessing": True}, last=True, echo=True)
                 pose_manifest, pose_info = run_fall_extract_pose(args, pre_manifest, None, work_dir, args.dry_run, log_dir=log_dir)
             else:
+                emit_preprocess_debug(debug_dir, {**debug_context, "phase": "before_run_fall_extract_pose", "manifest_for_eval": str(manifest_for_eval), "data_root": str(data_root) if data_root else None, "recognized_pose_extractor_stage": True}, last=True, echo=True)
                 pose_manifest, pose_info = run_fall_extract_pose(args, manifest_for_eval, data_root, work_dir, args.dry_run, log_dir=log_dir)
             prep.update(pose_info)
             _ensure_fall_pose_manifest_ready(args, pose_manifest, pose_info, prep, "pose_extraction_failed_before_fall_inference")
@@ -2208,6 +3251,8 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
             max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
+            debug_dir=debug_dir,
+            debug_context={**debug_context, "preprocess_branch": "runtime_pose_manifest"},
         )
         prep.update(transformed)
         prep["preprocessing_status"] = "runtime_pose_manifest_test_split"
@@ -2227,8 +3272,11 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
             max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
+            debug_dir=debug_dir,
+            debug_context={**debug_context, "preprocess_branch": "fall_media_preprocess"},
         )
         prep.update(transformed)
+        emit_preprocess_debug(debug_dir, {**debug_context, "phase": "before_run_fall_extract_pose", "manifest_for_eval": str(media_manifest), "data_root": None, "after_media_preprocessing": True}, last=True, echo=True)
         pose_manifest, pose_info = run_fall_extract_pose(args, media_manifest, None, work_dir, args.dry_run, log_dir=log_dir)
         prep.update(pose_info)
         _ensure_fall_pose_manifest_ready(args, pose_manifest, pose_info, prep, "media_preprocessed_downstream_pose_failed")
@@ -2249,6 +3297,8 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
             max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
+            debug_dir=debug_dir,
+            debug_context={**debug_context, "preprocess_branch": "audio_preprocessed"},
         )
         prep.update(transformed)
         prep["preprocessing_status"] = "audio_preprocessed_test_split"
@@ -2278,6 +3328,8 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
             max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
+            debug_dir=debug_dir,
+            debug_context={**debug_context, "preprocess_branch": "youhome_av_preprocessed"},
         )
         prep.update(transformed)
         prep["preprocessing_status"] = "youhome_av_preprocessed_test_split"
@@ -2302,6 +3354,8 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
             max_samples=None,
             max_frames_per_sample=args.max_frames_per_sample,
             dry_run=args.dry_run,
+            debug_dir=debug_dir,
+            debug_context={**debug_context, "preprocess_branch": "media_preprocessed"},
         )
         prep.update(transformed)
         prep["preprocessing_status"] = "media_preprocessed_test_split"
@@ -2309,12 +3363,364 @@ def prepare_manifest_for_method(args: argparse.Namespace, row: MethodRow, work_d
         # paths and do not need the original data root.  ADL AV is handled above.
         return out_manifest, None, prep
 
+    # Flexible semantic outputs are valid app-facing interfaces for flexible
+    # requests. Materialize JSON primitives and let run_downstream_for_method()
+    # evaluate them with task-specific semantic adapters instead of invoking a
+    # legacy media-consuming downstream CLI.
+    if task_supports_semantic_adapter(row.task, final_cap):
+        out_manifest = work_dir / "preprocessed_semantic_manifest.csv"
+        transformed = transform_manifest_with_pipeline(
+            manifest_for_eval,
+            data_root,
+            Path(row.pipeline_spec_json),
+            out_manifest,
+            work_dir / "preprocessed_semantic",
+            task=row.task,
+            split=None,
+            max_samples=None,
+            max_frames_per_sample=args.max_frames_per_sample,
+            dry_run=args.dry_run,
+            debug_dir=debug_dir,
+            debug_context={**debug_context, "preprocess_branch": "semantic_preprocessed"},
+        )
+        prep.update(transformed)
+        prep["preprocessing_status"] = "semantic_preprocessed_for_flexible_adapter_test_split"
+        prep["semantic_adapter"] = {
+            "enabled": True,
+            "final_output_type": cap_type(final_cap),
+            "final_output_schema": cap_schema(final_cap),
+            "note": "Evaluated through a task-specific semantic adapter rather than a legacy media-input downstream CLI.",
+        }
+        return out_manifest, None, prep
+
     # Semantic outputs are not directly consumable by the attached downstream
     # models unless a task-specific adapter exists.
     prep["preprocessing_status"] = "incompatible_semantic_output_for_downstream_cli"
     raise ValueError(f"Final output {cap_type(final_cap)} / {cap_schema(final_cap)} is not supported by the downstream utility evaluator for task {row.task}.")
 
+
+
+def _json_paths_for_semantic_row(row: Dict[str, Any]) -> List[Path]:
+    paths: List[Path] = []
+    for key in ["preprocessed_json_path", "semantic_json_path"]:
+        val = row.get(key)
+        if val and Path(str(val)).exists():
+            paths.append(Path(str(val)))
+    for key in ["preprocessed_json_dir", "semantic_dir", "frame_dir"]:
+        val = row.get(key)
+        if val and Path(str(val)).exists() and Path(str(val)).is_dir():
+            paths.extend(sorted(Path(str(val)).glob("*.json")))
+    return paths
+
+
+def _load_semantic_json(path: Path) -> Dict[str, Any]:
+    try:
+        obj = load_json(path)
+    except Exception:
+        return {"_error": f"could_not_read:{path}"}
+    if isinstance(obj, dict):
+        return obj
+    return {"data": obj}
+
+
+def _semantic_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else None
+    if data is not None:
+        return data
+    for key in ["payload", "value", "result"]:
+        if isinstance(obj.get(key), dict):
+            return obj[key]
+    return obj
+
+
+def _semantic_labels_and_count(obj: Dict[str, Any]) -> Tuple[List[str], int, bool, float]:
+    data = _semantic_payload(obj)
+    labels: List[str] = []
+    confidence = 0.0
+    count = 0
+    occupied = False
+    if isinstance(data.get("labels"), list):
+        for l in data.get("labels") or []:
+            if isinstance(l, dict):
+                label = str(l.get("label") or l.get("class") or l.get("event_type") or l.get("activity") or "").strip()
+                if label:
+                    labels.append(label)
+                try:
+                    confidence = max(confidence, float(l.get("confidence", 0.0)))
+                except Exception:
+                    pass
+            elif l:
+                labels.append(str(l))
+    if isinstance(data.get("detections"), list):
+        detections = data.get("detections") or []
+        for d in detections:
+            if isinstance(d, dict):
+                label = str(d.get("label") or d.get("class") or "").strip()
+                if label:
+                    labels.append(label)
+                try:
+                    confidence = max(confidence, float(d.get("confidence", 0.0)))
+                except Exception:
+                    pass
+        count = sum(1 for d in detections if isinstance(d, dict) and str(d.get("label") or d.get("class") or "").lower() in {"person", "face", "human", "visitor"})
+    cbl = data.get("count_by_label")
+    if isinstance(cbl, dict):
+        for k, v in cbl.items():
+            if k:
+                try:
+                    n = int(float(v or 0))
+                except Exception:
+                    n = 1
+                labels.extend([str(k)] * max(1, n))
+        for k in ["person", "face", "human", "visitor"]:
+            if k in cbl:
+                try:
+                    count += int(float(cbl.get(k) or 0))
+                except Exception:
+                    pass
+    for key in ["top_label", "label", "event_type", "activity", "class", "pred_label"]:
+        if data.get(key):
+            labels.append(str(data.get(key)))
+    for key in ["count", "occupancy_count", "person_count"]:
+        if data.get(key) not in (None, ""):
+            try:
+                count = max(count, int(float(data.get(key))))
+            except Exception:
+                pass
+    if data.get("occupied") not in (None, ""):
+        occupied = bool(data.get("occupied"))
+        count = max(count, int(occupied))
+    if not occupied:
+        occupied = count > 0 or any(str(l).lower() in {"person", "face", "human", "visitor", "room_occupied", "occupied", "presence"} for l in labels)
+    return labels, count, occupied, confidence
+
+
+def _manifest_truth_label(row: Dict[str, Any], task: str) -> str:
+    candidates = [
+        "label", "labels", "class", "target", "activity", "activity_label", "adl_label",
+        "event", "event_type", "sound_label", "y_true", "gt", "ground_truth", "fall_label",
+    ]
+    for c in candidates:
+        val = row.get(c)
+        if val not in (None, ""):
+            return str(val)
+    if task == "fall_detection":
+        text = " ".join(str(v) for v in row.values()).lower()
+        if "fall" in text:
+            return "fall"
+        if "non" in text or "normal" in text:
+            return "nonfall"
+    return ""
+
+
+def _label_to_binary(label: str, positive_terms: Sequence[str]) -> int:
+    text = str(label or "").strip().lower()
+    if text in {"1", "true", "yes", "positive", "pos"}:
+        return 1
+    if text in {"0", "false", "no", "negative", "neg", "none", "normal", "nonfall", "non_fall"}:
+        return 0
+    return 1 if any(term in text for term in positive_terms) else 0
+
+
+def multiclass_metrics(y_true: List[str], y_pred: List[str]) -> Dict[str, Any]:
+    labels = sorted(set(y_true) | set(y_pred))
+    n = len(y_true)
+    accuracy = sum(1 for t, p_ in zip(y_true, y_pred) if t == p_) / n if n else 0.0
+    f1s: List[float] = []
+    for lab in labels:
+        tp = sum(1 for t, p_ in zip(y_true, y_pred) if t == lab and p_ == lab)
+        fp = sum(1 for t, p_ in zip(y_true, y_pred) if t != lab and p_ == lab)
+        fn = sum(1 for t, p_ in zip(y_true, y_pred) if t == lab and p_ != lab)
+        prec = tp / (tp + fp) if (tp + fp) else 0.0
+        rec = tp / (tp + fn) if (tp + fn) else 0.0
+        f1s.append(2 * prec * rec / (prec + rec) if (prec + rec) else 0.0)
+    return {
+        "status": "ok",
+        "n": n,
+        "accuracy": accuracy,
+        "macro_f1": sum(f1s) / len(f1s) if f1s else 0.0,
+        "labels": labels,
+    }
+
+
+
+
+CHIME_LABELS = ["c", "m", "f", "v", "p", "b", "o"]
+CHIME_LABEL_SYNONYMS = {
+    "c": {"c", "child", "child_speech", "child speech", "speech_child"},
+    "m": {"m", "male", "adult_male", "adult male", "adult_male_speech", "male_speech", "speech_male"},
+    "f": {"f", "female", "adult_female", "adult female", "adult_female_speech", "female_speech", "speech_female"},
+    "v": {"v", "tv", "television", "video", "video_game", "video game", "game", "games"},
+    "p": {"p", "percussive", "knock", "knocks", "bang", "bangs", "crash", "crashes", "footstep", "footsteps"},
+    "b": {"b", "broadband", "noise", "appliance", "appliances", "vacuum", "fan"},
+    "o": {"o", "other", "other_sound", "identifiable_sound", "unknown_sound"},
+}
+
+
+def normalize_label_text(label: Any) -> str:
+    text = str(label or "").strip().lower()
+    text = re.sub(r"[^a-z0-9_.]+", "_", text)
+    return text.strip("_")
+
+
+def parse_chime_label_string(label_string: Any) -> List[int]:
+    if label_string is None:
+        s = ""
+    else:
+        s = str(label_string).strip().lower()
+        if s in {"nan", "none", "null", "-", ""}:
+            s = ""
+    active = set(s)
+    return [1 if lab in active else 0 for lab in CHIME_LABELS]
+
+
+def chime_truth_vector(row: Dict[str, Any]) -> List[int]:
+    vals: List[int] = []
+    have_cols = True
+    for lab in CHIME_LABELS:
+        key = f"label_{lab}"
+        if key not in row or row.get(key) in (None, ""):
+            have_cols = False
+            break
+        try:
+            vals.append(1 if int(float(str(row.get(key)))) > 0 else 0)
+        except Exception:
+            vals.append(0)
+    if have_cols:
+        return vals
+    for key in ["majorityvote", "annotation_a1", "annotation_a2", "annotation_a3", "label", "sound_label"]:
+        if row.get(key) not in (None, ""):
+            return parse_chime_label_string(row.get(key))
+    return [0] * len(CHIME_LABELS)
+
+
+def chime_pred_vector_from_labels(labels: Sequence[str]) -> List[int]:
+    active = set()
+    normalized = {normalize_label_text(x) for x in labels if str(x or "").strip()}
+    compact = set("".join(x for x in normalized if len(x) <= 7))
+    for lab in CHIME_LABELS:
+        syns = {normalize_label_text(x) for x in CHIME_LABEL_SYNONYMS[lab]}
+        if lab in compact or normalized & syns:
+            active.add(lab)
+    # If the semantic output includes generic speech labels, map cautiously to c/m/f only
+    # when no specific speech subtype is present; this is a coarse proxy, not a claim
+    # that the hub recovered speaker demographics.
+    if not (active & {"c", "m", "f"}) and any("speech" in x or "voice" in x for x in normalized):
+        active.update(["c", "m", "f"])
+    return [1 if lab in active else 0 for lab in CHIME_LABELS]
+
+
+def multilabel_binary_metrics(y_true: List[List[int]], y_pred: List[List[int]], labels: Sequence[str]) -> Dict[str, Any]:
+    n = len(y_true)
+    if n == 0:
+        return {"status": "skipped", "error": "no multilabel rows", "n": 0}
+    L = len(labels)
+    tp = fp = tn = fn = 0
+    per_label: Dict[str, Any] = {}
+    f1s: List[float] = []
+    for j, lab in enumerate(labels):
+        lt = [int(row[j]) for row in y_true]
+        lp = [int(row[j]) for row in y_pred]
+        ltp = sum(1 for t, p_ in zip(lt, lp) if t == 1 and p_ == 1)
+        ltn = sum(1 for t, p_ in zip(lt, lp) if t == 0 and p_ == 0)
+        lfp = sum(1 for t, p_ in zip(lt, lp) if t == 0 and p_ == 1)
+        lfn = sum(1 for t, p_ in zip(lt, lp) if t == 1 and p_ == 0)
+        tp += ltp; tn += ltn; fp += lfp; fn += lfn
+        prec = ltp / (ltp + lfp) if (ltp + lfp) else 0.0
+        rec = ltp / (ltp + lfn) if (ltp + lfn) else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+        f1s.append(f1)
+        per_label[lab] = {"tp": ltp, "fp": lfp, "tn": ltn, "fn": lfn, "precision": prec, "recall": rec, "f1": f1}
+    micro_precision = tp / (tp + fp) if (tp + fp) else 0.0
+    micro_recall = tp / (tp + fn) if (tp + fn) else 0.0
+    micro_f1 = 2 * micro_precision * micro_recall / (micro_precision + micro_recall) if (micro_precision + micro_recall) else 0.0
+    exact_match = sum(1 for t, p_ in zip(y_true, y_pred) if list(map(int, t)) == list(map(int, p_))) / n
+    hamming_accuracy = (tp + tn) / (n * L) if L else 0.0
+    return {
+        "status": "ok",
+        "n": n,
+        "num_labels": L,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "micro_precision": micro_precision,
+        "micro_recall": micro_recall,
+        "micro_f1": micro_f1,
+        "macro_f1": sum(f1s) / len(f1s) if f1s else 0.0,
+        "hamming_accuracy": hamming_accuracy,
+        "exact_match": exact_match,
+        "per_label": per_label,
+    }
+
+
+def label_map_from_manifest_rows(rows: Sequence[Dict[str, Any]], task: str) -> Dict[str, int]:
+    labels: List[str] = []
+    if task == "fall_detection":
+        # The LE2I manifest normally has a binary label column. Prefer the common
+        # training convention when both labels are present; otherwise include only
+        # labels observed in the filtered manifest.
+        observed = {str(r.get("label") or "").strip() for r in rows if str(r.get("label") or "").strip()}
+        if observed <= {"fall", "nonfall"}:
+            labels = [x for x in ["fall", "nonfall"] if x in observed or len(observed) == 2]
+        else:
+            labels = sorted(observed)
+    elif task == "adl_recognition":
+        for r in rows:
+            lab = str(r.get("label") or r.get("activity") or "").strip()
+            if lab and lab not in labels:
+                labels.append(lab)
+        labels = sorted(labels)
+    else:
+        labels = sorted({str(r.get("label") or "").strip() for r in rows if str(r.get("label") or "").strip()})
+    if not labels:
+        labels = ["unknown"]
+    return {lab: i for i, lab in enumerate(labels)}
+
+
+def ensure_task_label_map(args: argparse.Namespace, task: str, manifest: Path, out_dir: Path) -> Path:
+    if task == "fall_detection":
+        existing = getattr(args, "fall_label_map", None)
+        if existing and Path(str(existing)).exists():
+            return Path(str(existing))
+    elif task == "adl_recognition":
+        existing = getattr(args, "youhome_label_map", None)
+        if existing and Path(str(existing)).exists():
+            return Path(str(existing))
+    else:
+        raise ValueError(f"No task label-map handling for {task}")
+    rows, _ = read_csv_rows(manifest)
+    label_map = label_map_from_manifest_rows(rows, task)
+    out = out_dir / ("auto_label_map.json" if task != "fall_detection" else "auto_fall_label_map.json")
+    write_json(label_map, out)
+    progress_write(f"[config] generated temporary {task} label map at {out}: {label_map}")
+    return out
+
+def infer_semantic_for_method(args: argparse.Namespace, row: MethodRow, manifest: Path, data_root: Optional[str | Path], work_dir: Path) -> Dict[str, Any]:
+    """Run a task-specific flexible semantic adapter.
+
+    Semantic adapters live outside this evaluator so the old downstream inference
+    CLIs remain fixed-interface black boxes.  The adapter consumes semantic JSON
+    artifacts already emitted by the SmartPriv runtime and either computes
+    metrics directly or emits a task prediction CSV for metric-only evaluation.
+    It does not call infer_yolo, infer_chime, infer_fall, or infer_youhome.
+    """
+    try:
+        from evaluation.semantic_adapters import run_semantic_adapter
+    except Exception:
+        # Allows running this file directly as a script from evaluation/.
+        from semantic_adapters import run_semantic_adapter  # type: ignore
+    return run_semantic_adapter(args=args, row=row, manifest=manifest, data_root=data_root, work_dir=work_dir)
+
+
 def run_downstream_for_method(args: argparse.Namespace, row: MethodRow, manifest: Path, data_root: Optional[str | Path], work_dir: Path) -> Dict[str, Any]:
+    final_cap = {
+        "semantic_type": row.final_output_type if str(row.final_output_type).startswith("application/") else None,
+        "media_type": row.final_output_type if not str(row.final_output_type).startswith("application/") else None,
+        "schema": row.final_output_schema,
+    }
+    if task_supports_semantic_adapter(row.task, final_cap):
+        return infer_semantic_for_method(args, row, manifest, data_root, work_dir)
     if row.task == "visitor_presence_detection":
         return infer_visitor(args, manifest, data_root, work_dir, args.dry_run)
     if row.task == "fall_detection":
@@ -2575,8 +3981,20 @@ def evaluate_one(args: argparse.Namespace, row: MethodRow) -> Dict[str, Any]:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Evaluate downstream utility of generated privacy preprocessing pipelines.")
-    p.add_argument("--pipeline-root", default="runs/context_pipeline_generation")
-    p.add_argument("--out-dir", default="runs/utility_eval")
+    p.add_argument("--request-mode", choices=["legacy", "flexible"], default="legacy", help="Default path mode. flexible uses runs/flexible_context_pipeline_generation and runs/utility_eval_flexible unless explicit paths are supplied.")
+    p.add_argument("--pipeline-root", default=None)
+    p.add_argument(
+        "--pipeline-discovery",
+        choices=["merge", "summary", "scan"],
+        default="merge",
+        help=(
+            "How to discover selected pipeline rows. Default merge combines summary.json, "
+            "summary_by_context.json, and filesystem scanning so raw/manual baselines are not "
+            "lost when a summary file is stale or partial. Use summary for old behavior or scan "
+            "to ignore summaries and inspect S*/baselines and S*/ablations directories directly."
+        ),
+    )
+    p.add_argument("--out-dir", default=None)
     p.add_argument("--project-root", default=".")
     p.add_argument("--runtime-package", default="auto", help="Runtime package for executable pipelines: auto, smartpriv_runtime, or mediator.smartpriv_runtime. Default auto tries both and also adds project_root/mediator to PYTHONPATH.")
     p.add_argument("--python", default=sys.executable)
@@ -2619,6 +4037,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--no-progress", action="store_true")
     p.add_argument(
+        "--no-preprocess-debug",
+        action="store_true",
+        help=(
+            "Disable durable preprocessing breadcrumbs. By default each method writes "
+            "preprocess_inputs.jsonl, preprocess_debug.jsonl, and last_preprocess_attempt.json "
+            "under its utility output directory before runtime/operator calls. This helps "
+            "identify the exact video/audio/frame path involved if native decoders abort."
+        ),
+    )
+    p.add_argument(
         "--no-task-pipeline-cache",
         action="store_true",
         help=(
@@ -2628,6 +4056,42 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--rerun-existing", action="store_true", help="Do not resume/reuse existing per-method utility_result.json files; rerun preprocessing and downstream inference.")
+    p.add_argument(
+        "--reuse-from-dir",
+        action="append",
+        default=None,
+        help=(
+            "Optional previous utility-evaluation directory to reuse from when the same task+pipeline fingerprint already has an ok result. "
+            "May be repeated or comma-separated. In flexible mode the default is runs/utility_eval when it exists, plus runs/flexible_utility_eval when it exists."
+        ),
+    )
+    p.add_argument("--no-cross-run-reuse", action="store_true", help="Disable reuse of matching utility_result.json files from previous utility-evaluation directories.")
+    p.add_argument("--analysis-only", action="store_true", help="Write/print the preflight plan and exit without evaluating any rows.")
+    p.add_argument(
+        "--summarize-existing-only",
+        action="store_true",
+        help=(
+            "Do not run preprocessing or downstream inference. Scan existing utility_result.json files "
+            "and rebuild utility_results.json, utility_summary.csv, and utility_metrics_summary.csv under --out-dir."
+        ),
+    )
+    p.add_argument(
+        "--summary-scan-dir",
+        action="append",
+        default=None,
+        help=(
+            "Directory to scan for existing utility_result.json files when --summarize-existing-only is used. "
+            "May be repeated or comma-separated. Default: --out-dir."
+        ),
+    )
+    p.add_argument(
+        "--wide-metrics-summary",
+        action="store_true",
+        help=(
+            "When rebuilding summaries, also write utility_metrics_summary_wide.csv containing every metric_* column, "
+            "including per-class metrics. By default utility_metrics_summary.csv stays compact and publication-friendly."
+        ),
+    )
     p.add_argument("--recompute-existing-metrics", action="store_true", help="When resuming existing results, recompute metrics from prediction CSVs even if metrics already exist.")
     p.add_argument("--fail-fast", action="store_true")
     p.add_argument("--keep-intermediate-data", action="store_true", help="Retain transformed media/keypoint/audio artifacts. Default is to use a temporary directory and delete them after each downstream run.")
@@ -2677,7 +4141,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--fall-pose-model", default="yolo11n-pose.pt")
     p.add_argument("--fall-pose-stride", type=int, default=3)
     p.add_argument("--fall-sample-mode", choices=["window", "video"], default=None)
-    p.add_argument("--no-sanitize-videos", action="store_true")
+    p.add_argument(
+        "--no-sanitize-videos",
+        action="store_true",
+        help=(
+            "Disable evaluator-side LE2I video sanitization. By default fall pose extraction "
+            "rewrites video rows to ffmpeg-extracted video-only frame_dir rows before invoking "
+            "the pose extractor, avoiding OpenCV/native crashes on malformed AVI audio streams."
+        ),
+    )
 
     # CHiME-Home audio.
     p.add_argument("--home-audio-manifest", default=None)
@@ -2884,6 +4356,243 @@ def task_pipeline_cache_plan(rows: Sequence[MethodRow]) -> Dict[str, Any]:
     }
 
 
+def _result_downstream_output_exists(result: Dict[str, Any]) -> bool:
+    """Return True when a stored utility result still points at reusable outputs."""
+    downstream = result.get("downstream") if isinstance(result.get("downstream"), dict) else {}
+    for key in ["output_csv", "metrics_json"]:
+        value = downstream.get(key)
+        if value and Path(str(value)).exists():
+            return True
+    metrics = downstream.get("metrics") if isinstance(downstream.get("metrics"), dict) else {}
+    if metrics and str(metrics.get("status", "ok")) == "ok":
+        return True
+    # Semantic adapters and older runs sometimes flatten metrics at top-level.
+    if result.get("metric_status") == "ok":
+        return True
+    return False
+
+
+def reusable_utility_result(result: Dict[str, Any]) -> bool:
+    """Return True when a utility_result.json is safe to reuse across directories."""
+    if result.get("status") != "ok":
+        return False
+    downstream = result.get("downstream") if isinstance(result.get("downstream"), dict) else {}
+    if downstream and downstream.get("status") not in {None, "ok"}:
+        return False
+    return _result_downstream_output_exists(result)
+
+
+def _fingerprint_from_result(result: Dict[str, Any]) -> Optional[str]:
+    fp = result.get("pipeline_fingerprint")
+    if fp:
+        return str(fp)
+    cache_key = str(result.get("cache_key") or "")
+    m = re.search(r"pipeline=([^|]+)", cache_key)
+    if m:
+        return m.group(1)
+    spec_path = result.get("pipeline_spec_json")
+    if spec_path and Path(str(spec_path)).exists():
+        try:
+            spec = load_json(str(spec_path))
+            final_output_type = str(result.get("final_output_type") or "")
+            functional = {
+                "stages": _canonicalize_pipeline_for_cache(spec.get("stages", [])),
+                "final_output_cap": _canonicalize_pipeline_for_cache(
+                    spec.get("final_output_cap")
+                    or {
+                        "semantic_type": final_output_type if final_output_type.startswith("application/") else None,
+                        "media_type": final_output_type if not final_output_type.startswith("application/") else None,
+                        "schema": result.get("final_output_schema"),
+                    }
+                ),
+                "input_cap": _canonicalize_pipeline_for_cache(spec.get("input_cap") or spec.get("input_caps")),
+            }
+            return stable_hash(functional)
+        except Exception:
+            return None
+    return None
+
+
+def _cache_key_from_result(result: Dict[str, Any]) -> Optional[str]:
+    key = result.get("cache_key")
+    if key:
+        return str(key)
+    task = result.get("task")
+    fp = _fingerprint_from_result(result)
+    if task and fp:
+        return f"task={task}|pipeline={fp}"
+    return None
+
+
+def _parse_reuse_from_dirs(args: argparse.Namespace) -> List[Path]:
+    raw_items: List[str] = []
+    for item in getattr(args, "reuse_from_dir", None) or []:
+        raw_items.extend(parse_csv_list(str(item)))
+    if not raw_items and str(getattr(args, "request_mode", "")) == "flexible":
+        raw_items = ["runs/utility_eval", "runs/flexible_utility_eval"]
+    out_dir = Path(str(args.out_dir)).resolve() if getattr(args, "out_dir", None) else None
+    dirs: List[Path] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        p = Path(item)
+        if not p.is_absolute():
+            p = Path(args.project_root) / p
+        try:
+            resolved = p.resolve()
+        except Exception:
+            resolved = p
+        if out_dir and resolved == out_dir:
+            continue
+        key = str(resolved)
+        if key in seen or not resolved.exists():
+            continue
+        seen.add(key)
+        dirs.append(resolved)
+    return dirs
+
+
+def build_cross_run_reuse_index(args: argparse.Namespace, selected: Sequence[MethodRow]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    """Index previous utility_eval directories by task+pipeline fingerprint."""
+    selected_keys = {task_pipeline_cache_key(r)[0] for r in selected}
+    if getattr(args, "rerun_existing", False) or getattr(args, "no_cross_run_reuse", False):
+        return {}, {
+            "enabled": False,
+            "reason": "disabled by --rerun-existing or --no-cross-run-reuse",
+            "reuse_from_dirs": [],
+            "selected_unique_keys": len(selected_keys),
+            "matched_unique_keys": 0,
+            "matched_rows": 0,
+            "index_size": 0,
+        }
+
+    reuse_dirs = _parse_reuse_from_dirs(args)
+    index: Dict[str, Dict[str, Any]] = {}
+    scanned = 0
+    usable = 0
+    for reuse_dir in reuse_dirs:
+        for result_path in reuse_dir.glob("S*/**/utility_result.json"):
+            scanned += 1
+            try:
+                result = load_json(result_path)
+            except Exception:
+                continue
+            if not isinstance(result, dict) or not reusable_utility_result(result):
+                continue
+            key = _cache_key_from_result(result)
+            if not key or key not in selected_keys:
+                continue
+            # Keep first match to make reuse deterministic by reuse_dir order.
+            index.setdefault(key, result)
+            usable += 1
+
+    matched_rows = sum(1 for r in selected if task_pipeline_cache_key(r)[0] in index)
+    return index, {
+        "enabled": True,
+        "reuse_from_dirs": [str(p) for p in reuse_dirs],
+        "scanned_result_files": scanned,
+        "usable_matching_result_files": usable,
+        "selected_unique_keys": len(selected_keys),
+        "matched_unique_keys": len(index),
+        "matched_rows": matched_rows,
+        "index_size": len(index),
+        "policy": "Reuse ok utility_result.json files from previous directories when task+pipeline fingerprint matches. New per-row result files are still written under --out-dir and nested prediction/metric paths may point to the reused directory.",
+    }
+
+
+def current_out_dir_reuse_plan(args: argparse.Namespace, selected: Sequence[MethodRow]) -> Dict[str, Any]:
+    """Count current --out-dir results that appear reusable before the run starts."""
+    keys: set[str] = set()
+    rows = 0
+    for r in selected:
+        cache_key, _ = task_pipeline_cache_key(r)
+        result_path = method_work_dir(args, r) / "utility_result.json"
+        if not result_path.exists():
+            continue
+        try:
+            result = load_json(result_path)
+        except Exception:
+            continue
+        if str(result.get("scenario_id")) != str(r.scenario_id) or str(result.get("method_id")) != str(r.method_id):
+            continue
+        if reusable_utility_result(result) and not existing_result_has_known_adl_missing_audio_bug(result, r):
+            keys.add(cache_key)
+            rows += 1
+    return {
+        "matched_unique_keys": len(keys),
+        "matched_rows": rows,
+        "keys": sorted(keys),
+    }
+
+
+def pending_execution_plan(
+    selected: Sequence[MethodRow],
+    current_reuse_plan: Dict[str, Any],
+    cross_reuse_index: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Summarize how many unique task+pipeline executions still require work."""
+    selected_keys: Dict[str, Dict[str, Any]] = {}
+    schemas: set[Tuple[str, str]] = set()
+    types: set[str] = set()
+    for r in selected:
+        key, info = task_pipeline_cache_key(r)
+        selected_keys.setdefault(key, info)
+        schemas.add((str(r.final_output_type or ""), str(r.final_output_schema or "")))
+        if r.final_output_type:
+            types.add(str(r.final_output_type))
+
+    current_keys = set(current_reuse_plan.get("keys") or [])
+    cross_keys = set(cross_reuse_index.keys())
+    reusable_keys = current_keys | cross_keys
+    pending_keys = [k for k in selected_keys if k not in reusable_keys]
+    pending_rows = sum(1 for r in selected if task_pipeline_cache_key(r)[0] in set(pending_keys))
+    pending_schemas: set[Tuple[str, str]] = set()
+    for r in selected:
+        if task_pipeline_cache_key(r)[0] in set(pending_keys):
+            pending_schemas.add((str(r.final_output_type or ""), str(r.final_output_schema or "")))
+
+    return {
+        "selected_rows": len(selected),
+        "selected_unique_task_pipeline_runs": len(selected_keys),
+        "selected_unique_output_schemas": len(schemas),
+        "selected_unique_output_types": len(types),
+        "already_ok_in_out_dir_unique_runs": len(current_keys),
+        "cross_run_reusable_unique_runs": len(cross_keys - current_keys),
+        "pending_unique_task_pipeline_runs": len(pending_keys),
+        "pending_rows": pending_rows,
+        "pending_unique_output_schemas": len(pending_schemas),
+        "pending_cache_keys": pending_keys,
+        "selected_output_schemas": sorted([{"final_output_type": t, "final_output_schema": s} for t, s in schemas], key=lambda x: (x["final_output_type"], x["final_output_schema"])),
+        "pending_output_schemas": sorted([{"final_output_type": t, "final_output_schema": s} for t, s in pending_schemas], key=lambda x: (x["final_output_type"], x["final_output_schema"])),
+    }
+
+
+def clone_cross_run_result_for_row(
+    args: argparse.Namespace,
+    row: MethodRow,
+    cached_result: Dict[str, Any],
+    cache_key: str,
+    cache_info: Dict[str, Any],
+) -> Dict[str, Any]:
+    result = clone_cached_result_for_row(args, row, cached_result, cache_key, cache_info)
+    result["cache_status"] = "cross_run_hit"
+    result["cross_run_reuse"] = True
+    result["reused_from_external"] = {
+        "scenario_id": cached_result.get("scenario_id"),
+        "method_id": cached_result.get("method_id"),
+        "utility_work_dir": cached_result.get("utility_work_dir"),
+        "utility_result_json": str(Path(str(cached_result.get("utility_work_dir", ""))) / "utility_result.json")
+        if cached_result.get("utility_work_dir")
+        else None,
+    }
+    result["reused_outputs_note"] = (
+        "This row was not rerun. It reuses a previous utility result with the same task+pipeline fingerprint; "
+        "nested downstream/preprocessing paths may point to the previous utility-evaluation directory."
+    )
+    if result.get("utility_work_dir"):
+        write_json(result, Path(str(result["utility_work_dir"])) / "utility_result.json")
+    return result
+
+
 def clone_cached_result_for_row(
     args: argparse.Namespace,
     row: MethodRow,
@@ -3043,7 +4752,7 @@ def _preflight_python_import_status(args: argparse.Namespace, module_name: str) 
         return f"python-import:UNKNOWN ({exc!r})"
 
 
-def build_preflight_report(args: argparse.Namespace, rows: Sequence[MethodRow], selected: Sequence[MethodRow], task_config: Dict[str, Dict[str, Any]], cache_plan: Dict[str, Any]) -> Dict[str, Any]:
+def build_preflight_report(args: argparse.Namespace, rows: Sequence[MethodRow], selected: Sequence[MethodRow], task_config: Dict[str, Dict[str, Any]], cache_plan: Dict[str, Any], cross_run_reuse: Optional[Dict[str, Any]] = None, pending_plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     tasks_present = sorted({r.task for r in rows if r.task in TASK_TO_SHORT})
     selected_tasks = sorted({r.task for r in selected if r.task in TASK_TO_SHORT})
     selected_rows_by_task = {t: sum(1 for r in selected if r.task == t) for t in tasks_present}
@@ -3123,9 +4832,14 @@ def build_preflight_report(args: argparse.Namespace, rows: Sequence[MethodRow], 
         "tasks_present_in_pipeline_summary": tasks_present,
         "selected_tasks": selected_tasks,
         "total_discovered_rows": len(rows),
+        "discovered_rows_by_method": dict(sorted(Counter(r.method_id for r in rows).items())),
         "selected_rows": len(selected),
+        "selected_rows_by_method": dict(sorted(Counter(r.method_id for r in selected).items())),
+        "pipeline_discovery": getattr(args, "pipeline_discovery", "merge"),
         "unique_task_pipeline_runs": cache_plan.get("unique_task_pipeline_runs"),
         "duplicate_rows_reused_from_cache": cache_plan.get("duplicate_rows_reused_from_cache"),
+        "cross_run_reuse": cross_run_reuse or {},
+        "pending_execution_plan": pending_plan or {},
         "tasks": report_tasks,
         "all_present_tasks_fully_ready": all(report_tasks[t].get("fully_ready") for t in tasks_present),
     }
@@ -3142,6 +4856,29 @@ def print_preflight_report(report: Dict[str, Any]) -> None:
         f"cache_duplicates={report.get('duplicate_rows_reused_from_cache')}",
         flush=True,
     )
+    pending = report.get("pending_execution_plan") or {}
+    if pending:
+        print(
+            "Execution reuse analysis: "
+            f"selected_unique_runs={pending.get('selected_unique_task_pipeline_runs')} "
+            f"selected_output_schemas={pending.get('selected_unique_output_schemas')} "
+            f"already_ok_in_out_dir={pending.get('already_ok_in_out_dir_unique_runs')} "
+            f"cross_run_reusable={pending.get('cross_run_reusable_unique_runs')} "
+            f"STILL_TO_RUN_unique={pending.get('pending_unique_task_pipeline_runs')} "
+            f"STILL_TO_RUN_rows={pending.get('pending_rows')} "
+            f"STILL_TO_RUN_output_schemas={pending.get('pending_unique_output_schemas')}",
+            flush=True,
+        )
+    cross = report.get("cross_run_reuse") or {}
+    if cross:
+        print(
+            "Cross-run reuse: "
+            f"enabled={cross.get('enabled')} dirs={cross.get('reuse_from_dirs')} "
+            f"scanned={cross.get('scanned_result_files')} "
+            f"matched_unique_runs={cross.get('matched_unique_keys')} "
+            f"matched_rows={cross.get('matched_rows')}",
+            flush=True,
+        )
     for task, info in (report.get("tasks") or {}).items():
         state = "READY" if info.get("fully_ready") else "NOT READY"
         selected = "selected" if info.get("selected_for_this_run") else "not selected/skipped"
@@ -3184,6 +4921,282 @@ def maybe_confirm_preflight(args: argparse.Namespace, report: Dict[str, Any]) ->
             "Preflight confirmation requires interactive stdin. Re-run with --yes or --no-preflight-confirm for noninteractive execution."
         )
 
+
+# ---------------------------------------------------------------------------
+# Existing-result summary rebuild
+# ---------------------------------------------------------------------------
+
+
+def _parse_repeated_csv_dirs(values: Optional[Sequence[str]], default: Sequence[str]) -> List[Path]:
+    """Parse repeated/comma-separated directory arguments while preserving order."""
+    raw: List[str] = []
+    if values:
+        for value in values:
+            raw.extend(parse_csv_list(value))
+    if not raw:
+        raw = [str(x) for x in default]
+    out: List[Path] = []
+    seen: set[str] = set()
+    for item in raw:
+        p = Path(str(item)).expanduser()
+        key = str(p.resolve()) if p.exists() else str(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def _infer_ids_from_utility_result_path(path: Path) -> Dict[str, str]:
+    """Infer scenario/method identifiers from .../<scenario>/<method>/utility_result.json."""
+    method_slug = path.parent.name
+    scenario_id = path.parent.parent.name if path.parent.parent != path.parent else ""
+    method_id = method_slug.replace("__", ":")
+    return {"scenario_id": scenario_id, "method_id": method_id}
+
+
+def flatten_utility_result_for_summary(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Create one CSV-friendly row from a utility_result.json dictionary."""
+    row: Dict[str, Any] = {}
+    for k, v in res.items():
+        if not isinstance(v, (dict, list)):
+            row[k] = v
+
+    prep = res.get("preprocessing") if isinstance(res.get("preprocessing"), dict) else {}
+    down = res.get("downstream") if isinstance(res.get("downstream"), dict) else {}
+    inf = down.get("inference") if isinstance(down.get("inference"), dict) else {}
+
+    row.setdefault("preprocessing_status", prep.get("preprocessing_status") or prep.get("status"))
+    row.setdefault("source_manifest", prep.get("source_manifest"))
+    row.setdefault("prepared_manifest", res.get("prepared_manifest"))
+    row.setdefault("prepared_manifest_retained", res.get("prepared_manifest_retained"))
+    row.setdefault("intermediate_artifacts_retained", res.get("intermediate_artifacts_retained"))
+    row.setdefault("intermediate_artifact_policy", res.get("intermediate_artifact_policy"))
+    row.setdefault("downstream_status", down.get("status"))
+    row.setdefault("downstream_output_csv", down.get("output_csv"))
+    row.setdefault("downstream_metrics_json", down.get("metrics_json"))
+    row.setdefault("downstream_returncode", inf.get("returncode"))
+    row.setdefault("downstream_elapsed_ms", inf.get("elapsed_ms"))
+
+    # Preserve any top-level metric_* values, and backfill from downstream.metrics
+    # for older utility_result.json files that only stored nested metrics.
+    metrics = down.get("metrics") if isinstance(down.get("metrics"), dict) else {}
+    if metrics:
+        for k, v in flatten_metrics(metrics).items():
+            row.setdefault(k, v)
+    metrics_json = down.get("metrics_json")
+    if metrics_json and Path(str(metrics_json)).exists():
+        try:
+            loaded_metrics = load_json(metrics_json)
+            if isinstance(loaded_metrics, dict):
+                for k, v in flatten_metrics(loaded_metrics).items():
+                    row.setdefault(k, v)
+        except Exception:
+            pass
+    for k, v in res.items():
+        if str(k).startswith("metric_"):
+            row[k] = v
+    return row
+
+
+
+COMPACT_METRIC_SUMMARY_COLS = [
+    "scenario_id", "task", "method_id", "status", "downstream_status",
+    "preprocessing_status", "metric_status", "metric_level", "metric_n",
+    "metric_precision", "metric_recall", "metric_f1", "metric_f2", "metric_accuracy",
+    "metric_tp", "metric_fp", "metric_fn", "metric_tn", "metric_error",
+    "downstream_output_csv", "downstream_metrics_json",
+]
+
+# A small, publication-useful extension set.  Avoid per-class columns by default
+# because ADL/YouHome can add hundreds of metric_per_class_* columns and make
+# utility_metrics_summary.csv unexpectedly huge.  The full wide table is still
+# available as utility_metrics_summary_wide.csv or with --wide-metrics-summary.
+COMPACT_EXTRA_METRIC_COLS = [
+    "metric_macro_f1",
+    "metric_micro_f1",
+    "metric_weighted_f1",
+    "metric_balanced_accuracy",
+    "metric_avg_precision",
+    "metric_ap",
+    "metric_mae",
+    "metric_exact_match",
+    "metric_video_level_accuracy",
+    "metric_video_level_macro_f1",
+    "metric_video_level_weighted_f1",
+    "metric_video_level_n",
+    "metric_n_prediction_rows",
+    "metric_n_aligned_rows",
+    "metric_missing_audio_samples",
+    "metric_missing_image_samples",
+    "metric_n_missing_xml_samples",
+    "metric_n_empty_xml_samples",
+]
+
+def _metric_summary_columns(flat_rows: Sequence[Dict[str, Any]], *, wide: bool = False) -> Tuple[List[str], List[str]]:
+    """Return compact and wide metric-summary column lists.
+
+    Compact mode intentionally mirrors the normal evaluator output plus a small
+    whitelist of useful aggregate metrics.  Wide mode includes all metric_*
+    fields, including per-class metrics, and can therefore be much larger.
+    """
+    discovered_metric_cols = sorted(
+        k for row in flat_rows for k in row.keys()
+        if str(k).startswith("metric_")
+    )
+    compact_cols = list(COMPACT_METRIC_SUMMARY_COLS)
+    for c in COMPACT_EXTRA_METRIC_COLS:
+        if c in discovered_metric_cols and c not in compact_cols:
+            compact_cols.append(c)
+    if wide:
+        wide_cols = list(compact_cols)
+        for c in discovered_metric_cols:
+            if c not in wide_cols:
+                wide_cols.append(c)
+    else:
+        wide_cols = []
+    return compact_cols, wide_cols
+
+def write_utility_summary_files_from_results(
+    results: Sequence[Dict[str, Any]],
+    out_dir: Path,
+    *,
+    wide_metrics_summary: bool = False,
+) -> Dict[str, Any]:
+    """Write aggregate JSON/CSV summaries from existing result dictionaries."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(
+        [dict(r) for r in results],
+        key=lambda r: (
+            str(r.get("scenario_id") or ""),
+            str(r.get("task") or ""),
+            str(r.get("method_id") or ""),
+            str(r.get("utility_work_dir") or ""),
+        ),
+    )
+    write_json(ordered, out_dir / "utility_results.json")
+
+    flat_rows = [flatten_utility_result_for_summary(r) for r in ordered]
+    write_csv_rows(flat_rows, out_dir / "utility_summary.csv")
+
+    metric_cols, wide_metric_cols = _metric_summary_columns(flat_rows, wide=wide_metrics_summary)
+    metric_rows = [{c: row.get(c) for c in metric_cols} for row in flat_rows]
+    write_csv_rows(metric_rows, out_dir / "utility_metrics_summary.csv", fieldnames=metric_cols)
+
+    wide_metrics_summary_csv = None
+    if wide_metric_cols:
+        wide_rows = [{c: row.get(c) for c in wide_metric_cols} for row in flat_rows]
+        wide_path = out_dir / "utility_metrics_summary_wide.csv"
+        write_csv_rows(wide_rows, wide_path, fieldnames=wide_metric_cols)
+        wide_metrics_summary_csv = str(wide_path)
+
+    report = {
+        "rebuilt_at_ms": now_ms(),
+        "out_dir": str(out_dir),
+        "results_json": str(out_dir / "utility_results.json"),
+        "summary_csv": str(out_dir / "utility_summary.csv"),
+        "metrics_summary_csv": str(out_dir / "utility_metrics_summary.csv"),
+        "metrics_summary_wide_csv": wide_metrics_summary_csv,
+        "metrics_summary_columns": len(metric_cols),
+        "wide_metrics_summary_columns": len(wide_metric_cols) if wide_metric_cols else None,
+        "results": len(ordered),
+        "ok": sum(1 for r in ordered if r.get("status") == "ok"),
+        "errors": sum(1 for r in ordered if r.get("status") == "error"),
+        "statuses": dict(sorted({str(r.get("status") or ""): sum(1 for x in ordered if str(x.get("status") or "") == str(r.get("status") or "")) for r in ordered}.items())),
+        "tasks": sorted({str(r.get("task") or "") for r in ordered if r.get("task")}),
+        "methods": sorted({str(r.get("method_id") or "") for r in ordered if r.get("method_id")}),
+        "unique_task_pipeline_fingerprints": len({
+            (str(r.get("task") or ""), str(r.get("pipeline_fingerprint") or ""))
+            for r in ordered
+            if r.get("pipeline_fingerprint")
+        }),
+    }
+    write_json(report, out_dir / "utility_summary_rebuild_report.json")
+    return report
+
+
+def rebuild_existing_utility_summaries(args: argparse.Namespace) -> int:
+    """Scan existing utility_result.json files and rebuild aggregate summaries.
+
+    This mode deliberately does not call pipeline preprocessing, downstream
+    inference, task configuration, or model-loading code. It is safe to run after
+    partial experiments or after combining raw/manual/direct/full/ablation runs.
+    """
+    out_dir = Path(args.out_dir)
+    scan_dirs = _parse_repeated_csv_dirs(getattr(args, "summary_scan_dir", None), default=[out_dir])
+    all_results: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    seen_paths: set[str] = set()
+    scanned_files = 0
+    skipped: List[Dict[str, Any]] = []
+
+    for scan_dir in scan_dirs:
+        if not scan_dir.exists():
+            skipped.append({"path": str(scan_dir), "reason": "scan_dir_missing"})
+            continue
+        for result_path in sorted(scan_dir.glob("**/utility_result.json")):
+            # Avoid accidentally reading a file we just wrote in some unusual layout.
+            key_path = str(result_path.resolve())
+            if key_path in seen_paths:
+                continue
+            seen_paths.add(key_path)
+            scanned_files += 1
+            try:
+                result = load_json(result_path)
+            except Exception as exc:
+                skipped.append({"path": str(result_path), "reason": f"load_error:{exc!r}"})
+                continue
+            if not isinstance(result, dict):
+                skipped.append({"path": str(result_path), "reason": "not_a_json_object"})
+                continue
+
+            inferred = _infer_ids_from_utility_result_path(result_path)
+            result.setdefault("scenario_id", inferred.get("scenario_id"))
+            result.setdefault("method_id", inferred.get("method_id"))
+            result.setdefault("utility_work_dir", str(result_path.parent))
+            result.setdefault("utility_result_json", str(result_path))
+
+            # Prefer results already under --out-dir over external scan dirs;
+            # otherwise keep the newest mtime for the same scenario/method/task.
+            dedupe_key = (
+                str(result.get("scenario_id") or inferred.get("scenario_id") or ""),
+                str(result.get("method_id") or inferred.get("method_id") or ""),
+                str(result.get("task") or ""),
+            )
+            existing = all_results.get(dedupe_key)
+            if existing is None:
+                all_results[dedupe_key] = result
+            else:
+                old_path = Path(str(existing.get("utility_result_json") or ""))
+                new_in_out = out_dir.resolve() in result_path.resolve().parents or result_path.parent == out_dir.resolve()
+                old_in_out = old_path.exists() and (out_dir.resolve() in old_path.resolve().parents or old_path.parent == out_dir.resolve())
+                choose_new = False
+                if new_in_out and not old_in_out:
+                    choose_new = True
+                elif new_in_out == old_in_out:
+                    try:
+                        choose_new = result_path.stat().st_mtime >= old_path.stat().st_mtime
+                    except Exception:
+                        choose_new = True
+                if choose_new:
+                    all_results[dedupe_key] = result
+
+    results = list(all_results.values())
+    report = write_utility_summary_files_from_results(
+        results,
+        out_dir,
+        wide_metrics_summary=bool(getattr(args, "wide_metrics_summary", False)),
+    )
+    report.update({
+        "mode": "summarize_existing_only",
+        "scan_dirs": [str(p) for p in scan_dirs],
+        "scanned_utility_result_files": scanned_files,
+        "deduped_results": len(results),
+        "skipped": skipped[:200],
+        "num_skipped": len(skipped),
+    })
+    write_json(report, out_dir / "utility_summary_rebuild_report.json")
+    print(json.dumps(report, indent=2), flush=True)
+    return 0
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     set_progress_enabled(not args.no_progress)
@@ -3199,12 +5212,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
     elif gpu_visibility.get("reason"):
         progress_write(f"[device] not overriding CUDA visibility: {gpu_visibility.get('reason')}")
-    apply_auto_defaults(args)
+    if args.pipeline_root is None:
+        args.pipeline_root = "runs/flexible_context_pipeline_generation" if args.request_mode == "flexible" else "runs/context_pipeline_generation"
+    if args.out_dir is None:
+        args.out_dir = "runs/utility_eval_flexible" if args.request_mode == "flexible" else "runs/utility_eval"
     pipeline_root = Path(args.pipeline_root)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = discover_method_rows(pipeline_root)
+    if getattr(args, "summarize_existing_only", False):
+        return rebuild_existing_utility_summaries(args)
+
+    apply_auto_defaults(args)
+
+    rows = discover_method_rows(pipeline_root, getattr(args, "pipeline_discovery", "merge"))
     requested_methods = set(parse_csv_list(args.methods))
     default_ablation_modes = selected_default_ablation_modes(args, rows) if not requested_methods else set()
     discovered_ablation_modes = available_ablation_modes(rows)
@@ -3213,6 +5234,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cache_plan = task_pipeline_cache_plan(selected)
     cache_key_order = {key: i + 1 for i, key in enumerate(cache_plan.get("key_order", []))}
     cache_group_sizes = {g["cache_key"]: g["row_count"] for g in cache_plan.get("groups", [])}
+    cross_run_reuse_index, cross_run_reuse_plan = build_cross_run_reuse_index(args, selected)
+    current_reuse_plan = current_out_dir_reuse_plan(args, selected)
+    pending_plan = pending_execution_plan(selected, current_reuse_plan, cross_run_reuse_index)
 
     task_config = configured_tasks(args, {r.task for r in rows if r.task in TASK_TO_SHORT})
     device_summary = resolved_device_summary(args.device)
@@ -3221,17 +5245,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"ultralytics={device_summary['ultralytics_device']} torch={device_summary['torch_device']} "
         f"| {device_summary['cuda_summary']}"
     )
-    preflight_report = build_preflight_report(args, rows, selected, task_config, cache_plan)
+    preflight_report = build_preflight_report(args, rows, selected, task_config, cache_plan, cross_run_reuse_plan, pending_plan)
     maybe_confirm_preflight(args, preflight_report)
     write_json({
+        "request_mode": args.request_mode,
         "pipeline_root": str(pipeline_root),
         "out_dir": str(out_dir),
         "total_discovered_rows": len(rows),
+        "discovered_rows_by_method": dict(sorted(Counter(r.method_id for r in rows).items())),
         "selected_rows": len(selected),
+        "selected_rows_by_method": dict(sorted(Counter(r.method_id for r in selected).items())),
+        "pipeline_discovery": getattr(args, "pipeline_discovery", "merge"),
         "requested_tasks": args.tasks,
         "selected_tasks": sorted({r.task for r in selected}),
         "task_config": task_config,
         "preflight_report": preflight_report,
+        "pending_execution_plan": pending_plan,
+        "cross_run_reuse": cross_run_reuse_plan,
+        "current_out_dir_reuse": current_reuse_plan,
         "methods": sorted({r.method_id for r in selected}),
         "ablation_policy": ("explicit_methods" if requested_methods else args.ablation_policy),
         "default_meaningful_ablation_modes": DEFAULT_MEANINGFUL_ABLATION_MODES,
@@ -3260,7 +5291,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ),
         "resume_existing_results": {
             "enabled": not bool(getattr(args, "rerun_existing", False)),
-            "policy": "Reuse per-method utility_result.json when status/downstream are ok and prediction CSV still exists; backfill metrics if missing.",
+            "policy": "Reuse per-method utility_result.json when status/downstream are ok and prediction CSV/metrics still exists; backfill metrics if missing.",
             "rerun_existing": bool(getattr(args, "rerun_existing", False)),
             "recompute_existing_metrics": bool(getattr(args, "recompute_existing_metrics", False)),
         },
@@ -3279,8 +5310,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"The outer progress denominator is selected scenario/method rows after task/method/split filters. "
         f"Unique task+pipeline runs={cache_plan['unique_task_pipeline_runs']}; "
         f"cache-reused duplicate rows={cache_plan['duplicate_rows_reused_from_cache']} "
-        f"(cache {'enabled' if cache_enabled else 'disabled'})."
+        f"(cache {'enabled' if cache_enabled else 'disabled'}). "
+        f"Already ok in out_dir={pending_plan['already_ok_in_out_dir_unique_runs']}; "
+        f"cross-run reusable={pending_plan['cross_run_reusable_unique_runs']}; "
+        f"still-to-run unique={pending_plan['pending_unique_task_pipeline_runs']}; "
+        f"still-to-run output schemas={pending_plan['pending_unique_output_schemas']}."
     )
+
+    if args.analysis_only:
+        print(json.dumps({
+            "analysis_only": True,
+            "out_dir": str(out_dir),
+            "pipeline_root": str(pipeline_root),
+            "pending_execution_plan": pending_plan,
+            "cross_run_reuse": cross_run_reuse_plan,
+            "current_out_dir_reuse": current_reuse_plan,
+            "plan_json": str(out_dir / "utility_eval_plan.json"),
+        }, indent=2), flush=True)
+        return 0
 
     results: List[Dict[str, Any]] = []
     task_pipeline_cache: Dict[str, Dict[str, Any]] = {}
@@ -3333,10 +5380,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 result = existing
             else:
-                result = evaluate_one(args, r)
-                result["cache_status"] = cache_status
-                result["cache_key"] = cache_key if cache_enabled else None
-                result["pipeline_fingerprint"] = pipeline_fp
+                cross_reused = None if getattr(args, "rerun_existing", False) else cross_run_reuse_index.get(cache_key)
+                if cross_reused is not None:
+                    progress_write(
+                        f"[cross-run-reuse] task={r.task} pipeline_fingerprint={pipeline_fp}: "
+                        f"{r.scenario_id}/{r.method_id} reuses previous utility outputs from "
+                        f"{cross_reused.get('scenario_id')}/{cross_reused.get('method_id')} "
+                        f"at {cross_reused.get('utility_work_dir')}"
+                    )
+                    result = clone_cross_run_result_for_row(args, r, cross_reused, cache_key, cache_info)
+                else:
+                    result = evaluate_one(args, r)
+                    result["cache_status"] = cache_status
+                    result["cache_key"] = cache_key if cache_enabled else None
+                    result["pipeline_fingerprint"] = pipeline_fp
             if cache_enabled:
                 task_pipeline_cache[cache_key] = result
                 task_pipeline_cache_info[cache_key] = cache_info

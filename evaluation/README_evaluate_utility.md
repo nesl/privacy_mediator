@@ -14,6 +14,24 @@ python -m evaluation.generate_pipelines_for_all_contexts \
   --out-dir runs/context_pipeline_generation
 
 
+# If you want to generate for the flexible cases:
+
+python -m evaluation.generate_pipelines_for_all_contexts \
+  --request-mode flexible \
+  --contexts survey/data/ci_focused_user_study_context.json \
+  --candidate-generator mediator/generate_pipeline_candidates.py \
+  --evaluator mediator/contextual_integrity_evaluator.py \
+  --selector mediator/pipeline_selection.py
+
+
+# Utility evaluation for flexible cases
+python -m evaluation.evaluate_utility \
+  --request-mode flexible \
+  --pipeline-root runs/flexible_context_pipeline_generation \
+  --out-dir runs/utility_eval_flexible \
+  --reuse-from-dir runs/utility_eval
+
+
 # Utility evaluation for generated privacy pipelines
 
 This README describes how to run `evaluation/evaluate_utility.py` after pipeline generation has written a directory such as `runs/context_pipeline_generation/`.

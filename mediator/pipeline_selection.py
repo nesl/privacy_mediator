@@ -315,6 +315,100 @@ def accepted_cap_priority(request: Dict[str, Any]) -> Dict[str, int]:
     return out
 
 
+
+def accepted_cap_metadata(request: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for cap in (request.get("utility_contract", {}) or {}).get("accepted_output_caps", []) or []:
+        cid = cap.get("cap_id")
+        if cid is not None:
+            out[str(cid)] = {
+                "boundary_role": cap.get("boundary_role") or cap.get("representationRole"),
+                "disclosure_tier": cap.get("disclosure_tier"),
+                "adapter": cap.get("adapter"),
+                "execution_mode": cap.get("execution_mode"),
+                "validation": cap.get("validation"),
+            }
+    return out
+
+
+
+
+DISCLOSURE_TIER_ORDER: Dict[str, int] = {
+    "high": 5,
+    "medium_high": 4,
+    "medium": 3,
+    "low_medium": 2,
+    "low": 1,
+    "very_low": 0,
+    "very_low_payload_high_semantic": 1,
+    "low_payload_high_semantic": 1,
+}
+
+BOUNDARY_ROLE_UTILITY_WEIGHT: Dict[str, float] = {
+    # Higher is a rough symbolic proxy for preserving app-side utility/flexibility.
+    "fixed_downstream_input": 4.0,
+    "fixed_downstream_input_with_hub_or_app_pose_extractor": 3.5,
+    "format_preserving_redaction": 3.5,
+    "reusable_perceptual_primitive": 3.0,
+    "aggregate_primitive": 2.0,
+    "coarse_event_primitive": 1.5,
+    "coarse_noise_primitive": 1.5,
+    "aggregate_summary": 1.0,
+    "final_task_decision_boundary": 0.5,
+}
+
+
+def symbolic_output_utility(record_or_candidate: Dict[str, Any], request: Optional[Dict[str, Any]] = None) -> float:
+    """Symbolic proxy for how much downstream utility/flexibility an output preserves.
+
+    This is not a measured utility metric.  It is a selection tie-breaker/proxy
+    that keeps the default selector from always collapsing to the lowest-payload
+    semantic output when the application contract says richer representations are
+    preferred.  Actual utility evaluation should still measure task metrics.
+    """
+    matched = record_or_candidate.get("matched_output_cap")
+    priority = record_or_candidate.get("accepted_cap_priority")
+    if priority is None and request is not None and matched is not None:
+        priority = accepted_cap_priority(request).get(str(matched), 999)
+    try:
+        prio_score = max(0.0, 10.0 - float(priority if priority is not None else 999))
+    except Exception:
+        prio_score = 0.0
+    meta = record_or_candidate.get("matched_output_metadata") or {}
+    role = str(record_or_candidate.get("boundary_role") or meta.get("boundary_role") or "")
+    tier = str(record_or_candidate.get("disclosure_tier") or meta.get("disclosure_tier") or "")
+    role_score = BOUNDARY_ROLE_UTILITY_WEIGHT.get(role, 2.0)
+    # Higher disclosure tier is not inherently better, but it often tracks richer
+    # evidence. Give it a small weight so priority/role dominate.
+    tier_score = 0.15 * DISCLOSURE_TIER_ORDER.get(tier, 2)
+    return prio_score + role_score + tier_score
+
+
+def selector_default_method(selection_config: Dict[str, Any], request: Dict[str, Any]) -> str:
+    if selection_config.get("method"):
+        return str(selection_config.get("method"))
+    uc = request.get("utility_contract", {}) or {}
+    policy = uc.get("interface_policy", {}) or {}
+    if policy.get("selection_method"):
+        return str(policy.get("selection_method"))
+    # Utility-aware is the default for flexible multi-output requests: choose the
+    # highest-utility app-declared interface among CI/residual-feasible options,
+    # then choose the least-revealing implementation within that interface.
+    ident = request.get("request_identity", {}) or {}
+    if (
+        uc.get("interface_model") == "multi_representation_utility_contract"
+        or uc.get("request_family") == "flexible_multi_output_app_request"
+        or uc.get("flexible_tag") is True
+        or request.get("interface_model") == "multi_representation_utility_contract"
+        or request.get("request_family") == "flexible_multi_output_app_request"
+        or request.get("flexible_tag") is True
+        or ident.get("interface_model") == "multi_representation_utility_contract"
+        or ident.get("request_family") == "flexible_multi_output_app_request"
+        or ident.get("flexible_tag") is True
+    ):
+        return "utility_aware_weighted"
+    return "weighted"
+
 def pipeline_cost(candidate: Dict[str, Any]) -> float:
     if "implementation_cost" in candidate:
         try:
@@ -528,6 +622,7 @@ def select_pipeline(
     ablation_modes = active_ablation_modes(selection_config)
     weights = context_specific_weights(request, selection_config)
     cap_prio = accepted_cap_priority(request)
+    cap_meta = accepted_cap_metadata(request)
     cands = candidates_by_pipeline(candidate_generation_result)
     evals = ci_evaluations_by_pipeline(ci_evaluation_result)
     probe_by_id = {} if "metadata_only" in ablation_modes else probe_residuals_by_pipeline(probe_stage_result)
@@ -551,9 +646,16 @@ def select_pipeline(
         residual_ok = True if ignore_residual else raw_residual_ok
         residual_failures = [] if ignore_residual else raw_residual_failures
 
+        matched_cap_id = str(cand.get("matched_output_cap"))
+        matched_meta = dict(cand.get("matched_output_metadata") or cap_meta.get(matched_cap_id, {}))
         record = {
             "pipeline_id": pid,
             "matched_output_cap": cand.get("matched_output_cap"),
+            "matched_output_metadata": matched_meta,
+            "boundary_role": matched_meta.get("boundary_role"),
+            "disclosure_tier": matched_meta.get("disclosure_tier"),
+            "adapter": matched_meta.get("adapter"),
+            "execution_mode": matched_meta.get("execution_mode"),
             "ci_feasible": ci_ok,
             "raw_ci_feasible": raw_ci_ok,
             "ci_filter_ignored": ignore_ci,
@@ -568,13 +670,16 @@ def select_pipeline(
             "risk_score": residual_risk_score(final_res, weights),
             "lexicographic_key": list(lexicographic_key(final_res, selection_config.get("lexicographic_order"))),
             "utility_margin": utility_margin(cand, request),
+            "symbolic_output_utility": 0.0,  # filled after accepted-cap priority is attached below
             "latency_ms": latency_ms(cand),
             "implementation_cost": pipeline_cost(cand),
-            "accepted_cap_priority": cap_prio.get(str(cand.get("matched_output_cap")), 999),
+            "accepted_cap_priority": cap_prio.get(matched_cap_id, 999),
             "operators": [op.get("operator") for op in cand.get("operators", []) or []],
             "ci_decision": (ev or {}).get("ci_decision"),
             "hard_failure_summary": (ev or {}).get("hard_failure_summary") or ((ev or {}).get("ci_decision") or {}).get("hard_failure_summary"),
         }
+
+        record["symbolic_output_utility"] = symbolic_output_utility(record, request)
 
         if ci_ok and residual_ok:
             feasible.append(record)
@@ -583,7 +688,7 @@ def select_pipeline(
 
     # Ranking method. Ablations can keep the feasibility filters while changing
     # only how the final feasible set is ordered.
-    method = selection_config.get("method", "weighted")
+    method = selector_default_method(selection_config, request)
     if "utility_only" in ablation_modes:
         method = "utility_only"
     elif "no_least_revealing" in ablation_modes:
@@ -629,6 +734,16 @@ def select_pipeline(
             r["accepted_cap_priority"],
         ))
         feasible = pareto + [r for r in feasible if r not in pareto]
+    elif method in {"utility_aware_weighted", "utility_aware"}:
+        feasible.sort(key=lambda r: (
+            r["accepted_cap_priority"],
+            -r["symbolic_output_utility"],
+            r["risk_score"],
+            tuple(r["lexicographic_key"]),
+            -r["utility_margin"],
+            r["latency_ms"],
+            r["implementation_cost"],
+        ))
     else:
         feasible.sort(key=lambda r: (
             r["risk_score"],
@@ -647,8 +762,8 @@ def select_pipeline(
             "selected_output_cap": selected["matched_output_cap"],
             "reason": (
                 "Selected least-revealing feasible pipeline after utility, CI, residual, and optional probe evaluation."
-                if method not in {"utility_only", "no_least_revealing", "utility_first", "first_feasible", "latency_first"}
-                else f"Selected pipeline under selector ablation mode: {method}."
+                if method not in {"utility_only", "no_least_revealing", "utility_first", "first_feasible", "latency_first", "utility_aware_weighted", "utility_aware"}
+                else ("Selected the highest-priority utility-compatible interface that passed CI/residual filters, then the least-revealing feasible implementation within that interface." if method in {"utility_aware_weighted", "utility_aware"} else f"Selected pipeline under selector ablation mode: {method}.")
             ),
         }
     else:
@@ -695,10 +810,12 @@ def select_pipeline(
             "tie_breakers": [
                 "risk_score",
                 "lexicographic_key",
+                "symbolic_output_utility_desc",
                 "utility_margin_desc",
                 "latency_ms",
                 "implementation_cost",
                 "accepted_output_cap_priority",
+                "matched_output_metadata",
             ],
         },
         "decision": decision,

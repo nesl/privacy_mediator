@@ -897,7 +897,7 @@ class SpeechSoundClassifierOperator(Operator):
             labels = [l for l in labels if str(l.get("label", "")).lower() in allowed]
         data = {"labels": labels, "top_label": labels[0]["label"] if labels else None}
         anns = [{"label": l["label"], "confidence": l.get("confidence", 0.0), "source": "heuristic_audio"} for l in labels]
-        return semantic_item("sound_event_label", "application/x-sound-event-label", data, item, anns)
+        return semantic_item("sound_event_label", "application/x-sound-event", data, item, anns)
 
     def _heuristic_labels(self, audio: np.ndarray, sr: int) -> List[Dict[str, Any]]:
         db = _rms_db(audio)
@@ -1223,9 +1223,9 @@ class OccupancyDeriverOperator(Operator):
         binary = bool(self.params.get("binary", False))
         if binary:
             data = {"occupied": count > 0, "count": count, "spatial_scope": self.params.get("spatial_scope", "room")}
-            return semantic_item("room_occupied", "application/x-binary-occupancy", data, item, [{"label": "room_occupied", "value": count > 0, "confidence": 1.0}])
+            return semantic_item("binary_presence", "application/x-occupancy", data, item, [{"label": "room_occupied", "value": count > 0, "confidence": 1.0}])
         data = {"count": count, "spatial_scope": self.params.get("spatial_scope", "room")}
-        return semantic_item("occupancy_count", "application/x-occupancy-count", data, item, [{"label": "occupancy_count", "value": count, "confidence": 1.0}])
+        return semantic_item("occupancy_count", "application/x-occupancy", data, item, [{"label": "occupancy_count", "value": count, "confidence": 1.0}])
 
     def _derive_count(self, item: DataItem) -> int:
         if isinstance(item.data, dict):
@@ -1250,7 +1250,7 @@ class ActivityEventClassifierOperator(Operator):
         labels = [str(x).lower() for x in ensure_list(self.params.get("labels") or [])]
         result = self._classify(item, labels)
         schema = "fall_or_safety_event" if result.get("event_type") in {"fall", "safety_event", "glass_break_or_alarm", "alarm"} else "activity_label"
-        semantic_type = "application/x-safety-event" if schema == "fall_or_safety_event" else "application/x-activity-label"
+        semantic_type = "application/x-activity-event"
         return semantic_item(schema, semantic_type, result, item, [{"label": result.get("event_type") or result.get("activity") or "activity", "confidence": result.get("confidence", 0.0)}])
 
     def _classify(self, item: DataItem, labels: Sequence[str]) -> Dict[str, Any]:
@@ -1365,3 +1365,73 @@ def _count_by_label(records: Sequence[Dict[str, Any]]) -> Dict[str, int]:
         label = _annotation_label(r) or "unknown"
         counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+@register
+class SilhouetteExtractorOperator(Operator):
+    operator_id = "op.silhouette_extractor"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        frames = _iter_frames(item)
+        if not frames:
+            return item.clone(caps=merge_caps(item.caps, {"properties": {"silhouette_extraction_failed": True}}))
+        out_frames: List[np.ndarray] = []
+        for frame in frames:
+            gray = _cv_gray(frame)
+            if cv2 is not None:
+                blur = cv2.GaussianBlur(gray, (5, 5), 0)
+                _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            else:
+                mask = (gray > float(np.mean(gray))).astype(np.uint8) * 255
+            out_frames.append(mask.astype(np.uint8))
+        data = out_frames if isinstance(item.data, list) else _replace_image_data(item.data, out_frames[0])
+        family = "video" if cap_type(item.caps).startswith("video/") or len(out_frames) > 1 else "image"
+        caps = merge_caps(item.caps, {
+            "media_type": f"{family}/x-silhouette",
+            "schema": "silhouette_video_stream" if family == "video" else "silhouette_frame",
+            "properties": {
+                "raw_pixels_removed": True,
+                "retains_image_payload": False,
+                "representationRole": "format_preserving_redaction",
+            },
+        })
+        return item.clone(caps=caps, data=data, metadata={"silhouette_frames": len(out_frames)})
+
+
+@register
+class MotionFeatureExtractorOperator(Operator):
+    operator_id = "op.motion_feature_extractor"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        data: Dict[str, Any] = {"features": {}, "source_cap": cap_type(item.caps)}
+        if isinstance(item.data, dict) and ("keypoints" in item.data or "poses" in item.data):
+            arr = np.asarray(item.data.get("keypoints") or item.data.get("poses"), dtype=np.float32)
+            data["features"]["num_pose_values"] = int(arr.size)
+            if arr.size:
+                data["features"]["mean"] = float(np.nanmean(arr))
+                data["features"]["std"] = float(np.nanstd(arr))
+        else:
+            frames = _iter_frames(item)
+            if frames:
+                vals = [float(np.mean(_cv_gray(f))) for f in frames]
+                data["features"]["mean_intensity"] = float(np.mean(vals))
+                data["features"]["std_intensity"] = float(np.std(vals))
+                if len(vals) > 1:
+                    data["features"]["temporal_delta"] = float(np.mean(np.abs(np.diff(vals))))
+        return semantic_item("normalized_motion_features", "application/x-motion-features", data, item, [{"label": "motion_features", "confidence": 1.0}])
+
+
+@register
+class MultimodalPrimitiveFuserOperator(Operator):
+    operator_id = "op.multimodal_primitive_fuser"
+
+    def apply(self, item: DataItem) -> Optional[DataItem]:
+        payload = item.to_jsonable(include_payload=False)
+        data = {
+            "primitives": [payload],
+            "source_cap": cap_type(item.caps),
+            "timestamp_ms": item.metadata.get("timestamp_ms"),
+        }
+        anns = list(item.annotations) + [{"label": "multimodal_primitive", "confidence": 1.0, "source": "multimodal_primitive_fuser"}]
+        return semantic_item("multimodal_primitive_record", "application/x-multimodal-primitives", data, item, anns)
+

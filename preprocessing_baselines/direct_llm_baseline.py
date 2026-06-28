@@ -65,6 +65,21 @@ RESIDUAL_ATTRIBUTES: List[str] = [
 ]
 
 
+CAP_TYPE_ALIASES: Dict[str, str] = {
+    "application/x-sound-event-label": "application/x-sound-event",
+    "application/x-occupancy-count": "application/x-occupancy",
+    "application/x-binary-occupancy": "application/x-occupancy",
+    "application/x-activity-label": "application/x-activity-event",
+    "application/x-safety-event": "application/x-activity-event",
+    "application/x-security-event": "application/x-activity-event",
+}
+
+
+def normalize_cap_type(value: Any) -> str:
+    t = str(value or "").strip()
+    return CAP_TYPE_ALIASES.get(t, t)
+
+
 SEMANTIC_FAMILIES: Dict[str, set[str]] = {
     "application/x-count": {
         "application/x-count",
@@ -96,13 +111,16 @@ SEMANTIC_FAMILIES: Dict[str, set[str]] = {
         "application/x-motion-events",
         "application/x-noise-sensor",
     },
+    "application/x-occupancy": {"application/x-occupancy", "application/x-occupancy-count", "application/x-binary-occupancy"},
+    "application/x-sound-event": {"application/x-sound-event", "application/x-sound-event-label"},
+    "application/x-activity-event": {"application/x-activity-event", "application/x-activity-label", "application/x-safety-event", "application/x-security-event"},
 }
 
 
 def cap_type(cap: Optional[Dict[str, Any]]) -> str:
     if not cap:
         return ""
-    return str(cap.get("semantic_type") or cap.get("media_type") or "")
+    return normalize_cap_type(cap.get("semantic_type") or cap.get("media_type") or "")
 
 
 def cap_schema(cap: Optional[Dict[str, Any]]) -> str:
@@ -118,8 +136,8 @@ def type_matches(upstream: str, downstream: str) -> bool:
     application cap. Redacted/filtered media are treated as interface-compatible
     with raw-media consumers, while still being distinct disclosure types.
     """
-    upstream = str(upstream or "")
-    downstream = str(downstream or "")
+    upstream = normalize_cap_type(upstream)
+    downstream = normalize_cap_type(downstream)
     if not downstream or downstream == "*":
         return True
     if not upstream:
@@ -150,20 +168,172 @@ def cap_matches_goal(out_cap: Dict[str, Any], accepted_cap: Dict[str, Any]) -> b
     return False
 
 
-def compact_operator_catalog(operator_catalog: Dict[str, Any]) -> List[Dict[str, Any]]:
-    compact: List[Dict[str, Any]] = []
+TASK_RELEVANT_TERMS: Dict[str, set[str]] = {
+    "visitor_presence_detection": {
+        "visitor", "presence", "person", "people", "occupancy", "count", "detection",
+        "detect", "chokepoint", "entry", "image", "video", "visual", "frame",
+        "crop", "blur", "region", "silhouette", "motion", "aggregate",
+    },
+    "fall_detection": {
+        "fall", "safety", "pose", "keypoint", "skeleton", "motion", "silhouette",
+        "le2i", "activity", "event", "video", "image", "frame", "window",
+    },
+    "adl_recognition": {
+        "adl", "activity", "youhome", "audio", "visual", "video", "image", "av",
+        "pose", "detection", "sound", "speech", "multimodal", "primitive", "redact",
+        "filter", "window", "sample",
+    },
+    "domestic_sound_monitoring": {
+        "domestic", "sound", "audio", "chime", "chime_home", "waveform", "speech",
+        "speaker", "filtered", "event", "decibel", "noise", "aggregate", "window",
+    },
+}
+
+ALWAYS_INCLUDE_OPERATOR_IDS = {
+    "op.source", "op.route_publish", "op.schema_adapter", "op.sample", "op.window",
+    "op.trigger_gate", "op.join_fuse", "op.youhome_av_adapter",
+}
+
+
+def infer_task_key_for_prompt(request: Dict[str, Any]) -> str:
+    rid = request.get("request_identity", {}) or {}
+    uc = request.get("utility_contract", {}) or {}
+    ctx = request.get("ci_context", {}) or {}
+    haystack = " ".join(
+        str(x)
+        for x in [
+            rid.get("request_id"), rid.get("scenario_id"), rid.get("application_category"), rid.get("application_name"),
+            uc.get("requested_capability"), uc.get("task_description"),
+            ctx.get("purpose"), ctx.get("context"),
+        ]
+    ).lower()
+    if any(x in haystack for x in ["chokepoint", "visitor", "presence", "entry", "security_monitoring"]):
+        return "visitor_presence_detection"
+    if any(x in haystack for x in ["fall", "le2i", "elder", "safety"]):
+        return "fall_detection"
+    if any(x in haystack for x in ["youhome", "adl", "activity", "routine"]):
+        return "adl_recognition"
+    if any(x in haystack for x in ["chime", "domestic", "sound", "audio", "speech"]):
+        return "domestic_sound_monitoring"
+    return "unknown"
+
+
+def _cap_terms(cap: Any) -> set[str]:
+    terms: set[str] = set()
+    if isinstance(cap, dict):
+        for key in ["media_type", "semantic_type", "schema", "cap_id", "content_type"]:
+            if cap.get(key):
+                terms.update(str(cap.get(key)).lower().replace("/", " ").replace("-", "_").split())
+        props = cap.get("properties") if isinstance(cap.get("properties"), dict) else {}
+        for v in props.values():
+            if isinstance(v, str):
+                terms.update(v.lower().replace("/", " ").replace("-", "_").split())
+            elif isinstance(v, list):
+                for item in v:
+                    terms.update(str(item).lower().replace("/", " ").replace("-", "_").split())
+    elif isinstance(cap, list):
+        for item in cap:
+            terms.update(_cap_terms(item))
+    return terms
+
+
+def _operator_role(op: Dict[str, Any]) -> str:
+    oid = str(op.get("id") or "").lower()
+    cat = str(op.get("category") or "").lower()
+    text = " ".join([oid, cat, str(op.get("label") or "")]).lower()
+    if "source" in oid or "source" in cat:
+        return "source"
+    if "route" in oid or "publish" in oid:
+        return "publish"
+    if "adapter" in oid or "adapter" in cat:
+        return "adapter"
+    if any(x in text for x in ["blur", "redact", "filter", "crop", "mask", "downscale", "speech_content_removal"]):
+        return "format_preserving_transform"
+    if any(x in text for x in ["detector", "extractor", "classifier", "spotting", "pose", "ocr", "silhouette"]):
+        return "semantic_extractor"
+    if any(x in text for x in ["aggregate", "generalize", "occupancy_deriver", "fuser"]):
+        return "derive_or_aggregate"
+    return "other"
+
+
+def _compact_operator(op: Dict[str, Any]) -> Dict[str, Any]:
+    # Keep enough structure for the LLM to compose a plausible chain, but not the
+    # full metadata for every unrelated operator.
+    return {
+        "id": op.get("id"),
+        "label": op.get("label"),
+        "role": _operator_role(op),
+        "category": op.get("category"),
+        "input_caps": op.get("input_caps", []),
+        "output_caps": op.get("output_caps", []),
+        "utility_capabilities": op.get("utility_capabilities", []),
+        "transformation_effects": op.get("transformation_effects", []),
+        "ci_annotations": op.get("ci_annotations", {}),
+    }
+
+
+def compact_operator_catalog(operator_catalog: Dict[str, Any], request: Optional[Dict[str, Any]] = None, max_per_role: int = 10) -> Dict[str, Any]:
+    """Return a task-relevant catalog for the direct-LLM baseline prompt.
+
+    The direct baseline should not receive thousands of generated candidates, but
+    a full operator catalog can still be noisy.  This compactor keeps globally
+    necessary operators plus operators whose ids/caps/capabilities overlap the
+    request task and accepted output interfaces.  Operators are grouped by role
+    so the LLM sees a menu of building blocks rather than a flat wall of JSON.
+    """
+    request = request or {}
+    task = infer_task_key_for_prompt(request)
+    accepted_caps = (request.get("utility_contract", {}) or {}).get("accepted_output_caps", []) or []
+    output_terms = _cap_terms(accepted_caps)
+    task_terms = set(TASK_RELEVANT_TERMS.get(task, set())) | output_terms
+
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    kept_ids: set[str] = set()
+    dropped = 0
     for op in operator_catalog.get("operators", []) or []:
-        compact.append({
+        oid = str(op.get("id") or "")
+        op_text = json.dumps({
             "id": op.get("id"),
             "label": op.get("label"),
             "category": op.get("category"),
             "input_caps": op.get("input_caps", []),
             "output_caps": op.get("output_caps", []),
             "utility_capabilities": op.get("utility_capabilities", []),
-            "transformation_effects": op.get("transformation_effects", []),
-            "ci_annotations": op.get("ci_annotations", {}),
-        })
-    return compact
+        }, default=str).lower().replace("/", " ").replace("-", "_")
+        relevant = oid in ALWAYS_INCLUDE_OPERATOR_IDS or any(term and term in op_text for term in task_terms)
+        if not relevant:
+            dropped += 1
+            continue
+        role = _operator_role(op)
+        groups.setdefault(role, [])
+        if len(groups[role]) < max_per_role or oid in ALWAYS_INCLUDE_OPERATOR_IDS:
+            groups[role].append(_compact_operator(op))
+            kept_ids.add(oid)
+        else:
+            dropped += 1
+
+    # Ensure source/publish/schema_adapter are present if in the original catalog.
+    if kept_ids:
+        by_id = {str(op.get("id")): op for op in operator_catalog.get("operators", []) or []}
+        for oid in sorted(ALWAYS_INCLUDE_OPERATOR_IDS & set(by_id)):
+            if oid not in kept_ids:
+                groups.setdefault(_operator_role(by_id[oid]), []).append(_compact_operator(by_id[oid]))
+                kept_ids.add(oid)
+
+    role_order = ["source", "format_preserving_transform", "semantic_extractor", "derive_or_aggregate", "adapter", "publish", "other"]
+    return {
+        "task_key": task,
+        "compaction_policy": "task_relevant_catalog_not_generated_candidates",
+        "operator_count_total": len(operator_catalog.get("operators", []) or []),
+        "operator_count_kept": sum(len(v) for v in groups.values()),
+        "operator_count_dropped": dropped,
+        "roles": {role: groups.get(role, []) for role in role_order if groups.get(role)},
+        "notes": [
+            "This is not a generated candidate list; it is a task-relevant menu of operator building blocks.",
+            "Prefer richer accepted-output interfaces when contextually acceptable; do not blindly pick the lowest-information output.",
+            "Generic schema_adapter is not an inference model and may be used at most once.",
+        ],
+    }
 
 
 def compact_application_output_contract(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -206,13 +376,17 @@ This is a direct-LLM baseline, not the full mediator:
 - Do NOT enumerate alternatives.
 - Do NOT ask for another planner, verifier, CI evaluator, or selector to repair your answer.
 - Choose exactly one operator sequence from the catalog, OR explicitly choose no_compromise / needs_review.
+- Do not use repeated generic schema_adapter steps. At most one op.schema_adapter may appear unless the catalog names a specific task adapter.
+- Do not use op.schema_adapter as an inference model: it may repackage equivalent records but may not convert motion features into sound events, sound events into ADL labels, or detections into fall labels.
 - You may make a mistake; if your proposed chain is not actually executable, that is still the baseline result.
+- The catalog below is task-relevant and grouped by operator role. Use it as a building-block menu, not as an exhaustive proof that no other chain exists.
 
-The request contains TWO different kinds of constraints that you must consider together:
+The request contains TWO different kinds of constraints that you must consider together, plus a utility/privacy tradeoff rule:
 
 1. DOWNSTREAM UTILITY / FORMAT COMPATIBILITY
 The final output must be usable by the downstream application described in accepted_output_caps.
 Do not choose a privacy-minimized semantic label/event if the downstream application expects media, pose, or audio-waveform input.
+Utility is usually higher when the app receives richer app-relevant evidence. Do not automatically collapse to the least revealing semantic label. Choose the highest-utility accepted output that is still contextually appropriate and no more revealing than needed.
 Examples:
 - If the app accepts image/x-raw image frames, you may output image/x-raw or image/x-redacted only if it is still an image-frame interface.
 - If the app accepts video/x-raw video frames, you may output video/x-raw or video/x-redacted only if it is still a video-frame interface.
@@ -224,8 +398,10 @@ Examples:
 The context is given in contextual-integrity form: context, physical space, sender, subject, recipient, purpose, and transmission principle.
 Use these CI parameters to choose the most acceptable utility-preserving preprocessing pipeline, not merely the most technically direct one.
 
-When several pipelines could satisfy the downstream format, prefer the one that is most likely to be acceptable under contextual integrity:
-- Minimize disclosure beyond what is needed for the stated purpose.
+When several pipelines could satisfy the downstream format, choose a balanced option:
+- First preserve enough app-relevant information to plausibly maintain downstream utility.
+- Then minimize disclosure beyond what is needed for the stated purpose.
+- Do not rank outputs solely by information reduction; a very coarse output may be privacy-preserving but may fail the intended utility contract.
 - Prefer transformations that preserve the downstream input interface while reducing sensitive information, such as face/background blur, field-of-view cropping, pose extraction, speech-content removal, aggregation, local/ephemeral processing, or event-triggered collection when appropriate.
 - In sensitive spaces such as bedrooms, bathrooms, patient rooms, schools, care settings, workplaces, and short-term rentals, avoid raw identifiable images/video/audio unless the task cannot work otherwise.
 - For guests, visitors, children, patients, employees, bystanders, or people with weak preference channels, be more conservative about identity, face, speech content, speaker identity, trajectory, visible text, and co-presence.
@@ -238,27 +414,28 @@ When several pipelines could satisfy the downstream format, prefer the one that 
 
 You are NOT allowed to invent operators. Choose only operator ids from the catalog. Use op.source at the beginning and op.route_publish at the end if available.
 
-Return JSON only with this schema:
+Return exactly one valid JSON object with these keys. Do not include Markdown fences or text outside the JSON object.
 {{
-  "decision": "select_pipeline | no_compromise | needs_review | deny",
-  "operator_ids": ["op.source", "...", "op.route_publish"],
-  "operator_parameters": {{
-    "op.some_operator": {{"example_parameter": "value"}}
-  }},
-  "matched_accepted_cap_id": "cap_id from accepted_output_caps, or null",
+  "decision": "select_pipeline",
+  "operator_ids": ["op.source", "op.route_publish"],
+  "operator_parameters": {{}},
+  "matched_accepted_cap_id": null,
   "final_output_cap": {{
-    "media_type": "image/x-redacted | video/x-redacted | audio/x-filtered | ...",
+    "media_type": null,
     "semantic_type": null,
-    "schema": "schema name expected by the downstream app if known",
+    "schema": null,
     "properties": {{}}
   }},
-  "downstream_compatibility_rationale": "why the final output should be consumable by the downstream app",
-  "contextual_integrity_rationale": "how the chosen pipeline fits the CI context: context, space, sender, subject, recipient, purpose, and transmission principle",
-  "privacy_rationale": "why this preprocessing is more acceptable / less revealing than raw input while preserving utility",
+  "downstream_compatibility_rationale": "one sentence",
+  "information_sufficiency_rationale": "why this output preserves enough utility rather than over-minimizing",
+  "contextual_integrity_rationale": "one sentence",
+  "privacy_rationale": "one sentence",
+  "utility_privacy_tradeoff_rationale": "why this is the highest-utility contextually acceptable output, not merely the least revealing output",
   "rationale": "brief overall explanation",
-  "no_compromise_rationale": "only required when decision is no_compromise or deny; explain why no utility-compatible output is contextually appropriate",
-  "needs_review_rationale": "only required when decision is needs_review; explain what consent/disclosure/review condition is missing"
+  "no_compromise_rationale": null,
+  "needs_review_rationale": null
 }}
+Allowed decision values are exactly: "select_pipeline", "no_compromise", "needs_review", or "deny".
 
 Application request output contract:
 {json.dumps(output_contract, indent=2)}
@@ -272,27 +449,85 @@ Full application request:
 Environment/context:
 {json.dumps(environment or {}, indent=2)}
 
-Operator catalog:
-{json.dumps(compact_operator_catalog(operator_catalog), indent=2)}
+Task-relevant operator catalog grouped by role:
+{json.dumps(compact_operator_catalog(operator_catalog, request), indent=2)}
 """.strip()
 
+
+def extract_json_object(text: str) -> str:
+    """Return the first parseable JSON object from an LLM response.
+
+    Models sometimes wrap valid JSON in prose, Markdown, or trailing notes.  This
+    keeps the direct-LLM baseline from reporting llm_error merely because the
+    response had a preface.  It does not repair semantic mistakes; it only
+    extracts a syntactically valid object.
+    """
+    s = strip_json_fence(text)
+    try:
+        json.loads(s)
+        return s
+    except Exception:
+        pass
+    start = s.find("{")
+    if start < 0:
+        return s
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start:i + 1]
+    return s[start:]
+
+
 def call_direct_llm(prompt: str, model: str, temperature: float = 0.0) -> Dict[str, Any]:
-    # Prefer the same LangChain backend used by contextual_integrity_evaluator.py.
+    system_msg = (
+        "Return one valid JSON object only. Do not use Markdown fences, prose, "
+        "comments, or trailing explanation."
+    )
+    # Prefer the same LangChain backend used by contextual_integrity_evaluator.py,
+    # but request JSON-object mode when supported.
     try:
         from langchain_openai import ChatOpenAI  # type: ignore
-        llm = ChatOpenAI(model=model, temperature=temperature)
-        resp = llm.invoke(prompt)
+        try:
+            llm = ChatOpenAI(model=model, temperature=temperature, model_kwargs={"response_format": {"type": "json_object"}})
+        except TypeError:
+            llm = ChatOpenAI(model=model, temperature=temperature)
+        resp = llm.invoke([("system", system_msg), ("user", prompt)])
         raw = str(getattr(resp, "content", resp))
     except Exception as first_exc:
         # Fall back to the OpenAI Python SDK if available.
         try:
             from openai import OpenAI  # type: ignore
             client = OpenAI()
-            resp = client.chat.completions.create(
-                model=model,
-                temperature=temperature,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                    messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}],
+                )
+            except Exception:
+                resp = client.chat.completions.create(
+                    model=model,
+                    temperature=temperature,
+                    messages=[{"role": "system", "content": system_msg}, {"role": "user", "content": prompt}],
+                )
             raw = resp.choices[0].message.content or ""
         except Exception as second_exc:
             return {
@@ -301,7 +536,7 @@ def call_direct_llm(prompt: str, model: str, temperature: float = 0.0) -> Dict[s
                 "raw_response": "",
             }
     try:
-        parsed = json.loads(strip_json_fence(raw))
+        parsed = json.loads(extract_json_object(raw))
         parsed["_call_status"] = "ok"
         parsed["raw_response"] = raw
         return parsed
@@ -321,6 +556,18 @@ def canonicalize_operator_sequence(seq: Sequence[str]) -> List[str]:
         out.append("op.route_publish")
     return out
 
+
+
+
+def validate_direct_llm_operator_sequence(op_ids: Sequence[str]) -> List[str]:
+    issues: List[str] = []
+    if list(op_ids).count("op.schema_adapter") > 1:
+        issues.append("op.schema_adapter appears more than once; generic schema adaptation is limited to one step.")
+    for a, b in zip(op_ids, list(op_ids)[1:]):
+        if a == "op.schema_adapter" and b == "op.schema_adapter":
+            issues.append("Consecutive op.schema_adapter steps are not allowed.")
+            break
+    return issues
 
 def catalog_operator_ids(operator_catalog: Dict[str, Any]) -> set[str]:
     ids = {str(op.get("id")) for op in operator_catalog.get("operators", []) or [] if op.get("id")}
@@ -500,6 +747,7 @@ def make_llm_candidate(
     op_ids = canonicalize_operator_sequence(llm_choice.get("operator_ids", []))
     known_ids = catalog_operator_ids(operator_catalog)
     unknown_ops = [op for op in op_ids if op not in known_ids]
+    sequence_issues = validate_direct_llm_operator_sequence(op_ids)
 
     matched_cap, output_diag = find_declared_output_match(llm_choice, request)
     final_cap = copy.deepcopy(llm_choice.get("final_output_cap") if isinstance(llm_choice.get("final_output_cap"), dict) else {})
@@ -541,6 +789,7 @@ def make_llm_candidate(
         "executable_under_catalog": not unknown_ops,
         "operator_ids_exist_in_catalog": not unknown_ops,
         "unknown_operator_ids": unknown_ops,
+        "operator_sequence_issues": sequence_issues,
         "baseline_notes": [
             "Direct LLM baseline selected one pipeline directly; no full candidate enumeration was used.",
             "The prompt required the LLM to respect downstream accepted_output_caps.",
@@ -552,21 +801,40 @@ def make_llm_candidate(
         "privacy_rationale": llm_choice.get("privacy_rationale"),
     }
 
+    repeated_schema_adapters = op_ids.count("op.schema_adapter") > 1
+    schema_adapter_inference_warning = False
+    if "op.schema_adapter" in op_ids:
+        out_t = cap_type(final_cap)
+        out_schema = cap_schema(final_cap)
+        # The direct baseline is allowed to make mistakes, but we flag cases
+        # where the LLM appears to rely on a generic adapter to emit a semantic
+        # task output.  The full symbolic generator enforces this more strictly.
+        schema_adapter_inference_warning = out_t.startswith("application/x-") and out_schema not in {"", "occupancy_count", "room_occupied", "object_detections", "pose_keypoints", "sound_event_label", "aggregate_summary"}
+
     validation_status = "ok"
     validation_reason = "LLM returned a single declared pipeline."
     if unknown_ops:
         validation_status = "invalid_operator_ids"
         validation_reason = "LLM used operators not present in the catalog."
+    elif repeated_schema_adapters:
+        validation_status = "repeated_schema_adapter"
+        validation_reason = "LLM used repeated generic schema_adapter steps, which are not allowed in the stricter flexible compatibility model."
     elif not output_diag.get("declared_output_compatibility"):
         # Keep the selected baseline result, but mark compatibility as questionable.
         validation_status = "declared_output_incompatible_or_unknown"
         validation_reason = str(output_diag.get("declared_output_compatibility_reason"))
+    elif schema_adapter_inference_warning:
+        validation_status = "schema_adapter_may_be_doing_inference"
+        validation_reason = "LLM used a generic schema_adapter before a semantic task output; this is flagged as questionable rather than repaired."
 
     diagnostics = {
         "validation_status": validation_status,
         "validation_reason": validation_reason,
         "llm_operator_ids": op_ids,
         "unknown_operator_ids": unknown_ops,
+        "operator_sequence_issues": sequence_issues,
+        "repeated_schema_adapters": repeated_schema_adapters,
+        "schema_adapter_inference_warning": schema_adapter_inference_warning,
         "matched_accepted_output_cap": matched_cap,
         **output_diag,
         "full_candidate_enumeration_used": False,

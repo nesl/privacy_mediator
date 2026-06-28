@@ -74,6 +74,41 @@ RESIDUAL_ATTRIBUTES: List[str] = [
     "aggregate_presence",
 ]
 
+# Canonical cap aliases for the flexible app-contract vocabulary.  Older
+# contracts used more specific cap strings such as application/x-sound-event-label
+# and application/x-binary-occupancy.  Flexible app requests normalize these into
+# canonical families so the planner can match app alternatives without losing the
+# original schema or cap_id metadata.
+CAP_TYPE_ALIASES: Dict[str, str] = {
+    "application/x-sound-event-label": "application/x-sound-event",
+    "application/x-occupancy-count": "application/x-occupancy",
+    "application/x-binary-occupancy": "application/x-occupancy",
+    "application/x-activity-label": "application/x-activity-event",
+    "application/x-safety-event": "application/x-activity-event",
+    "application/x-security-event": "application/x-activity-event",
+    "application/x-text-regions": "application/x-visible-text-regions",
+}
+
+
+def normalize_cap_type(value: Any) -> str:
+    t = str(value or "").strip()
+    return CAP_TYPE_ALIASES.get(t, t)
+
+
+def canonicalize_cap(cap: Dict[str, Any]) -> Dict[str, Any]:
+    out = copy.deepcopy(cap)
+    if out.get("semantic_type"):
+        raw = str(out["semantic_type"])
+        out["semantic_type"] = normalize_cap_type(raw)
+        if raw != out["semantic_type"]:
+            out.setdefault("properties", {})["legacy_semantic_type"] = raw
+    if out.get("media_type"):
+        raw = str(out["media_type"])
+        out["media_type"] = normalize_cap_type(raw)
+        if raw != out["media_type"]:
+            out.setdefault("properties", {})["legacy_media_type"] = raw
+    return out
+
 # Lightweight family aliases for caps compatibility.
 SEMANTIC_FAMILIES: Dict[str, Set[str]] = {
     "application/x-count": {
@@ -165,6 +200,84 @@ ADAPTER_ALLOWED_INPUTS: Dict[str, Set[str]] = {
     },
 }
 
+# Add canonical flexible families while keeping backward-compatible members.
+SEMANTIC_FAMILIES.update({
+    "application/x-occupancy": {
+        "application/x-occupancy", "application/x-count",
+        "application/x-occupancy-count", "application/x-binary-occupancy",
+        "application/x-aggregate",
+    },
+    "application/x-sound-event": {
+        "application/x-sound-event", "application/x-sound-event-label",
+        "application/x-event", "application/x-observation",
+    },
+    "application/x-activity-event": {
+        "application/x-activity-event", "application/x-activity-label",
+        "application/x-safety-event", "application/x-security-event",
+        "application/x-event", "application/x-fused-event",
+    },
+    "application/x-motion-features": {
+        "application/x-motion-features", "application/x-pose-keypoints",
+        "video/x-silhouette", "image/x-silhouette",
+    },
+    "application/x-multimodal-primitives": {
+        "application/x-multimodal-primitives", "application/x-pose-keypoints",
+        "application/x-detections", "application/x-occupancy",
+        "application/x-sound-event", "application/x-motion-features",
+    },
+})
+# Schema adaptation is intentionally conservative.  A generic adapter may
+# repackage a semantically equivalent representation, normalize aliases, or do
+# simple deterministic packaging (e.g. detections -> occupancy/count), but it
+# must not perform a new task inference such as motion_features -> sound_event
+# or sound_event -> activity_label.  Such changes require an explicit inference
+# operator or a named task adapter in the operator catalog.
+ADAPTER_ALLOWED_INPUTS.update({
+    "application/x-occupancy": {
+        "application/x-occupancy", "application/x-occupancy-count",
+        "application/x-binary-occupancy", "application/x-detections",
+        "application/x-aggregate",
+    },
+    "application/x-sound-event": {
+        "application/x-sound-event", "application/x-sound-event-label",
+    },
+    "application/x-activity-event": {
+        "application/x-activity-event", "application/x-activity-label",
+        "application/x-safety-event", "application/x-security-event",
+    },
+    "application/x-motion-features": {
+        "application/x-motion-features", "application/x-pose-keypoints",
+        "video/x-silhouette", "image/x-silhouette",
+    },
+    "application/x-multimodal-primitives": {
+        "application/x-multimodal-primitives",
+    },
+    "application/x-aggregate": {
+        "application/x-aggregate",
+    },
+})
+
+# Additional schema-level adapter restrictions.  Keys are target schemas emitted
+# by op.schema_adapter variants; values are schemas that may be repackaged into
+# that target without implying a new learned inference step.
+ADAPTER_ALLOWED_SCHEMA_INPUTS: Dict[str, Set[str]] = {
+    "occupancy_count": {"occupancy_count", "room_occupied", "object_detections", "aggregate_summary"},
+    "room_occupied": {"room_occupied", "occupancy_count", "object_detections", "aggregate_summary"},
+    "object_detections": {"object_detections"},
+    "pose_keypoints": {"pose_keypoints"},
+    "sound_event_label": {"sound_event_label"},
+    "decibel_level_duration": {"decibel_level_duration"},
+    "activity_label": {"activity_label", "fall_or_safety_event", "person_at_door_or_intrusion_event"},
+    "fall_or_safety_event": {"fall_or_safety_event", "activity_label"},
+    "person_at_door_or_intrusion_event": {"person_at_door_or_intrusion_event"},
+    "normalized_motion_features": {"normalized_motion_features", "pose_keypoints", "silhouette_frame", "silhouette_video_stream"},
+    "multimodal_primitive_record": {"multimodal_primitive_record"},
+    "aggregate_summary": {"aggregate_summary"},
+}
+
+SCHEMA_ADAPTER_MAX_PER_PIPELINE = 1
+
+
 
 def load_json(path: str | Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
@@ -254,7 +367,7 @@ def as_list(x: Any) -> List[Any]:
 
 
 def cap_type(cap: Dict[str, Any]) -> str:
-    return cap.get("semantic_type") or cap.get("media_type") or ""
+    return normalize_cap_type(cap.get("semantic_type") or cap.get("media_type") or "")
 
 
 def cap_schema(cap: Dict[str, Any]) -> str:
@@ -293,6 +406,8 @@ def cap_signature(cap: Dict[str, Any]) -> Tuple[str, str]:
 
 
 def type_matches(upstream: str, downstream: str) -> bool:
+    upstream = normalize_cap_type(upstream)
+    downstream = normalize_cap_type(downstream)
     if not downstream or downstream == "*":
         return True
     if not upstream:
@@ -319,7 +434,9 @@ def type_matches(upstream: str, downstream: str) -> bool:
 
     # Redacted media remains media-compatible with same-family media consumers,
     # but the cap records that the output is transformed rather than raw.
-    if downstream in {"image/x-redacted", "video/x-redacted"} and same_media_family(upstream, downstream):
+    if downstream == "image/x-redacted" and upstream in {"image/x-redacted", "image/x-raw"}:
+        return True
+    if downstream == "video/x-redacted" and upstream in {"video/x-redacted", "video/x-raw"}:
         return True
 
     return False
@@ -337,6 +454,68 @@ def cap_matches(up_cap: Dict[str, Any], in_cap: Dict[str, Any]) -> bool:
     return bool(cap_schema(up_cap) and cap_schema(up_cap) == cap_schema(in_cap))
 
 
+
+
+# App-facing accepted-output matching is intentionally directional.  In-pipeline
+# compatibility can be broad/symmetric so operators compose, but a final output
+# should not satisfy a narrower app contract just because it belongs to a broader
+# semantic family.  For example, application/x-multimodal-primitives may contain
+# detections, but it should not match an app cap that specifically asks for
+# application/x-detections unless an explicit schema_adapter emitted detections.
+GOAL_CAP_ACCEPTS: Dict[str, Set[str]] = {
+    "application/x-occupancy": {
+        "application/x-occupancy",
+        "application/x-count",
+        "application/x-occupancy-count",
+        "application/x-binary-occupancy",
+    },
+    "application/x-sound-event": {
+        "application/x-sound-event",
+        "application/x-sound-event-label",
+    },
+    "application/x-activity-event": {
+        "application/x-activity-event",
+        "application/x-activity-label",
+        "application/x-safety-event",
+        "application/x-security-event",
+        "application/x-fused-event",
+    },
+    "application/x-motion-features": {
+        "application/x-motion-features",
+    },
+    "application/x-multimodal-primitives": {
+        "application/x-multimodal-primitives",
+        "application/x-pose-keypoints",
+        "application/x-detections",
+        "application/x-occupancy",
+        "application/x-sound-event",
+        "application/x-activity-event",
+        "application/x-motion-features",
+    },
+}
+
+
+def goal_type_matches(out_t: str, goal_t: str) -> bool:
+    out_t = normalize_cap_type(out_t)
+    goal_t = normalize_cap_type(goal_t)
+    if not goal_t or goal_t == "*":
+        return True
+    if out_t == goal_t:
+        return True
+    if goal_t in GOAL_CAP_ACCEPTS and out_t in {normalize_cap_type(x) for x in GOAL_CAP_ACCEPTS[goal_t]}:
+        return True
+    if goal_t == "video/x-raw" and out_t in {"video/x-redacted", "video/x-raw"}:
+        return True
+    if goal_t == "image/x-raw" and out_t in {"image/x-redacted", "image/x-raw"}:
+        return True
+    if goal_t == "audio/x-raw" and out_t in {"audio/x-filtered", "audio/x-raw"}:
+        return True
+    if goal_t == "image/x-redacted" and out_t in {"image/x-redacted", "image/x-raw"}:
+        return True
+    if goal_t == "video/x-redacted" and out_t in {"video/x-redacted", "video/x-raw"}:
+        return True
+    return False
+
 def goal_cap_match_score(out_cap: Dict[str, Any], goal_cap: Dict[str, Any]) -> Optional[Tuple[int, str]]:
     """Return a score for an accepted output cap match, or None.
 
@@ -346,8 +525,8 @@ def goal_cap_match_score(out_cap: Dict[str, Any], goal_cap: Dict[str, Any]) -> O
     if the request also declares an explicit audio/x-filtered accepted cap, the
     filtered cap should be matched so its required CI terms are attached.
     """
-    goal_t = goal_cap.get("semantic_type") or goal_cap.get("media_type")
-    out_t = cap_type(out_cap)
+    goal_t = normalize_cap_type(goal_cap.get("semantic_type") or goal_cap.get("media_type"))
+    out_t = normalize_cap_type(cap_type(out_cap))
     goal_schema = goal_cap.get("schema")
     out_schema = cap_schema(out_cap)
 
@@ -359,8 +538,8 @@ def goal_cap_match_score(out_cap: Dict[str, Any], goal_cap: Dict[str, Any]) -> O
         return (1, "exact_type")
     if schema_exact:
         return (2, "exact_schema")
-    if goal_t and type_matches(out_t, goal_t):
-        return (10, "compatible_type")
+    if goal_t and goal_type_matches(out_t, goal_t):
+        return (10, "compatible_goal_type")
     return None
 
 
@@ -516,6 +695,37 @@ def with_output_cap_effects(out_cap: Dict[str, Any], ci_additions: Dict[str, Lis
             full_key = f"informationType.{k}"
             additions.setdefault(full_key, [])
             additions[full_key].extend(flatten_terms(props[k]))
+
+    # Flexible representation metadata: make semantic/minimized outputs visible
+    # to CI rules and selector diagnostics.  These terms are derived from the
+    # output contract, not from downstream evaluation.
+    role = str(props.get("representationRole") or props.get("representation_role") or "")
+    if role:
+        additions.setdefault("representationRole", []).append(role)
+    cap_canonical = props.get("canonical_cap") or normalize_cap_type(out_cap.get("semantic_type") or out_cap.get("media_type"))
+    if cap_canonical:
+        additions.setdefault("capability", []).append(str(cap_canonical))
+
+    semantic_t = normalize_cap_type(out_cap.get("semantic_type") or "")
+    media_t = normalize_cap_type(out_cap.get("media_type") or "")
+    if semantic_t in {"application/x-detections", "application/x-pose-keypoints", "application/x-occupancy", "application/x-sound-event", "application/x-activity-event", "application/x-motion-features", "application/x-multimodal-primitives", "application/x-aggregate"}:
+        additions.setdefault("transmissionPrinciple", []).extend(["semantic_minimization", "data_minimized"])
+    if semantic_t in {"application/x-occupancy", "application/x-aggregate"} or role == "aggregate_summary":
+        additions.setdefault("transmissionPrinciple", []).append("aggregate_only")
+    if semantic_t in {"application/x-detections", "application/x-pose-keypoints", "application/x-occupancy", "application/x-activity-event", "application/x-motion-features", "application/x-multimodal-primitives", "application/x-aggregate"}:
+        additions.setdefault("transmissionPrinciple", []).append("raw_media_removed")
+    if semantic_t in {"application/x-sound-event", "application/x-command-intent"}:
+        additions.setdefault("transmissionPrinciple", []).extend(["raw_audio_removed", "speech_content_removed"])
+    if media_t in {"image/x-silhouette", "video/x-silhouette"}:
+        additions.setdefault("transmissionPrinciple", []).extend(["raw_pixels_removed", "no_image_payload", "data_minimized"])
+    if props.get("retains_raw_payload") is False:
+        additions.setdefault("transmissionPrinciple", []).append("raw_media_removed")
+    if props.get("retains_audio_payload") is False or props.get("no_audio_payload") is True:
+        additions.setdefault("transmissionPrinciple", []).extend(["raw_audio_removed", "no_audio_payload"])
+    if props.get("retains_image_payload") is False or props.get("retains_video_payload") is False or props.get("no_image_payload") is True:
+        additions.setdefault("transmissionPrinciple", []).extend(["raw_pixels_removed", "no_image_payload"])
+    if props.get("is_final_task_decision") is True or role == "final_task_decision_boundary":
+        additions.setdefault("transmissionPrinciple", []).append("final_task_decision")
     return additions
 
 
@@ -949,9 +1159,11 @@ def apply_residual_effect(state: State, v: OperatorVariant) -> State:
     # If semantic output has a schema, add it as an interpreted observation when useful.
     schema = v.output_cap.get("schema")
     if schema in {
-        "occupancy_count", "room_occupied", "pose_keypoints", "activity_label",
+        "occupancy_count", "room_occupied", "binary_presence", "pose_keypoints", "activity_label",
         "sound_event_label", "decibel_level_duration", "keyword_or_intent",
-        "fall_or_safety_event", "person_at_door_or_intrusion_event"
+        "fall_or_safety_event", "person_at_door_or_intrusion_event",
+        "normalized_motion_features", "multimodal_primitive_record", "aggregate_summary",
+        "silhouette_frame", "silhouette_video_stream"
     }:
         if schema in {"fall_or_safety_event"}:
             new.ci_terms.setdefault("informationType.inferredInformationType", set()).add("fall_event")
@@ -963,6 +1175,16 @@ def apply_residual_effect(state: State, v: OperatorVariant) -> State:
             pass
         elif schema == "decibel_level_duration":
             new.ci_terms.setdefault("informationType.sensorPrimitive", set()).add("decibel_level")
+        elif schema in {"binary_presence", "room_occupied"}:
+            new.ci_terms.setdefault("informationType.interpretedObservation", set()).add("room_occupied")
+        elif schema in {"normalized_motion_features"}:
+            new.ci_terms.setdefault("informationType.interpretedObservation", set()).add("motion_features")
+        elif schema in {"multimodal_primitive_record"}:
+            new.ci_terms.setdefault("informationType.interpretedObservation", set()).add("multimodal_primitive")
+        elif schema in {"aggregate_summary"}:
+            new.ci_terms.setdefault("informationType.interpretedObservation", set()).add("aggregate_summary")
+        elif schema in {"silhouette_frame", "silhouette_video_stream"}:
+            new.ci_terms.setdefault("informationType.sensorPrimitive", set()).add("silhouette_frame")
         else:
             new.ci_terms.setdefault("informationType.interpretedObservation", set()).add(schema)
 
@@ -970,16 +1192,49 @@ def apply_residual_effect(state: State, v: OperatorVariant) -> State:
 
 
 def adapter_allowed(input_cap: Dict[str, Any], target_cap: Dict[str, Any]) -> bool:
-    target_t = target_cap.get("semantic_type") or target_cap.get("media_type")
+    """Return whether a generic schema adapter may repackage input_cap.
+
+    This is stricter than ordinary pipeline type compatibility.  The adapter is
+    not an inference model: it may normalize aliases, package semantically
+    equivalent records, or perform simple deterministic packaging, but it must
+    not convert between unrelated semantic spaces.  For example, motion features
+    cannot become sound-event labels, and sound-event labels cannot become ADL
+    labels unless a named task adapter/operator exists.
+    """
+    target_t = normalize_cap_type(target_cap.get("semantic_type") or target_cap.get("media_type"))
     if not target_t:
         return False
     up_t = cap_type(input_cap)
-    if goal_cap_matches(input_cap, target_cap):
+    up_schema = cap_schema(input_cap)
+    target_schema = cap_schema(target_cap)
+
+    # Exact type/schema relabeling is safe; it is often used to attach the
+    # accepted-cap id and downstream schema metadata.
+    if up_t == target_t and (not target_schema or not up_schema or up_schema == target_schema):
         return True
+
+    # Media adapters can preserve an interface while applying redaction/filtering.
+    if target_t in {"image/x-redacted", "video/x-redacted", "audio/x-filtered", "image/x-raw", "video/x-raw", "audio/x-raw"}:
+        return goal_cap_matches(input_cap, target_cap)
+
+    # Schema-specific guard prevents broad semantic-family matching from
+    # smuggling task inference into op.schema_adapter.
+    if target_schema:
+        allowed_schemas = ADAPTER_ALLOWED_SCHEMA_INPUTS.get(target_schema)
+        if allowed_schemas is not None and up_schema and up_schema not in allowed_schemas:
+            return False
+
+    # Canonical-family aliasing and deterministic count packaging.
     allowed = ADAPTER_ALLOWED_INPUTS.get(target_t)
     if not allowed:
         return False
-    return up_t in allowed
+    if up_t not in {normalize_cap_type(x) for x in allowed}:
+        return False
+
+    # If both schemas are known, require an explicitly allowed schema edge.
+    if target_schema and up_schema:
+        return up_schema in ADAPTER_ALLOWED_SCHEMA_INPUTS.get(target_schema, {target_schema})
+    return True
 
 
 def passthrough_output_plausible(state_cap: Dict[str, Any], v: OperatorVariant) -> bool:
@@ -1004,13 +1259,13 @@ def passthrough_output_plausible(state_cap: Dict[str, Any], v: OperatorVariant) 
             return True
         # Non-media event/sensor gates should stay semantic.
         if op == "op.trigger_gate":
-            return out_t in {"application/x-event", "application/x-fused-event", "application/x-windowed-events"} or out_t == in_t
+            return out_t in {"application/x-event", "application/x-activity-event", "application/x-fused-event", "application/x-windowed-events"} or out_t == in_t
         if op == "op.window":
             return out_t == "application/x-windowed-events"
 
     if op == "op.speech_content_removal":
         if in_t.startswith("audio/"):
-            return out_t in {"audio/x-filtered", "application/x-command-intent"}
+            return out_t in {"audio/x-filtered", "application/x-command-intent", "application/x-sound-event"}
         return out_t in {"application/x-redacted-transcript", "application/x-command-intent"}
 
     return True
@@ -1019,13 +1274,17 @@ def passthrough_output_plausible(state_cap: Dict[str, Any], v: OperatorVariant) 
 def can_apply_variant(state: State, v: OperatorVariant) -> bool:
     if v.raw_operator_id == "op.source":
         return False
-    # Avoid repeated non-idempotent/loop-prone operators.
+    # Avoid repeated non-idempotent/loop-prone operators.  The generic schema
+    # adapter is also capped because repeated schema_adapter -> schema_adapter
+    # chains were creating artificial compatibility and fake pipeline diversity.
     prior = [p["operator"] for p in state.pipeline]
-    if v.raw_operator_id in prior and v.raw_operator_id not in {"op.schema_adapter"}:
+    if v.raw_operator_id in prior and v.raw_operator_id not in set():
         return False
 
     # Special check for schema adapters.
     if v.raw_operator_id == "op.schema_adapter":
+        if prior.count("op.schema_adapter") >= SCHEMA_ADAPTER_MAX_PER_PIPELINE:
+            return False
         return adapter_allowed(state.cap, v.output_cap)
 
     if not any(cap_matches(state.cap, in_cap) for in_cap in v.input_caps_dicts()):
@@ -1260,7 +1519,7 @@ def utility_capability_satisfied(state: State, request: Dict[str, Any]) -> bool:
 
     equivalents = {
         "occupancy_estimation": {"occupancy_estimation", "energy_management_support"},
-        "fall_detection": {"fall_detection", "fall_detection_support", "safety_monitoring"},
+        "fall_detection": {"fall_detection", "fall_detection_support", "safety_monitoring", "motion_analysis", "activity_detection_support", "fall_motion_features"},
         "voice_command_or_audio_event_detection": {
             "voice_command", "keyword_detection", "sound_event_detection",
             "safety_audio_event_support", "noise_monitoring"
@@ -1277,11 +1536,14 @@ def utility_capability_satisfied(state: State, request: Dict[str, Any]) -> bool:
             "visitor_presence_inference", "person_detection", "object_detection",
             "security_support", "format_preserving_video", "region_specific_monitoring",
             "field_of_view_minimization", "identity_reduction",
+            "occupancy_support", "visitor_presence_detection", "presence_detection",
+            "count_people", "audio_event_primitive", "contextual_event_support",
             "provide_raw_stream", "rate_limit_stream", "periodic_monitoring",
         },
         "domestic_sound_event_inference": {
             "domestic_sound_event_inference", "sound_event_detection",
             "audio_event_detection", "audio_safety_without_speech", "voice_privacy",
+            "domestic_sound_monitoring", "audio_event_primitive", "noise_monitoring",
             "temporal_context", "provide_raw_stream", "rate_limit_stream",
         },
         # Fixed-interface ADL requests are intentionally strict.  Audio-event
@@ -1294,7 +1556,8 @@ def utility_capability_satisfied(state: State, request: Dict[str, Any]) -> bool:
             "adl_recognition",
             "av_adl_input_compatibility",
             "youhome_av_compatibility",
-            "format_preserving_av",
+            "format_preserving_av", "adl_recognition_support", "activity_detection_support",
+            "motion_analysis", "contextual_event_support", "audio_event_primitive",
         },
     }
     return bool(state.utility_caps & equivalents.get(requested, {requested}))
@@ -1391,27 +1654,60 @@ def maybe_add_ephemeral_drop_side_effect(state: State, request: Dict[str, Any]) 
         return new
     return state
 
-def add_matched_cap_required_terms(state: State, matched_cap: Dict[str, Any]) -> State:
-    """Attach app/output-cap transmission terms to the final output flow.
+def _matched_cap_ci_term_sets(request: Dict[str, Any], matched_cap: Dict[str, Any]) -> List[Dict[str, Any]]:
+    cap_id = matched_cap.get("cap_id")
+    sets = []
+    for entry in (request.get("ci_output_constraints", {}) or {}).get("accepted_ci_term_sets", []) or []:
+        if entry.get("cap_id") == cap_id:
+            sets.append(entry)
+    return sets
 
-    accepted_output_caps can declare output-stage transmission principles such as
-    purpose_limited, speech_content_removed, or raw_pixels_removed. These are not
-    preprocessing operators by themselves; they are part of the app-facing output
-    contract for the selected cap. Adding them here lets CI checks see the complete
-    flow while preserving operator residual effects separately.
+
+def add_matched_cap_required_terms(state: State, matched_cap: Dict[str, Any], request: Optional[Dict[str, Any]] = None) -> State:
+    """Attach accepted-output cap terms to the final output flow.
+
+    Flexible app requests may attach CI terms per accepted output alternative.  This
+    function adds those terms only after a state has matched that cap, so global app
+    constraints do not force every candidate to satisfy every representation.
     """
-    required_tp = matched_cap.get("required_transmissionPrinciple", []) or []
-    if not required_tp:
-        return state
     new = state.copy()
-    for tp in flatten_terms(required_tp):
-        new.ci_terms.setdefault("transmissionPrinciple", set()).add(str(tp))
-        # Keep transforms aligned for rules that check either field.
-        if tp in {
-            "purpose_limited", "data_minimized", "raw_pixels_removed",
-            "speech_content_removed", "limited_retention", "no_raw_data_retention",
-        }:
-            new.transforms.add(str(tp))
+
+    def add_info_terms(info: Any) -> None:
+        if not isinstance(info, dict):
+            return
+        for subkey, vals in info.items():
+            full = f"informationType.{subkey}"
+            new.ci_terms.setdefault(full, set()).update(flatten_terms(vals))
+
+    def add_tp_terms(vals: Any) -> None:
+        for tp in flatten_terms(vals):
+            tp_s = str(tp)
+            new.ci_terms.setdefault("transmissionPrinciple", set()).add(tp_s)
+            if tp_s in {
+                "purpose_limited", "data_minimized", "raw_pixels_removed",
+                "raw_media_removed", "raw_audio_removed", "speech_content_removed",
+                "aggregate_only", "limited_retention", "no_raw_data_retention",
+                "event_triggered_collection", "semantic_minimization",
+            }:
+                new.transforms.add(tp_s)
+
+    add_info_terms(matched_cap.get("required_informationType"))
+    add_tp_terms(matched_cap.get("required_transmissionPrinciple", []) or [])
+
+    for entry in _matched_cap_ci_term_sets(request or {}, matched_cap):
+        add_info_terms(entry.get("required_informationType"))
+        add_tp_terms(entry.get("required_transmissionPrinciple", []) or [])
+
+    boundary_role = str(matched_cap.get("boundary_role") or matched_cap.get("representationRole") or "")
+    props = matched_cap.get("properties", {}) or {}
+    if boundary_role == "final_task_decision_boundary" or props.get("is_final_task_decision") is True:
+        new.ci_terms.setdefault("transmissionPrinciple", set()).add("final_task_decision")
+        # The flexible app contract is explicit by construction; actual utility
+        # validation should be attached by evaluation before a deployment treats the
+        # output as validated.
+        new.ci_terms.setdefault("transmissionPrinciple", set()).add("explicit_app_contract")
+        if matched_cap.get("validation_status") == "validated" or matched_cap.get("utility_validated") is True:
+            new.ci_terms.setdefault("transmissionPrinciple", set()).add("utility_validated")
     return new
 
 
@@ -1427,6 +1723,10 @@ def normalize_final_output_cap_for_reporting(cap: Dict[str, Any], matched_cap: D
     out = copy.deepcopy(cap)
     if not out.get("schema") and matched_cap.get("schema"):
         out["schema"] = matched_cap.get("schema")
+    raw_t = out.get("semantic_type") or out.get("media_type")
+    canon_t = normalize_cap_type(raw_t)
+    if raw_t and canon_t != raw_t:
+        out.setdefault("properties", {})["canonical_cap"] = canon_t
     return out
 
 
@@ -1458,6 +1758,17 @@ def pipeline_to_record(
         "decision": "candidate_pipeline",
         "matched_output_cap": matched_cap.get("cap_id"),
         "matched_output_schema": matched_cap.get("schema"),
+        "matched_output_metadata": {
+            "cap_id": matched_cap.get("cap_id"),
+            "schema": matched_cap.get("schema"),
+            "semantic_type": normalize_cap_type(matched_cap.get("semantic_type") or ""),
+            "media_type": normalize_cap_type(matched_cap.get("media_type") or ""),
+            "boundary_role": matched_cap.get("boundary_role") or matched_cap.get("representationRole"),
+            "disclosure_tier": matched_cap.get("disclosure_tier"),
+            "adapter": matched_cap.get("adapter"),
+            "execution_mode": matched_cap.get("execution_mode"),
+            "validation": matched_cap.get("validation"),
+        },
         "final_output_cap": final_cap,
         "operators": state.pipeline + [{
             "operator": "op.route_publish",
@@ -1514,7 +1825,7 @@ def enumerate_candidates(
         matched = output_cap_matches_request(state, request)
         if matched and utility_capability_satisfied(state, request):
             final_state = maybe_add_ephemeral_drop_side_effect(state, request)
-            final_state = add_matched_cap_required_terms(final_state, matched)
+            final_state = add_matched_cap_required_terms(final_state, matched, request)
             cap_ok, cap_fail = accepted_cap_transform_constraints_satisfied(final_state, matched)
             if apply_request_ci_constraints:
                 ci_ok, ci_fail = ci_constraints_satisfied(final_state, request)

@@ -95,6 +95,45 @@ def read_optional_json(path: Optional[str | Path]) -> Optional[Dict[str, Any]]:
 
 
 
+def _first_existing_path(candidates: Sequence[str | Path]) -> Optional[str]:
+    for c in candidates:
+        p = Path(c)
+        if p.exists():
+            return str(p)
+    return None
+
+
+def apply_request_mode_defaults(args: argparse.Namespace) -> None:
+    """Fill operator/constraint defaults for legacy vs. flexible mediator runs.
+
+    generate_pipelines_for_all_contexts normally passes explicit paths, but this
+    makes full_mediator.py usable directly with the same --request-mode flexible
+    convention.  The request itself is still a per-application JSON and must be
+    supplied explicitly.
+    """
+    mode = str(getattr(args, "request_mode", "legacy") or "legacy")
+    if mode == "flexible":
+        if not args.operators:
+            args.operators = _first_existing_path([
+                "norms/operator_contracts_flexible.json",
+                "operator_contracts_flexible.json",
+                "/mnt/data/flexible_vocabulary_updates/operator_contracts_flexible.json",
+            ])
+        if not args.constraints:
+            args.constraints = _first_existing_path([
+                "norms/ci_constraints_flexible.json",
+                "ci_constraints_flexible.json",
+                "/mnt/data/flexible_vocabulary_updates/ci_constraints_flexible.json",
+            ])
+        if not args.out_dir or args.out_dir == "mediator_run":
+            args.out_dir = "mediator_run_flexible"
+    else:
+        if not args.operators:
+            args.operators = _first_existing_path(["norms/operator_contracts.json", "operator_contracts.json"])
+        if not args.constraints:
+            args.constraints = _first_existing_path(["norms/ci_constraints.json", "ci_constraints.json"])
+
+
 def normalize_ablation_modes(ablation_modes: Optional[Sequence[str]]) -> list[str]:
     raw = list(ablation_modes or [])
     aliases = {
@@ -184,6 +223,7 @@ def run_ci_evaluation(
     llm_temperature: float,
     llm_confidence_threshold: float,
     top_k_for_llm: Optional[int],
+    llm_shortlist_strategy: str = "diverse",
     ci_mode: str = "full",
     collapse_stages: bool = False,
 ) -> Dict[str, Any]:
@@ -200,6 +240,7 @@ def run_ci_evaluation(
         "llm_temperature": llm_temperature,
         "llm_confidence_threshold": llm_confidence_threshold,
         "top_k_for_llm": top_k_for_llm,
+        "llm_shortlist_strategy": llm_shortlist_strategy,
         "ci_mode": ci_mode,
         "collapse_stages": collapse_stages,
         "unknown_policy": "no_match",
@@ -328,11 +369,13 @@ def run_mediator(
     llm_temperature: float = 0.0,
     llm_confidence_threshold: float = 0.75,
     top_k_for_llm: Optional[int] = None,
+    llm_shortlist_strategy: str = "diverse",
     probe_artifacts_path: Optional[str | Path] = None,
     probe_config_path: Optional[str | Path] = None,
     probe_package_dir: Optional[str | Path] = None,
     selection_config_path: Optional[str | Path] = None,
     ablation_modes: Optional[Sequence[str]] = None,
+    request_mode: str = "legacy",
 ) -> Dict[str, Any]:
     request = require_structured_request(request_path)
     operators = load_json(operators_path)
@@ -388,6 +431,7 @@ def run_mediator(
         llm_temperature=llm_temperature,
         llm_confidence_threshold=llm_confidence_threshold,
         top_k_for_llm=top_k_for_llm,
+        llm_shortlist_strategy=llm_shortlist_strategy,
         ci_mode=ci_mode,
         collapse_stages="no_staged_flows" in ablation_modes,
     )
@@ -439,6 +483,7 @@ def run_mediator(
 
     return {
         "schema_version": "smartpriv_full_mediator_output_v2",
+        "request_mode": request_mode,
         "request_id": request.get("request_identity", {}).get("request_id"),
         "scenario_id": request.get("request_identity", {}).get("scenario_id"),
         "ablation_modes": ablation_modes,
@@ -476,6 +521,7 @@ def run_mediator(
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Run candidate generation, CI evaluation, optional probes, and least-revealing selection.")
+    p.add_argument("--request-mode", choices=["legacy", "flexible"], default="legacy", help="Default file family for operators/constraints. flexible uses *_flexible JSONs when paths are omitted.")
     p.add_argument("--operators", help="Path to norms/operator_contracts.json")
     p.add_argument("--request", help="Path to structured application request JSON")
     p.add_argument("--constraints", help="Path to norms/ci_constraints.json")
@@ -493,7 +539,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--llm-model", default="gpt-4o")
     p.add_argument("--llm-temperature", type=float, default=0.0)
     p.add_argument("--llm-confidence-threshold", type=float, default=0.75)
-    p.add_argument("--top-k-for-llm", type=int, help="Only call LLM on top-k candidates by residual score")
+    p.add_argument("--top-k-for-llm", type=int, help="Only call LLM on a shortlist of candidates")
+    p.add_argument("--llm-shortlist-strategy", default="diverse", choices=["diverse", "residual", "all"], help="Shortlist candidates for optional LLM norm judgment. diverse avoids residual-only collapse across flexible output interfaces.")
 
     p.add_argument("--probe-artifacts", help="Optional artifact manifest from executed preprocessing pipeline")
     p.add_argument("--probe-config", help="Optional privacy probe config JSON")
@@ -521,6 +568,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         }, indent=2))
         return 0
 
+    apply_request_mode_defaults(args)
+
     missing_required = [name for name in ["operators", "request", "constraints"] if not getattr(args, name)]
     if missing_required:
         p.error("Missing required arguments for a mediator run: " + ", ".join("--" + x.replace("_", "-") for x in missing_required))
@@ -544,11 +593,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         llm_temperature=args.llm_temperature,
         llm_confidence_threshold=args.llm_confidence_threshold,
         top_k_for_llm=args.top_k_for_llm,
+        llm_shortlist_strategy=args.llm_shortlist_strategy,
         probe_artifacts_path=args.probe_artifacts,
         probe_config_path=args.probe_config,
         probe_package_dir=args.probe_package_dir,
         selection_config_path=args.selection_config,
         ablation_modes=args.ablation_mode,
+        request_mode=args.request_mode,
     )
 
     out_dir = Path(args.out_dir)
@@ -560,6 +611,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     write_json(result, out_dir / "full_mediator_result.json")
 
     print(json.dumps({
+        "request_mode": result.get("request_mode"),
         "request_id": result.get("request_id"),
         "scenario_id": result.get("scenario_id"),
         "decision": result.get("decision"),

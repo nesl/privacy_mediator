@@ -42,6 +42,21 @@ RESIDUAL_ATTRIBUTES: List[str] = [
     "aggregate_presence",
 ]
 
+CAP_TYPE_ALIASES: Dict[str, str] = {
+    "application/x-sound-event-label": "application/x-sound-event",
+    "application/x-occupancy-count": "application/x-occupancy",
+    "application/x-binary-occupancy": "application/x-occupancy",
+    "application/x-activity-label": "application/x-activity-event",
+    "application/x-safety-event": "application/x-activity-event",
+    "application/x-security-event": "application/x-activity-event",
+}
+
+
+def normalize_cap_type(value: Any) -> str:
+    t = str(value or "").strip()
+    return CAP_TYPE_ALIASES.get(t, t)
+
+
 SEMANTIC_FAMILIES: Dict[str, set[str]] = {
     "application/x-count": {
         "application/x-count",
@@ -73,6 +88,19 @@ SEMANTIC_FAMILIES: Dict[str, set[str]] = {
         "application/x-motion-events",
         "application/x-noise-sensor",
     },
+    "application/x-occupancy": {
+        "application/x-occupancy", "application/x-count",
+        "application/x-occupancy-count", "application/x-binary-occupancy",
+    },
+    "application/x-sound-event": {
+        "application/x-sound-event", "application/x-sound-event-label",
+    },
+    "application/x-activity-event": {
+        "application/x-activity-event", "application/x-activity-label",
+        "application/x-safety-event", "application/x-security-event",
+    },
+    "application/x-motion-features": {"application/x-motion-features", "application/x-pose-keypoints"},
+    "application/x-multimodal-primitives": {"application/x-multimodal-primitives"},
 }
 
 
@@ -165,7 +193,7 @@ def flatten_terms(x: Any) -> List[str]:
 
 
 def cap_type(cap: Dict[str, Any]) -> str:
-    return str(cap.get("semantic_type") or cap.get("media_type") or "")
+    return normalize_cap_type(cap.get("semantic_type") or cap.get("media_type") or "")
 
 
 def cap_schema(cap: Dict[str, Any]) -> str:
@@ -173,6 +201,8 @@ def cap_schema(cap: Dict[str, Any]) -> str:
 
 
 def type_matches(upstream: str, downstream: str) -> bool:
+    upstream = normalize_cap_type(upstream)
+    downstream = normalize_cap_type(downstream)
     if not downstream or downstream == "*":
         return True
     if not upstream:
