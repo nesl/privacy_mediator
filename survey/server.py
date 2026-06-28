@@ -38,7 +38,8 @@ DEFAULT_FLOW_FILE = ROOT / "data" / "ci_focused_user_study_context.json"
 DEFAULT_DB = ROOT / "outputs" / "responses.db"
 # Runner usually writes this from project root. If server.py lives under survey/,
 # ROOT.parent is the project root.
-DEFAULT_PIPELINE_OUTPUT_DIR = ROOT.parent / "runs" / "context_pipeline_generation"
+DEFAULT_PIPELINE_OUTPUT_DIR = ROOT.parent / "runs" / "flexible_context_pipeline_generation"
+DEFAULT_PREVIOUS_PIPELINE_OUTPUT_DIR = ROOT.parent / "runs" / "context_pipeline_generation"
 OFFLINE_METHODS = ["raw", "manual", "direct_llm", "full_mediator"]
 
 # Server-side only: this Prolific completion URL is intentionally not embedded in
@@ -64,25 +65,128 @@ TASK_LABEL_OVERRIDES = {
 EXTRA_OUTPUT_DATA_GLOSSARY = [
     {
         "term": "raw_audio_video",
-        "label": "Video with sound",
-        "definition": "Moving video with synchronized sound from the monitoring device. It may show people and the surrounding scene, and the sound may include speech or conversation if people are talking.",
+        "label": "Combined video and audio sample",
+        "definition": "A short synchronized clip of both video and audio from the room at the same time. It may show people and the surrounding scene, and the sound may include clear voices, spoken words, and background sounds.",
     },
     {
         "term": "redacted_audio_video",
-        "label": "Video with sound, with faces and identifying details blurred",
-        "definition": "Moving video with synchronized sound where faces, tattoos, and readable personal text are blurred out. Clothing, posture, movement, room layout, and the audio may still remain.",
+        "label": "Blurred combined video and audio sample",
+        "definition": "A short synchronized video and audio clip where faces, text, and sensitive personal details are blurred in the video. The sound may still include voices, spoken words, and background sounds.",
     },
     {
         "term": "speech_filtered_audio_video",
-        "label": "Video with sound, with spoken words removed",
-        "definition": "Moving video with synchronized sound where speech-like parts of the audio are silenced so words should not be understandable. The video itself is not blurred, and other sounds may still be heard.",
+        "label": "Combined video and speech-muted audio sample",
+        "definition": "A short synchronized video and audio clip where human words are scrubbed out so conversations cannot be understood. The video itself is not blurred, and background noises may remain.",
     },
     {
         "term": "redacted_filtered_audio_video",
-        "label": "Video with sound, with faces and identifying details blurred and spoken words removed",
-        "definition": "Moving video with synchronized sound where faces, tattoos, and readable personal text are blurred out, and speech-like parts of the audio are silenced so words should not be understandable. Clothing, posture, movement, room layout, and non-speech sounds may still remain.",
+        "label": "Blurred combined video and speech-muted audio sample",
+        "definition": "A short synchronized video and audio clip where faces, text, and sensitive personal details are blurred in the video, and human words are scrubbed out so conversations cannot be understood. Background noises may remain.",
     },
 ]
+# Output schemas that were introduced by the flexible app-request run and were
+# not present in the earlier fixed/downstream-compatible run.  When the server is
+# used for a supplemental survey, it keeps only these schemas so participants are
+# not paid to re-rate output types that were already covered by the original
+# survey.
+SUPPLEMENTAL_FLEXIBLE_OUTPUT_SCHEMAS = {
+    # These are genuinely new participant-facing data types introduced by the
+    # flexible run.  Media-style outputs such as raw/blurred image, raw/blurred
+    # video, audio recordings, speech-muted audio, pose outlines, and combined
+    # video+audio samples are intentionally excluded because they were already
+    # covered by the original survey vocabulary/items, even if the flexible run
+    # uses a different internal schema name such as redacted_video_stream.
+    "object_detections",
+    "occupancy_count",
+    "room_occupied",
+    "aggregate_summary",
+    "fused_event_record",
+}
+
+SUPPLEMENTAL_OUTPUT_DATA_GLOSSARY = [
+    {
+        "term": "person_detections",
+        "label": "Location boxes (no faces/images)",
+        "definition": "A text list or grid map showing where detected people are located in the camera view. No original photos or videos are shared.",
+    },
+    {
+        "term": "room_occupied",
+        "label": "Yes/no room presence indicator",
+        "definition": 'A simple text status showing either "Occupied" or "Empty." No original video, photo, or audio is shared.',
+    },
+    {
+        "term": "occupancy_count",
+        "label": "People count log",
+        "definition": 'A number showing how many people are in the room over time, such as "3 people present." No original video, photo, or audio is shared.',
+    },
+    {
+        "term": "activity_summary",
+        "label": "Activity summary report",
+        "definition": "A daily, weekly, or monthly chart showing broad activity patterns, such as occupied versus empty time. It does not show specific moments, exact timestamps, names, video, audio, or detailed movement traces.",
+        "example": "Example: a monthly bar graph showing that a room was occupied 35% of the time and empty 65% of the time, with no specific times or names attached.",
+    },
+    {
+        "term": "sound_event_summary",
+        "label": "Sound-event summary report",
+        "definition": "A weekly chart or written summary showing broad counts or percentages for noise types, such as alarms, footsteps, loud sounds, and quiet time. The original audio recording is never saved or shared, and it does not include words from conversations.",
+        "example": "Example: a weekly chart showing: alarms triggered: 2 times; footstep noise: 15% of the day; quiet hours: 80% of the day.",
+    },
+    {
+        "term": "fused_event_record",
+        "label": "Combined text log of events",
+        "definition": "A short written timeline combining multiple sensor alerts into a task-specific event record. It lists only the alert text and relevant times; no audio, video, photos, or detailed sensor streams are shared.",
+        "example": "Example: Safety alert: front door opened at 3:00 AM, followed immediately by motion in the hallway.",
+    },
+]
+
+OUTPUT_DATA_GLOSSARY_WORDING_OVERRIDES = [
+    {
+        "term": "raw_image",
+        "label": "Original still photo",
+        "definition": "A clear, unblurred camera snapshot showing faces, objects, and background details exactly as they look.",
+    },
+    {
+        "term": "redacted_image",
+        "label": "Blurred still photo",
+        "definition": "A single camera snapshot where faces, text, and sensitive personal details are permanently blurred out.",
+    },
+    {
+        "term": "raw_video",
+        "label": "Original live video feed",
+        "definition": "A continuous, unblurred video stream showing everything clearly, including faces and background text. Audio is not included unless the survey explicitly says video and audio are shared together.",
+    },
+    {
+        "term": "redacted_video",
+        "label": "Blurred live video feed",
+        "definition": "A continuous video stream where faces and identifying details are blurred in real time. Audio is not included unless the survey explicitly says video and audio are shared together.",
+    },
+    {
+        "term": "pose_keypoints",
+        "label": "Stick-figure movement outline",
+        "definition": "A set of moving dots and lines mapping body joints, such as arms, legs, and torso, to track movement. No original photo or video is shared.",
+    },
+    {
+        "term": "filtered_audio",
+        "label": "Speech-muted audio clip",
+        "definition": "An audio recording where human words are scrubbed out so conversations cannot be understood, but background noises such as alarms, footsteps, or coughing may remain.",
+    },
+    {
+        "term": "raw_audio",
+        "label": "Original audio recording",
+        "definition": "The original sound file, including clear voices, spoken words, and background sounds.",
+    },
+    {
+        "term": "occupancy",
+        "label": "Presence or people count indicator",
+        "definition": "A yes/no room presence indicator or a people count log. No original video, photo, or audio is shared.",
+    },
+    {
+        "term": "event_alert",
+        "label": "Event alert or text log",
+        "definition": "A short written alert or timeline saying that a scenario-relevant event occurred. No original audio or video is shared unless separately stated.",
+    },
+]
+
 
 def merged_human_readable_glossary(flow_data: Dict[str, Any]) -> Dict[str, Any]:
     """Return the embedded glossary plus server-side output-data additions.
@@ -96,7 +200,7 @@ def merged_human_readable_glossary(flow_data: Dict[str, Any]) -> Dict[str, Any]:
     fields = glossary.setdefault("fields", {})
     output_terms = fields.setdefault("output_data", [])
     by_term = {str(item.get("term")): item for item in output_terms if isinstance(item, dict) and item.get("term")}
-    for item in EXTRA_OUTPUT_DATA_GLOSSARY:
+    for item in OUTPUT_DATA_GLOSSARY_WORDING_OVERRIDES + EXTRA_OUTPUT_DATA_GLOSSARY + SUPPLEMENTAL_OUTPUT_DATA_GLOSSARY:
         term = str(item["term"])
         if term in by_term:
             by_term[term].update(item)
@@ -123,8 +227,11 @@ class Config:
     assignment_mode: str
     max_per_scenario_group: int
     pipeline_output_dir: Optional[Path]
+    previous_pipeline_output_dir: Optional[Path]
     include_pipeline_outputs: bool
     include_no_output_variants: bool
+    survey_output_scope: str
+    supplemental_output_schemas: Tuple[str, ...]
 
 
 def load_json(path: Path) -> Dict[str, Any]:
@@ -274,6 +381,33 @@ def cap_schema(cap: Optional[Dict[str, Any]]) -> str:
     return str(cap.get("schema") or "")
 
 
+def row_matched_cap_text(row: Optional[Dict[str, Any]]) -> str:
+    if not row:
+        return ""
+    return str(row.get("matched_output_cap") or row.get("matched_output_schema") or row.get("final_output_schema") or "").lower()
+
+
+def output_kind_from_cap(final_cap: Dict[str, Any], row: Optional[Dict[str, Any]] = None) -> str:
+    """Classify newer flexible semantic outputs before generic media fallbacks."""
+    t = (cap_type(final_cap) or str((row or {}).get("final_output_type") or "")).lower()
+    schema = (cap_schema(final_cap) or str((row or {}).get("final_output_schema") or "")).lower()
+    cap = row_matched_cap_text(row)
+    joined = " ".join([t, schema, cap])
+    if "object_detections" in joined or "person_detections" in joined or "application/x-detections" in joined:
+        return "person_detections"
+    if "room_occupied" in joined or "binary-occupancy" in joined or "binary_presence" in joined:
+        return "room_occupied"
+    if "occupancy_count" in joined or "person_count_timeseries" in joined:
+        return "occupancy_count"
+    if "aggregate_summary" in joined and ("sound" in joined or "chime" in joined):
+        return "sound_event_summary"
+    if "aggregate_summary" in joined and ("activity" in joined or "youhome" in joined or "adl" in joined):
+        return "activity_summary"
+    if "fused_event_record" in joined or "fall_adapter" in joined:
+        return "fused_event_record"
+    return ""
+
+
 def flatten_strings(value: Any) -> List[str]:
     if value is None:
         return []
@@ -341,6 +475,105 @@ def selected_pipeline_from_row(row: Dict[str, Any], pipeline_dir: Optional[Path]
     return None
 
 
+
+def _normalize_schema(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _parse_csv_terms(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return tuple()
+    if isinstance(value, (list, tuple, set)):
+        raw: List[str] = []
+        for item in value:
+            raw.extend(str(item or "").split(","))
+    else:
+        raw = str(value or "").split(",")
+    return tuple(sorted({x.strip() for x in raw if x and x.strip()}))
+
+
+def _row_output_schema(row: Dict[str, Any], variant: Optional[Dict[str, Any]] = None) -> str:
+    schema = _normalize_schema(row.get("final_output_schema") or row.get("matched_output_schema"))
+    if schema:
+        return schema
+    if variant:
+        cap = variant.get("final_output_cap") or {}
+        schema = _normalize_schema(cap.get("schema") if isinstance(cap, dict) else None)
+        if schema:
+            return schema
+        schema = _normalize_schema(variant.get("matched_output_schema"))
+        if schema:
+            return schema
+    return ""
+
+
+def selected_output_schemas(rows: Iterable[Dict[str, Any]]) -> Set[str]:
+    schemas: Set[str] = set()
+    for row in rows:
+        if not row_represents_shared_output(row):
+            continue
+        schema = _row_output_schema(row)
+        if schema:
+            schemas.add(schema)
+    return schemas
+
+
+def flatten_summary_by_context_doc(data: Any) -> List[Dict[str, Any]]:
+    """Flatten a summary_by_context-style JSON document into pipeline rows.
+
+    This lets --pipeline-output-dir and --previous-pipeline-output-dir point
+    either to a run directory containing index.json/summary.json or directly to a
+    summary_by_context JSON file used for supplemental-survey planning.
+    """
+    rows: List[Dict[str, Any]] = []
+    if isinstance(data, list):
+        for row in data:
+            if isinstance(row, dict):
+                rows.append(dict(row))
+        return rows
+    if not isinstance(data, dict):
+        return rows
+    # summary_by_context.json shape: {S001: {method_id: row, ...}, ...}
+    for sid, methods in data.items():
+        if not isinstance(methods, dict):
+            continue
+        for method_id, row in methods.items():
+            if not isinstance(row, dict):
+                continue
+            r = dict(row)
+            r.setdefault("scenario_id", str(sid))
+            r.setdefault("method_id", str(method_id))
+            r.setdefault("method_kind", "ablation" if str(method_id).startswith("ablation:") else "baseline")
+            r.setdefault("baseline", r.get("method_id"))
+            rows.append(r)
+    return rows
+
+
+def compute_target_output_schemas(
+    current_rows: Iterable[Dict[str, Any]],
+    previous_rows: Iterable[Dict[str, Any]],
+    supplemental_output_schemas: Iterable[str] = (),
+) -> Set[str]:
+    explicit = {_normalize_schema(x) for x in supplemental_output_schemas if _normalize_schema(x)}
+    if explicit:
+        return explicit
+    current = selected_output_schemas(current_rows)
+    previous = selected_output_schemas(previous_rows)
+    allowed = set(SUPPLEMENTAL_FLEXIBLE_OUTPUT_SCHEMAS)
+    if previous:
+        # Compare run schemas, but only keep schemas whose participant-facing data
+        # type is actually new for the supplemental survey.  This prevents internal
+        # schema renames such as redacted_video_stream from reintroducing old
+        # concepts like blurred live video feed.
+        diff = {s for s in current - previous if s and s in allowed}
+        if diff:
+            return diff
+    # Fallback for convenience when the old run is unavailable or the diff is empty.
+    # This keeps a supplemental survey from accidentally including every current
+    # output schema just because the earlier run path was not provided.
+    return allowed
+
+
 def load_pipeline_rows(pipeline_dir: Optional[Path]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not pipeline_dir:
         return [], {"status": "disabled"}
@@ -349,6 +582,27 @@ def load_pipeline_rows(pipeline_dir: Optional[Path]) -> Tuple[List[Dict[str, Any
         return [], {"status": "missing", "pipeline_output_dir": str(pipeline_dir)}
 
     rows: List[Dict[str, Any]] = []
+    if pipeline_dir.is_file():
+        data = load_json(pipeline_dir)
+        rows = flatten_summary_by_context_doc(data)
+        for r in rows:
+            r.setdefault("method_id", r.get("baseline"))
+            r.setdefault("method_kind", "ablation" if str(r.get("method_id") or "").startswith("ablation:") else "baseline")
+            r.setdefault("method_label", r.get("method_id"))
+        baseline_methods = sorted({str(r.get("method_id")) for r in rows if r.get("method_kind") == "baseline" and r.get("method_id")})
+        ablation_methods = sorted({str(r.get("method_id")) for r in rows if r.get("method_kind") == "ablation" and r.get("method_id")})
+        return rows, {
+            "status": "ok" if rows else "empty",
+            "pipeline_output_dir": str(pipeline_dir),
+            "source": str(pipeline_dir),
+            "method_pipeline_row_count": len(rows),
+            "baseline_pipeline_row_count": len([r for r in rows if r.get("method_kind") == "baseline"]),
+            "ablation_pipeline_row_count": len([r for r in rows if r.get("method_kind") == "ablation"]),
+            "method_ids": sorted({str(r.get("method_id")) for r in rows if r.get("method_id")}),
+            "baseline_method_ids": baseline_methods,
+            "ablation_method_ids": ablation_methods,
+        }
+
     index_path = pipeline_dir / "index.json"
     summary_path = pipeline_dir / "summary.json"
     source = None
@@ -594,12 +848,12 @@ def audio_video_output_label(final_cap: Dict[str, Any], row: Optional[Dict[str, 
     """Participant-facing sentence for video-with-audio outputs."""
     flags = av_component_flags(final_cap, row)
     if flags["redacted_visual"] and flags["speech_removed_audio"]:
-        return "The shared data is video with sound; faces and identifying details are blurred, and spoken words are removed."
+        return "The shared data is a short synchronized video and audio clip. Faces, text, and sensitive personal details are blurred, and human words are scrubbed out so conversations cannot be understood."
     if flags["redacted_visual"]:
-        return "The shared data is video with sound; faces and identifying details are blurred."
+        return "The shared data is a short synchronized video and audio clip. Faces, text, and sensitive personal details are blurred in the video."
     if flags["speech_removed_audio"]:
-        return "The shared data is video with sound; spoken words are removed, but the video is not blurred."
-    return "The shared data is video with sound from the monitoring device."
+        return "The shared data is a short synchronized video and speech-muted audio clip. Human words are scrubbed out so conversations cannot be understood, but the video is not blurred."
+    return "The shared data is a short synchronized video and audio clip taken from the room at the same time."
 
 
 def audio_video_output_description(final_cap: Dict[str, Any], row: Optional[Dict[str, Any]] = None) -> str:
@@ -627,25 +881,38 @@ def human_output_label(final_cap: Dict[str, Any], info_types: Dict[str, List[str
     fov_minimized = bool(props.get("field_of_view_minimized"))
 
     if t == "application/x-pose-keypoints" or "pose" in schema:
-        return "The shared data is only a stick-figure outline of body joints; no photos or video are saved or shown."
+        return "The shared data is a stick-figure movement outline: moving dots and lines mapping body joints such as arms, legs, and torso. No original photo or video is shared."
+    kind = output_kind_from_cap(final_cap, row)
+    if kind == "person_detections":
+        return "The shared data is location boxes: a text list or grid map showing where detected people are located in the camera view. No original photos or videos are shared."
+    if kind == "room_occupied":
+        return "The shared data is a yes/no room presence indicator: a simple text status showing either \"Occupied\" or \"Empty.\" No original video, photo, or audio is shared."
+    if kind == "occupancy_count":
+        return "The shared data is a people count log: a number showing how many people are in the room over time, such as \"3 people present.\" No original video, photo, or audio is shared."
+    if kind == "activity_summary":
+        return "The shared data is an activity summary report: a daily, weekly, or monthly chart showing broad patterns such as occupied versus empty time. It does not show specific moments, exact timestamps, names, video, audio, or detailed movement traces."
+    if kind == "sound_event_summary":
+        return "The shared data is a sound-event summary report: a weekly chart or written summary showing broad counts or percentages for noise types such as alarms, footsteps, loud sounds, and quiet time. The original audio recording is never saved or shared, and it does not include words from conversations."
+    if kind == "fused_event_record":
+        return "The shared data is a combined text log of events: a short written timeline combining multiple sensor alerts into a task-specific event record. It lists only the alert text and relevant times; no audio, video, photos, or detailed sensor streams are shared."
     if is_audio_video_sample(final_cap, row):
         return audio_video_output_label(final_cap, row)
     if t.startswith("image/"):
         if redacted:
-            return "The shared data is camera images with faces and identifying details blurred."
+            return "The shared data is a blurred still photo: a single camera snapshot where faces, text, and sensitive personal details are permanently blurred out."
         if fov_minimized:
-            return "The shared data is cropped camera images showing only the relevant area."
-        return "The shared data is camera images, not video or audio."
+            return "The shared data is a cropped still photo showing only the relevant area."
+        return "The shared data is an original still photo: a clear, unblurred camera snapshot showing faces, objects, and background details exactly as they look."
     if t.startswith("video/"):
         if redacted:
-            return "The shared data is continuous camera video without sound, with faces and identifying details blurred."
+            return "The shared data is a blurred live video feed: a continuous video stream where faces and identifying details are blurred in real time."
         if fov_minimized:
-            return "The shared data is continuous camera video without sound, cropped to the relevant area."
-        return "The shared data is continuous camera video without sound."
+            return "The shared data is a cropped live video feed showing only the relevant area."
+        return "The shared data is an original live video feed: a continuous, unblurred video stream showing everything clearly, including faces and background text."
     if speech_removed:
-        return "The shared data is an audio recording with spoken words removed."
+        return "The shared data is a speech-muted audio clip: an audio recording where human words are scrubbed out so conversations cannot be understood, but background noises such as alarms, footsteps, or coughing may remain."
     if t.startswith("audio/"):
-        return "The shared data is an audio recording from a microphone. It may include speech or conversation if people are talking."
+        return "The shared data is an original audio recording: the original sound file, including clear voices, spoken words, and background sounds."
     if "occupancy" in t or "occupancy" in schema or "room_occupied" in schema:
         return "The shared data is a presence or occupancy estimate, such as whether someone is present or how many people are there."
     if "decibel" in t or "decibel" in schema:
@@ -667,13 +934,26 @@ def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
     props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
     if t == "application/x-pose-keypoints" or "pose" in schema:
         return ""
+    kind = output_kind_from_cap(final_cap, row)
+    if kind == "person_detections":
+        return "Only the derived location boxes are shared; the original camera photo or video is not shared."
+    if kind == "room_occupied":
+        return "Only the occupied/empty status is shared; the original video, photo, audio, and detailed sensor stream are not shared."
+    if kind == "occupancy_count":
+        return "Only the count log is shared; the original video, photo, audio, and detailed sensor stream are not shared."
+    if kind == "activity_summary":
+        return "The report uses broad percentages or counts rather than a live minute-by-minute tracker. It does not include names, exact personal routines, original video, audio, images, or the detailed movement trace that produced the summary."
+    if kind == "sound_event_summary":
+        return "The report uses broad weekly counts or percentages rather than a live transcript or minute-by-minute audio log. The original recording and spoken words are not shared."
+    if kind == "fused_event_record":
+        return "Only the short written event timeline is shared. It does not include the original audio, video, photos, conversations, or detailed sensor streams."
     if is_audio_video_sample(final_cap, row):
         return audio_video_output_description(final_cap, row)
     if t.startswith(("image/", "video/")) and (props.get("redacted") or t in {"image/x-redacted", "video/x-redacted"} or "redacted" in schema):
         if t.startswith("image/"):
-            return "These are separate camera images, not continuous video or audio. Faces, tattoos, and readable personal text are blurred out; clothing and room layout may still be visible."
+            return "This is a still image, not a live video feed or audio recording. Clothing, posture, objects, and room layout may still be visible after blurring."
         if t.startswith("video/"):
-            return "This is video only; audio is not included. Faces, tattoos, and readable personal text are blurred out; clothing and room layout may still be visible."
+            return "This is video only; audio is not included. Clothing, posture, movement, objects, and room layout may still be visible after blurring."
         return "Faces and other identifying visual details are blurred or obscured."
     if t.startswith(("image/", "video/")) and props.get("field_of_view_minimized"):
         if t.startswith("image/"):
@@ -682,13 +962,13 @@ def output_description(final_cap: Dict[str, Any], row: Dict[str, Any]) -> str:
             return "This is video only; audio is not included. The camera view is cropped to the relevant area."
         return "Only a cropped part of the camera view is shared, rather than the full scene."
     if t.startswith("image/"):
-        return "These are separate snapshots or low-frame-rate images, not a continuous recording."
+        return "This is a still image, not a live video feed or audio recording. It may show faces, bodies, clothing, activities, objects, and the surrounding room or scene."
     if t.startswith("video/"):
-        return "This is video only; audio is not included."
+        return "This is video only; audio is not included. It may show faces, bodies, clothing, activities, movement, and the surrounding room or scene."
     if t == "audio/x-filtered" or props.get("speech_content_removed") or "speech_removed" in schema:
-        return "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
+        return "Human words are muted or scrubbed out. Other background sounds, such as alarms, footsteps, coughing, or glass breaking, may still be heard."
     if t.startswith("audio/"):
-        return "This means the named receiver gets an audio recording from a microphone. It may include speech, conversation, and other sounds in the area."
+        return "This is the original microphone recording. It may include speech, conversation, and other sounds in the area."
     if "decibel" in t or "decibel" in schema:
         return "This means the named receiver gets a sound-level number, such as a decibel value, rather than the original audio."
     if "sound" in t or "sound" in schema:
@@ -705,6 +985,9 @@ def privacy_class_from_output(final_cap: Dict[str, Any], row: Dict[str, Any]) ->
     t = cap_type(final_cap) or str(row.get("final_output_type") or "")
     schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
     props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
+    kind = output_kind_from_cap(final_cap, row)
+    if kind:
+        return kind
     if is_audio_video_sample(final_cap, row):
         flags = av_component_flags(final_cap, row)
         if flags["redacted_visual"] and flags["speech_removed_audio"]:
@@ -734,6 +1017,9 @@ def output_data_term_from_output(final_cap: Dict[str, Any], row: Dict[str, Any])
     t = cap_type(final_cap) or str(row.get("final_output_type") or "")
     schema = cap_schema(final_cap) or str(row.get("final_output_schema") or "")
     props = final_cap.get("properties") if isinstance(final_cap.get("properties"), dict) else {}
+    kind = output_kind_from_cap(final_cap, row)
+    if kind:
+        return kind
     if is_audio_video_sample(final_cap, row):
         flags = av_component_flags(final_cap, row)
         if flags["redacted_visual"] and flags["speech_removed_audio"]:
@@ -852,6 +1138,8 @@ def build_survey_items(
     pipeline_dir: Optional[Path],
     include_pipeline_outputs: bool,
     include_no_output_variants: bool,
+    survey_output_scope: str = "all",
+    target_output_schemas: Optional[Set[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     flows_by_id: Dict[str, Dict[str, Any]] = {}
     for i, f in enumerate(flows, start=1):
@@ -888,6 +1176,9 @@ def build_survey_items(
     rows_with_output = 0
     rows_without_output = 0
     rows_for_known_context = 0
+    rows_excluded_by_output_schema = 0
+    target_output_schemas = set(target_output_schemas or set())
+    survey_output_scope = str(survey_output_scope or "all")
 
     for row in pipeline_rows:
         sid = str(row.get("scenario_id") or row.get("flow_id") or "")
@@ -903,6 +1194,12 @@ def build_survey_items(
         else:
             rows_with_output += 1
 
+        if survey_output_scope == "new_flexible_only":
+            row_schema = _row_output_schema(row, variant)
+            if row_schema not in target_output_schemas:
+                rows_excluded_by_output_schema += 1
+                continue
+
         key = (sid, variant["output_signature"])
         if key not in grouped:
             flow = flows_by_id[sid]
@@ -917,6 +1214,7 @@ def build_survey_items(
                     "output_variant_label": variant["output_variant_label"],
                     "output_variant_description": variant.get("output_variant_description"),
                     "variant_privacy_class": variant["variant_privacy_class"],
+                    "output_data_term": variant.get("output_data_term"),
                     "final_output_cap": variant["final_output_cap"],
                     "information_types": variant["information_types"],
                     "matched_output_cap": variant.get("matched_output_cap"),
@@ -980,6 +1278,9 @@ def build_survey_items(
         "method_pipeline_rows_for_known_contexts": rows_for_known_context,
         "method_pipeline_rows_with_output": rows_with_output,
         "method_pipeline_rows_without_output": rows_without_output,
+        "method_pipeline_rows_excluded_by_output_schema": rows_excluded_by_output_schema,
+        "survey_output_scope": survey_output_scope,
+        "target_output_schemas": sorted(target_output_schemas),
         "baseline_pipeline_row_count": len([r for r in pipeline_rows if r.get("method_kind") == "baseline"]),
         "ablation_pipeline_row_count": len([r for r in pipeline_rows if r.get("method_kind") == "ablation"]),
         "baseline_pipeline_rows_with_output": rows_with_output,
@@ -1005,13 +1306,31 @@ class SurveyState:
         if config.include_pipeline_outputs and config.pipeline_output_dir:
             self.pipeline_rows, self.pipeline_load_info = load_pipeline_rows(config.pipeline_output_dir)
 
+        self.previous_pipeline_rows: List[Dict[str, Any]] = []
+        self.previous_pipeline_load_info: Dict[str, Any] = {"status": "disabled"}
+        if (
+            config.include_pipeline_outputs
+            and config.survey_output_scope == "new_flexible_only"
+            and config.previous_pipeline_output_dir
+        ):
+            self.previous_pipeline_rows, self.previous_pipeline_load_info = load_pipeline_rows(config.previous_pipeline_output_dir)
+
+        self.target_output_schemas = compute_target_output_schemas(
+            self.pipeline_rows,
+            self.previous_pipeline_rows,
+            config.supplemental_output_schemas,
+        ) if config.survey_output_scope == "new_flexible_only" else set()
+
         self.items, self.item_pool_summary = build_survey_items(
             self.flows,
             self.pipeline_rows,
             config.pipeline_output_dir,
             include_pipeline_outputs=config.include_pipeline_outputs,
             include_no_output_variants=config.include_no_output_variants,
+            survey_output_scope=config.survey_output_scope,
+            target_output_schemas=self.target_output_schemas,
         )
+        self.item_pool_summary["previous_pipeline_load_info"] = self.previous_pipeline_load_info
         self.item_pool_summary["excluded_child_related_context_count"] = len(self.excluded_child_related_flows)
         self.item_pool_summary["excluded_child_related_context_ids"] = [get_scenario_id(f) for f in self.excluded_child_related_flows]
         if not self.items:
@@ -2145,6 +2464,16 @@ def _display_value_override(original_label: str, value: Any, flow: Optional[Dict
     local_text = "Locally inside the home or building. The data is not sent over the internet for company analysis."
     if _uses_app_recipient(flow):
         local_text = "Locally inside the home or building. The data is never sent over the internet or shared with the app company."
+    # Some generated context rows include small wording variants such as
+    # "speech content is removed before sharing"; normalize these before the
+    # exact replacement table.
+    if original_label == "Transmission principle":
+        lowered = text.lower().strip()
+        if "speech content is removed" in lowered or "spoken words" in lowered:
+            return "Speech-like parts of the audio are silenced before sharing, so words should not be understandable. Other sounds may remain."
+        if "only when an event occurs" in lowered or "event-triggered" in lowered:
+            return f"Data is collected, processed, or shared only after the monitoring device detects {_event_phrase(flow)}."
+
     replacements = {
         "continuous monitoring": "The device stays on continuously, rather than turning on only after motion, sound, or another event.",
         "processed locally": local_text,
@@ -2394,6 +2723,14 @@ def output_example(label: Any, description: Any = None) -> Optional[str]:
         return None
     if "may include speech" in text or "may include speech or conversation" in text:
         return None
+    if "activity summary" in text or "daily-activity summary" in text or "summary of detected daily activity" in text:
+        return "Example: a monthly bar graph showing the percentage of time a room was occupied versus empty, with no specific times or names attached."
+    if "sound-event summary" in text or "sound event summary" in text or "summary of detected sound events" in text:
+        return "Example: a weekly chart showing: alarms triggered: 2 times; footstep noise: 15% of the day; quiet hours: 80% of the day."
+    if "combined text log" in text or "written timeline" in text or "sensor alerts" in text:
+        return "Example: Safety alert: front door opened at 3:00 AM, followed immediately by motion in the hallway."
+    if "detected people" in text or "person locations" in text or "bounding boxes" in text:
+        return "a list of detected person locations, not the camera image"
     if "presence" in text or "occupancy" in text:
         return "a yes/no presence signal or a count of people in the room"
     if "sound-level" in text or "sound level" in text or "decibel" in text:
@@ -2403,7 +2740,7 @@ def output_example(label: Any, description: Any = None) -> Optional[str]:
     if "activity label" in text or "activity category" in text:
         return "a label such as walking, sitting, resting, or moving around"
     if "event alert" in text or "event label" in text:
-        return "an alert saying that a relevant event was detected"
+        return "Example: Safety alert: front door opened at 3:00 AM, followed immediately by motion in the hallway."
     return None
 
 
@@ -2582,11 +2919,11 @@ def _output_text_for_flow(output_variant: Dict[str, Any], flow: Optional[Dict[st
     lower = f"{label} {desc}".lower()
     if _flow_has_speech_removed_condition(flow) and ("audio" in lower or "microphone" in lower or "speech" in lower):
         if "camera" in lower or "video" in lower:
-            label = "The shared data is video with sound; spoken words are removed."
-            desc = "The video remains visible. Speech-like parts of the audio are silenced, so words should not be understandable; other sounds may still be heard."
+            label = "The shared data is a combined video and speech-muted audio sample: a short synchronized video and audio clip where human words are scrubbed out so conversations cannot be understood."
+            desc = "The video remains visible. Other background sounds, such as alarms, footsteps, or coughing, may still be heard."
         else:
-            label = "The shared data is an audio recording with spoken words removed."
-            desc = "Speech-like parts of the audio are silenced, so words should not be understandable. Other sounds, such as footsteps or alarms, may still be heard."
+            label = "The shared data is a speech-muted audio clip: an audio recording where human words are scrubbed out so conversations cannot be understood, but background noises such as alarms, footsteps, or coughing may remain."
+            desc = "Human words are muted or scrubbed out. Other background sounds may still be heard."
     return label, desc if desc != "" else ""
 
 
@@ -2621,11 +2958,26 @@ def _device_owner_field(flow: Dict[str, Any], output_variant: Optional[Dict[str,
     }
 
 
+def _recipient_access_scope_clause(flow: Optional[Dict[str, Any]]) -> str:
+    """Access assumption folded into the existing recipient row."""
+    text = _transmission_value_text(flow)
+    if "authorized" in text:
+        return "Only the named receiver and authorized people for this setting and purpose can access or use the shared data."
+    if "local" in text or "processed on the device" in text or "local hub" in text:
+        return "The data is processed on the local device or local hub; do not assume the device maker, cloud provider, or other unlisted third parties can access it."
+    if "cloud" in text:
+        return "A cloud service processes the data before the listed output is shared; apart from that processing and the named receiver, do not assume other unlisted parties can access it."
+    return "Only this named receiver or listed app/service can access or use the shared data; do not assume device makers, cloud providers, landlords, managers, or other unlisted parties can access it."
+
+
 def _recipient_field(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     row = _row_for_ci_label(flow, "Recipient") or {}
     value = _display_value_override("Recipient", row.get("value"), flow, output_variant)
     if not str(value or "").strip().endswith("."):
         value = f"{value}."
+    access_clause = _recipient_access_scope_clause(flow)
+    if access_clause:
+        value = f"{value} {access_clause}"
     return {
         "label": "Who receives or uses the shared data?",
         "value": value,
@@ -2636,9 +2988,73 @@ def _recipient_field(flow: Dict[str, Any], output_variant: Optional[Dict[str, An
     }
 
 
+def _transmission_value_text(flow: Optional[Dict[str, Any]]) -> str:
+    """Return both readable and machine transmission-principle text."""
+    row = _row_for_ci_label(flow, "Transmission principle") or {}
+    try:
+        params = scenario_ci_params(flow or {})
+    except Exception:
+        params = {}
+    return " ".join([
+        str(row.get("value") or ""),
+        str(row.get("help") or ""),
+        str(row.get("example") or ""),
+        str(params.get("transmission_principle") or ""),
+    ]).lower()
+
+
+def _is_notice_permission_condition(original_value: str) -> bool:
+    value_lower = str(original_value or "").lower()
+    return any(k in value_lower for k in [
+        "hidden",
+        "not disclosed",
+        "disclosed",
+        "notice",
+        "consent",
+        "listing",
+        "people nearby are told",
+        "told monitoring",
+        "told that monitoring",
+    ])
+
+
+def _is_authorized_access_condition(original_value: str) -> bool:
+    return "authorized" in str(original_value or "").lower()
+
+
+def _notice_permission_value(flow: Optional[Dict[str, Any]]) -> str:
+    text = _transmission_value_text(flow)
+    if "hidden" in text or "not disclosed" in text:
+        return "You are not told that this data collection and sharing are happening."
+    if "explicit consent" in text or "clear opt-in" in text or "signed consent" in text:
+        return "You explicitly agree to this data collection and sharing for the stated purpose."
+    if "written notice" in text:
+        return "You receive written notice explaining the device, the data collection, the named receiver, and the stated purpose."
+    if "rental listing" in text or "listing_disclosure_required" in text:
+        return "The rental listing tells you about the device, its coverage area, and what data or output may be shared."
+    if "disclosed" in text or "people nearby are told" in text or "sign" in text or "setup screen" in text:
+        return "You are told that monitoring or data sharing is happening, such as through a sign, notice, or setup screen."
+    return "No additional notice or permission condition is stated. Use only the details on this page; do not assume extra consent, extra notice, or hidden access."
+
+
+def _notice_permission_example(flow: Optional[Dict[str, Any]]) -> Optional[str]:
+    text = _transmission_value_text(flow)
+    if "rental listing" in text or "listing_disclosure_required" in text:
+        return "for example, an Airbnb/Vrbo listing says what device is present and what area it covers"
+    if "explicit consent" in text:
+        return "for example, a clear opt-in or consent form before monitoring begins"
+    if "written notice" in text:
+        return "for example, a written workplace, care, or research notice"
+    if "hidden" in text or "not disclosed" in text:
+        return "for example, no sign, listing notice, setup notice, or consent prompt is provided"
+    if "disclosed" in text:
+        return "for example, a sign, notice, or setup screen tells people monitoring is happening"
+    return None
+
+
 def _condition_label_for_value(original_value: str) -> str:
     value_lower = str(original_value or "").lower()
-    if any(k in value_lower for k in ["hidden", "not disclosed", "disclosed", "notice", "consent", "listing"]):
+    if _is_notice_permission_condition(original_value):
         return "What notice or permission is given?"
     if any(k in value_lower for k in ["continuous", "event"]):
         return "When is data collected or shared?"
@@ -2658,10 +3074,18 @@ def _condition_field(flow: Dict[str, Any], output_variant: Optional[Dict[str, An
     # not repeat the same fact as a separate condition row.
     if output_variant is not None and "speech" in original_value.lower():
         return None
-    value = _display_value_override("Transmission principle", row.get("value"), flow, output_variant)
+    # Access-control-only conditions are folded into the recipient row so the
+    # survey does not introduce a separate access field.
+    if _is_authorized_access_condition(original_value):
+        return None
+    if _is_notice_permission_condition(original_value):
+        value = _notice_permission_value(flow)
+        example = _notice_permission_example(flow)
+    else:
+        value = _display_value_override("Transmission principle", row.get("value"), flow, output_variant)
+        example = _participant_example_for_field("Transmission principle", row, flow, original_value) if row else None
     if not str(value or "").strip().endswith("."):
         value = f"{value}."
-    example = _participant_example_for_field("Transmission principle", row, flow, original_value) if row else None
     label = _condition_label_for_value(original_value)
     return {
         "label": label,
@@ -2728,8 +3152,9 @@ def plain_vignette(flow: Dict[str, Any], output_variant: Optional[Dict[str, Any]
     """
     return (
         "Some questions are versions of the same general scenario. "
-        "If a row is marked Changed, that row differs from the previous question. "
-        "Please rate this page as its own complete situation. Assume only the listed data is saved or shared."
+        "If a row is marked Changed, that row differs from the previous question; rows not marked Changed still apply. "
+        "Please rate this page as its own complete situation. Assume only the listed data is saved or shared, and only the parties shown on this page can access it. "
+        "Do not judge whether the setup is legal or whether the space owner is allowed to use it; judge whether the data sharing feels appropriate from your perspective as the person the data is about."
     )
 
 
@@ -2855,6 +3280,8 @@ def materialize_survey_item(items: List[Dict[str, Any]], assignment: Dict[str, A
             "ablation_modes": ablation_modes,
         },
         "vignette": plain_vignette(flow, output_variant),
+        "rating_prompt": "From your perspective as the person the data is about, how appropriate is it for the monitoring device to share the listed data in this situation?",
+        "rating_guidance": "Judge appropriateness, not whether the setup is legal or whether the space owner is allowed to use it. Use the notice/permission details in the condition row and the access assumptions in the receiver row.",
         "display_fields": display_fields,
         "attention_check": attention_check,
         "comprehension_check": comprehension_check,
@@ -3076,7 +3503,7 @@ def build_question_preview(
             "vignette": item.get("vignette") or "",
             "scenario_details": visible_fields,
             "rating": {
-                "prompt": "In your personal judgment, how appropriate is it for the monitoring device to share the listed data in this situation?",
+                "prompt": "From your perspective as the person the data is about, how appropriate is it for the monitoring device to share the listed data in this situation? Please judge appropriateness, not whether the setup is legal or whether the space owner is allowed to use it.",
                 "scale": rating_scale,
             },
             "confidence_prompt": "How confident are you in this rating?",
@@ -3339,7 +3766,10 @@ def main() -> int:
     p.add_argument("--seed", type=int, default=13)
     p.add_argument("--assignment-mode", default="least_rated_balanced", choices=["least_rated_balanced", "sequential"])
     p.add_argument("--max-per-scenario-group", type=int, default=2, help="Maximum number of versions from the same scenario family shown to one participant. Use 0 for no cap.")
-    p.add_argument("--pipeline-output-dir", default=str(DEFAULT_PIPELINE_OUTPUT_DIR), help="Directory created by evaluation.generate_pipelines_for_all_contexts, containing index.json/summary.json.")
+    p.add_argument("--pipeline-output-dir", default=str(DEFAULT_PIPELINE_OUTPUT_DIR), help="Flexible run directory created by evaluation.generate_pipelines_for_all_contexts, containing index.json/summary.json, or a summary_by_context JSON file.")
+    p.add_argument("--previous-pipeline-output-dir", default=str(DEFAULT_PREVIOUS_PIPELINE_OUTPUT_DIR), help="Earlier fixed-schema run directory or summary_by_context JSON file. Used only when --survey-output-scope=new_flexible_only.")
+    p.add_argument("--survey-output-scope", default="new_flexible_only", choices=["new_flexible_only", "all"], help="Use new_flexible_only for a supplemental survey that asks only about genuinely new flexible output data types, not internal schema renames of previously surveyed media outputs.")
+    p.add_argument("--supplemental-output-schemas", default="", help="Optional comma-separated override for output schemas to include in new_flexible_only mode. Normally omit; default excludes old media concepts such as redacted_video_stream.")
     p.add_argument("--no-pipeline-outputs", action="store_true", help="Fall back to context-only survey items.")
     p.add_argument("--include-no-output-variants", action="store_true", help="Also create survey cases for baselines that deny or produce no selected output.")
     p.add_argument(
@@ -3371,8 +3801,11 @@ def main() -> int:
         args.assignment_mode,
         args.max_per_scenario_group,
         pipeline_dir,
+        None if args.no_pipeline_outputs else Path(args.previous_pipeline_output_dir),
         include_pipeline_outputs=not args.no_pipeline_outputs,
         include_no_output_variants=args.include_no_output_variants,
+        survey_output_scope=args.survey_output_scope,
+        supplemental_output_schemas=_parse_csv_terms(args.supplemental_output_schemas),
     ))
     if args.write_question_preview_json:
         preview_path = Path(args.write_question_preview_json)
@@ -3396,6 +3829,10 @@ def main() -> int:
         print(f"Baseline pipeline rows: {state.item_pool_summary.get('baseline_pipeline_row_count')}")
         print(f"Pipeline rows with shared output: {state.item_pool_summary.get('baseline_pipeline_rows_with_output')}")
         print(f"Unique context-output survey cases after deduplication: {state.item_pool_summary.get('deduplicated_output_variant_count')}")
+        print(f"Survey output scope: {state.item_pool_summary.get('survey_output_scope')}")
+        if state.item_pool_summary.get("target_output_schemas"):
+            print(f"Target output schemas: {state.item_pool_summary.get('target_output_schemas')}")
+            print(f"Pipeline rows excluded because their output schema was already covered: {state.item_pool_summary.get('method_pipeline_rows_excluded_by_output_schema')}")
         print(f"Mean output variants per context: {state.item_pool_summary.get('mean_output_variants_per_context'):.2f}")
     else:
         print("Pipeline outputs disabled or unavailable; using context-only survey items.")
