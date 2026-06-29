@@ -1,0 +1,2431 @@
+{
+  "schema_version": "ci_policy_rules_pipeline_v2_flexible_outputs",
+  "design_notes": [
+    "Rules are expressed over staged flows: raw_input, intermediate_representation, output_to_application, retained_artifact.",
+    "There is no deny_scope. A DENY_FLOW applies to the matched staged flow.",
+    "Classification rules do not decide acceptability; they add tags consumed by later rules.",
+    "Hard constraints should generally run before conditional allowances and preferences.",
+    "Each rule includes the original natural-language policy description and source URL.",
+    "Flexible-output revision: adds a few generic rules for flexible semantic outputs and final-task-decision boundaries. Existing venue/platform rules are preserved."
+  ],
+  "rule_order": [
+    "CLASSIFY_AS",
+    "DENY_FLOW",
+    "REQUIRE_CONDITION",
+    "REQUIRE_TRANSFORMATION",
+    "ALLOW_IF",
+    "PREFER"
+  ],
+  "rules": [
+    {
+      "id": "airbnb_hidden_recording_devices_ban",
+      "provenance": {
+        "source_name": "Airbnb camera and recording device policy",
+        "source_type": "platform_policy",
+        "url": "https://www.airbnb.com/help/article/3061",
+        "natural_language_description": "Hidden security cameras are strictly prohibited."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "transmissionPrinciple": {
+          "anyOf": [
+            "hidden",
+            "undisclosed"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "indoor_camera",
+              "outdoor_camera",
+              "cctv_camera",
+              "microphone",
+              "smart_speaker"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "intermediate_representation",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Hidden recording devices cannot be used as sources for any pipeline flow in a short-term rental."
+      }
+    },
+    {
+      "id": "airbnb_indoor_camera_audio_ban",
+      "provenance": {
+        "source_name": "Airbnb camera and recording device policy",
+        "source_type": "platform_policy",
+        "url": "https://www.airbnb.com/help/article/3061",
+        "natural_language_description": "Hosts may not have cameras or recording devices monitoring any indoor space, including hallways, bedrooms, bathrooms, living rooms, guest houses, and shared/common spaces in private-room listings, even if turned off or disconnected."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "indoor",
+            "interior_home_space",
+            "bedroom",
+            "bathroom",
+            "living_room",
+            "hallway",
+            "common_area"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "raw_input"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "indoor_camera",
+              "cctv_camera",
+              "microphone",
+              "smart_speaker"
+            ]
+          },
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content",
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "explanation": "The preprocessor cannot use indoor recording-device streams in this rental context."
+      }
+    },
+    {
+      "id": "airbnb_exterior_private_area_ban",
+      "provenance": {
+        "source_name": "Airbnb camera and recording device policy",
+        "source_type": "platform_policy",
+        "url": "https://www.airbnb.com/help/article/3061",
+        "natural_language_description": "Exterior cameras may not monitor high-privacy outdoor areas such as enclosed outdoor showers or saunas."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "outdoor_shower_or_sauna"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "raw_input",
+            "output_to_application"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "outdoor_camera"
+            ]
+          },
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "explanation": "Exterior cameras may not capture privacy-sensitive outdoor spaces."
+      }
+    },
+    {
+      "id": "airbnb_exterior_camera_disclosure_required",
+      "provenance": {
+        "source_name": "Airbnb camera and recording device policy",
+        "source_type": "platform_policy",
+        "url": "https://www.airbnb.com/help/article/3061",
+        "natural_language_description": "Exterior cameras and recording devices are allowed only if their locations are disclosed in the listing description."
+      },
+      "ruleType": "notice_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "outdoor"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "outdoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "listing_disclosure_required"
+          ]
+        },
+        "explanation": "Outdoor camera input/output is only usable if the device location is disclosed."
+      }
+    },
+    {
+      "id": "airbnb_noise_monitor_decibel_only",
+      "provenance": {
+        "source_name": "Airbnb camera and recording device policy",
+        "source_type": "platform_policy",
+        "url": "https://www.airbnb.com/help/article/3061",
+        "natural_language_description": "Noise decibel monitors may assess sound level and duration but may not record audio."
+      },
+      "ruleType": "conditional_allowance",
+      "priority": "allow_if",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "noise_decibel_monitor"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "ALLOW_IF",
+        "requiredConditions": {
+          "informationType.sensorPrimitive": [
+            "decibel_level"
+          ],
+          "transmissionPrinciple": [
+            "speech_content_removed"
+          ]
+        },
+        "forbiddenConditions": {
+          "informationType.sensorPrimitive": [
+            "audio_waveform",
+            "speech_audio"
+          ],
+          "informationType.interpretedObservation": [
+            "speech_transcribed"
+          ]
+        },
+        "explanation": "Noise monitors can produce sound-level outputs but not audio content or speech."
+      }
+    },
+    {
+      "id": "airbnb_noise_monitor_bed_bath_ban",
+      "provenance": {
+        "source_name": "Airbnb camera and recording device policy",
+        "source_type": "platform_policy",
+        "url": "https://www.airbnb.com/help/article/3061",
+        "natural_language_description": "Interior noise monitors are allowed only if disclosed and not placed in bedrooms, bathrooms, or sleeping areas."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "bedroom",
+            "bathroom",
+            "sleeping_area"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "noise_decibel_monitor"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application"
+        ],
+        "explanation": "Noise-monitor sensing is not usable from bedrooms, bathrooms, or sleeping areas."
+      }
+    },
+    {
+      "id": "airbnb_smart_device_disclose_disable",
+      "provenance": {
+        "source_name": "Airbnb camera and recording device policy",
+        "source_type": "platform_policy",
+        "url": "https://www.airbnb.com/help/article/3061",
+        "natural_language_description": "Smart home devices are allowed; hosts are encouraged to disclose them and give guests the option to unplug or disable them."
+      },
+      "ruleType": "soft_constraint",
+      "priority": "soft_preference",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "iot_device",
+              "smart_speaker",
+              "thermostat",
+              "smart_lock"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "PREFER",
+        "preferredConditions": {
+          "transmissionPrinciple": [
+            "disclosed",
+            "guest_disable_option"
+          ]
+        },
+        "explanation": "Prefer pipelines whose sensing source is disclosed and disable-able by the guest."
+      }
+    },
+    {
+      "id": "vrbo_surveillance_device_classifier",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "A surveillance device includes capture of photos, audio, video, geolocation, personally identifiable information, or internet-monitoring data."
+      },
+      "ruleType": "classification_rule",
+      "priority": "classification",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "informationType": {
+          "sensorPrimitive": {
+            "anyOf": [
+              "image_frame",
+              "video_stream",
+              "audio_waveform",
+              "speech_audio",
+              "gps_coordinate",
+              "wifi_probe_or_signal"
+            ]
+          },
+          "inferredInformationType": {
+            "anyOf": [
+              "identity",
+              "presence",
+              "trajectory"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "CLASSIFY_AS",
+        "tags": [
+          "surveillance_device_flow"
+        ],
+        "explanation": "This rule only tags the flow. It does not by itself allow or deny it."
+      }
+    },
+    {
+      "id": "vrbo_indoor_surveillance_ban",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "Surveillance devices, including cameras or audio recorders, cannot be used inside the property."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "tags": {
+          "anyOf": [
+            "surveillance_device_flow"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "indoor",
+            "interior_home_space"
+          ]
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "intermediate_representation",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Indoor surveillance-device flows are rejected."
+      }
+    },
+    {
+      "id": "vrbo_smart_device_disclose_disable_not_remote",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "Smart devices that cannot be activated remotely are allowed only if guests are informed and given the option to deactivate them."
+      },
+      "ruleType": "conditional_allowance",
+      "priority": "allow_if",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "iot_device",
+              "smart_speaker",
+              "thermostat",
+              "smart_lock"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "ALLOW_IF",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "disclosed",
+            "guest_disable_option"
+          ]
+        },
+        "forbiddenConditions": {
+          "transmissionPrinciple": [
+            "remote_access_possible"
+          ]
+        },
+        "explanation": "Smart-device flows are allowed only if disclosed, deactivation is available, and remote activation is unavailable."
+      }
+    },
+    {
+      "id": "vrbo_outdoor_surveillance_security_only",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "Outdoor surveillance devices may be used only for security purposes."
+      },
+      "ruleType": "purpose_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "tags": {
+          "anyOf": [
+            "surveillance_device_flow"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "outdoor"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "purpose": [
+            "security_monitoring"
+          ],
+          "transmissionPrinciple": [
+            "security_purpose_only"
+          ]
+        },
+        "explanation": "Outdoor surveillance-device flows must be limited to security."
+      }
+    },
+    {
+      "id": "vrbo_outdoor_location_coverage_disclosure",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "Outdoor device location and coverage must be disclosed on the property page; merely showing a photo of the device is insufficient."
+      },
+      "ruleType": "notice_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "tags": {
+          "anyOf": [
+            "surveillance_device_flow"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "outdoor"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "listing_disclosure_required"
+          ],
+          "metadata": [
+            "device_location_disclosed",
+            "coverage_area_disclosed"
+          ]
+        },
+        "explanation": "Outdoor surveillance-device flows require disclosed device location and coverage."
+      }
+    },
+    {
+      "id": "vrbo_pool_hot_tub_explicit_coverage_disclosure",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "Cameras covering pools or hot tubs require explicit disclosure that the pool or hot tub is within the device's coverage area."
+      },
+      "ruleType": "notice_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "pool_area",
+            "hot_tub_area"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "outdoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "metadata": [
+            "pool_or_hot_tub_coverage_disclosed"
+          ]
+        },
+        "explanation": "Pool/hot-tub camera coverage must be specifically disclosed."
+      }
+    },
+    {
+      "id": "vrbo_private_area_surveillance_ban",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "Areas with a reasonable expectation of privacy, such as bathrooms or bedrooms, should not be under surveillance."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "bathroom",
+            "bedroom",
+            "sleeping_area",
+            "private_space"
+          ]
+        },
+        "tags": {
+          "anyOf": [
+            "surveillance_device_flow"
+          ]
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "intermediate_representation",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Surveillance flows from high-privacy spaces are rejected."
+      }
+    },
+    {
+      "id": "vrbo_surveillance_data_limited_access_delete",
+      "provenance": {
+        "source_name": "Vrbo surveillance policy",
+        "source_type": "platform_policy",
+        "url": "https://help.vrbo.com/articles/What-is-HomeAway-s-policy-on-surveillance-devices-at-a-property",
+        "natural_language_description": "Access to surveillance data should be limited, and surveillance data should be deleted when no longer needed."
+      },
+      "ruleType": "retention_access_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "short_term_rental"
+          ]
+        },
+        "tags": {
+          "anyOf": [
+            "surveillance_device_flow"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "retained_artifact",
+            "output_to_application"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "authorized_personnel_only",
+            "limited_retention"
+          ]
+        },
+        "forbiddenConditions": {
+          "transmissionPrinciple": [
+            "indefinite_retention",
+            "no_public_release"
+          ]
+        },
+        "explanation": "If surveillance data is retained or output, access and retention must be limited."
+      }
+    },
+    {
+      "id": "ua_security_purpose_only",
+      "provenance": {
+        "source_name": "University of Arizona security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policy.arizona.edu/safety/security-camera-policy-interim",
+        "natural_language_description": "Security camera footage is a university asset and may be used only for security purposes unless a legitimate business-purpose exception is approved."
+      },
+      "ruleType": "purpose_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera",
+              "outdoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "purpose": [
+            "security_monitoring"
+          ],
+          "transmissionPrinciple": [
+            "security_purpose_only"
+          ]
+        },
+        "unless": {
+          "approved_exception": "legitimate_business_purpose"
+        },
+        "explanation": "University camera flows must be tied to security unless an exception exists."
+      }
+    },
+    {
+      "id": "ua_private_space_camera_ban",
+      "provenance": {
+        "source_name": "University of Arizona security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policy.arizona.edu/safety/security-camera-policy-interim",
+        "natural_language_description": "Security cameras cannot be installed where there is a reasonable expectation of privacy, including dorm rooms, restrooms, showers, lactation spaces, locker/changing rooms, private offices, and healthcare-treatment spaces."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus",
+            "university_housing",
+            "hospital_or_clinic"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "residential_room",
+            "bathroom",
+            "shower_area",
+            "lactation_space",
+            "locker_room",
+            "changing_area",
+            "private_office",
+            "clinical_space",
+            "patient_room"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Camera flows from spaces with a reasonable expectation of privacy are rejected."
+      }
+    },
+    {
+      "id": "ua_confidential_authorized_access",
+      "provenance": {
+        "source_name": "University of Arizona security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policy.arizona.edu/safety/security-camera-policy-interim",
+        "natural_language_description": "Camera footage must be treated as confidential, accessed only by authorized employees, and used only for the intended security purpose except as required by law."
+      },
+      "ruleType": "access_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application",
+            "retained_artifact"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "authorized_personnel_only",
+            "secure_storage",
+            "security_purpose_only"
+          ]
+        },
+        "unless": {
+          "transmissionPrinciple": [
+            "legal_requirement"
+          ]
+        },
+        "explanation": "Camera outputs and retained artifacts require confidentiality, authorization, and security-purpose limitation."
+      }
+    },
+    {
+      "id": "ua_public_building_signage_required",
+      "provenance": {
+        "source_name": "University of Arizona security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policy.arizona.edu/safety/security-camera-policy-interim",
+        "natural_language_description": "Buildings open to the public with interior cameras must post signs notifying people of video monitoring."
+      },
+      "ruleType": "notice_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "indoor",
+            "common_area"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "indoor_camera",
+              "cctv_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "signage_required",
+            "disclosed"
+          ]
+        },
+        "explanation": "Interior public-building camera flows require signage/notice."
+      }
+    },
+    {
+      "id": "iu_surveillance_system_review_required",
+      "provenance": {
+        "source_name": "Indiana University video/electronic surveillance policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.iu.edu/policies/ps-02-video-electronic-surveillance/index.html",
+        "natural_language_description": "New or updated video/electronic surveillance systems require prior review and written approval."
+      },
+      "ruleType": "deployment_approval_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "microphone",
+              "gps_receiver",
+              "iot_device"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "metadata": [
+            "prior_review_and_written_approval"
+          ]
+        },
+        "explanation": "Surveillance sources require approval before use by the pipeline."
+      }
+    },
+    {
+      "id": "iu_private_space_surveillance_ban",
+      "provenance": {
+        "source_name": "Indiana University video/electronic surveillance policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.iu.edu/policies/ps-02-video-electronic-surveillance/index.html",
+        "natural_language_description": "Surveillance systems may not monitor or record restrooms, locker rooms, residential rooms, changing/dressing rooms, wellness rooms, clinical education rooms, or health-treatment rooms."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus",
+            "university_housing",
+            "hospital_or_clinic"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "bathroom",
+            "locker_room",
+            "residential_room",
+            "changing_area",
+            "clinical_space",
+            "patient_room",
+            "private_space"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "microphone",
+              "iot_device"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Surveillance flows from listed private spaces are rejected."
+      }
+    },
+    {
+      "id": "iu_audio_recording_ban_except_police",
+      "provenance": {
+        "source_name": "Indiana University video/electronic surveillance policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.iu.edu/policies/ps-02-video-electronic-surveillance/index.html",
+        "natural_language_description": "Audio recording is prohibited except in spaces controlled by campus police."
+      },
+      "ruleType": "modality_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "informationType": {
+          "sensorPrimitive": {
+            "anyOf": [
+              "audio_waveform",
+              "speech_audio"
+            ]
+          },
+          "interpretedObservation": {
+            "anyOf": [
+              "speech_transcribed"
+            ]
+          }
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "intermediate_representation",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "space_controlled_by": "campus_police"
+        },
+        "explanation": "Audio-content flows are rejected unless the space is controlled by campus police."
+      }
+    },
+    {
+      "id": "iu_routine_surveillance_ban",
+      "provenance": {
+        "source_name": "Indiana University video/electronic surveillance policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.iu.edu/policies/ps-02-video-electronic-surveillance/index.html",
+        "natural_language_description": "Surveillance systems may not be used for routine surveillance of employees or other individuals."
+      },
+      "ruleType": "purpose_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus",
+            "workplace"
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            "routine_monitoring",
+            "work_performance_monitoring"
+          ]
+        },
+        "informationType": {
+          "inferredInformationType": {
+            "anyOf": [
+              "work_pattern",
+              "presence",
+              "trajectory",
+              "behaviour"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Outputs enabling routine surveillance or work-pattern monitoring are rejected."
+      }
+    },
+    {
+      "id": "iu_sensitive_workspace_minimization",
+      "provenance": {
+        "source_name": "Indiana University video/electronic surveillance policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.iu.edu/policies/ps-02-video-electronic-surveillance/index.html",
+        "natural_language_description": "System design should avoid or minimize capturing sensitive institutional or personal information, such as workspaces or electronic displays."
+      },
+      "ruleType": "minimization_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus",
+            "workplace"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "workspace"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_TRANSFORMATION",
+        "requiredTransformations": [
+          "field_of_view_minimized",
+          "screen_content_removed",
+          "data_minimized"
+        ],
+        "explanation": "Workspace camera flows should minimize field of view and remove sensitive screen/workspace details."
+      }
+    },
+    {
+      "id": "iu_retention_30_days",
+      "provenance": {
+        "source_name": "Indiana University video/electronic surveillance policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.iu.edu/policies/ps-02-video-electronic-surveillance/index.html",
+        "natural_language_description": "Surveillance information is retained no longer than 30 days unless preserved by written request; video-proctoring information is retained no longer than 365 days."
+      },
+      "ruleType": "retention_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "retained_artifact"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content",
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "retention.max_days": 30,
+          "transmissionPrinciple": [
+            "limited_retention",
+            "secure_storage"
+          ]
+        },
+        "unless": {
+          "written_preservation_request": true
+        },
+        "explanation": "Retained surveillance artifacts need a retention limit."
+      }
+    },
+    {
+      "id": "ucla_hidden_decoy_camera_ban",
+      "provenance": {
+        "source_name": "UCLA security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://www.adminpolicies.ucla.edu/APP/Number/133.0",
+        "natural_language_description": "Hidden and non-functional decoy security cameras are prohibited unless written permission is issued."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "transmissionPrinciple": {
+          "anyOf": [
+            "hidden"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera",
+              "outdoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input"
+        ],
+        "unless": {
+          "written_permission": true
+        },
+        "explanation": "Hidden/decoy camera sources cannot be used without written permission."
+      }
+    },
+    {
+      "id": "ucla_camera_use_purpose_limited",
+      "provenance": {
+        "source_name": "UCLA security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://www.adminpolicies.ucla.edu/APP/Number/133.0",
+        "natural_language_description": "Camera use is limited to campus safety/security, crime prevention, law enforcement, and university-policy compliance."
+      },
+      "ruleType": "purpose_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera",
+              "outdoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "ALLOW_IF",
+        "requiredConditions": {
+          "purpose": [
+            "security_monitoring",
+            "law_enforcement",
+            "incident_investigation"
+          ],
+          "transmissionPrinciple": [
+            "purpose_limited"
+          ]
+        },
+        "forbiddenConditions": {
+          "purpose": [
+            "advertising",
+            "personalization",
+            "routine_monitoring"
+          ]
+        },
+        "explanation": "Camera-derived flows are allowed only for the listed campus purposes."
+      }
+    },
+    {
+      "id": "unc_private_area_camera_ban",
+      "provenance": {
+        "source_name": "UNC security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.unc.edu/TDClient/2833/Portal/KB/Article/131855/Security-Camera-Policy",
+        "natural_language_description": "Cameras generally cannot be installed inside or view private areas such as restrooms, locker rooms, lactation rooms, wellness spaces, active clinical spaces, residential rooms/hallways, or residential windows."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus",
+            "university_housing",
+            "hospital_or_clinic"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "bathroom",
+            "locker_room",
+            "lactation_space",
+            "clinical_space",
+            "residential_room",
+            "residential_hallway",
+            "private_space"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Camera flows from private areas are rejected."
+      }
+    },
+    {
+      "id": "unc_audio_recording_ban",
+      "provenance": {
+        "source_name": "UNC security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.unc.edu/TDClient/2833/Portal/KB/Article/131855/Security-Camera-Policy",
+        "natural_language_description": "The recording of audio is prohibited."
+      },
+      "ruleType": "modality_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "audio_content"
+            ]
+          }
+        },
+        "informationType": {
+          "sensorPrimitive": {
+            "anyOf": [
+              "audio_waveform",
+              "speech_audio"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "intermediate_representation",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "explanation": "Audio-content flows are rejected in this university-camera context."
+      }
+    },
+    {
+      "id": "unc_authorized_access_only",
+      "provenance": {
+        "source_name": "UNC security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policies.unc.edu/TDClient/2833/Portal/KB/Article/131855/Security-Camera-Policy",
+        "natural_language_description": "Only designated operators, administrators, police, campus safety personnel, or personnel with need-to-know for legal/compliance reasons may access real-time or recorded security-camera footage."
+      },
+      "ruleType": "access_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application",
+            "retained_artifact"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "recipient": [
+            "campus_police_or_security",
+            "authorized_personnel"
+          ],
+          "transmissionPrinciple": [
+            "authorized_personnel_only"
+          ]
+        },
+        "explanation": "Outputs/retained camera artifacts require authorized recipients."
+      }
+    },
+    {
+      "id": "rice_private_space_camera_ban",
+      "provenance": {
+        "source_name": "Rice University security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://policy.rice.edu/845",
+        "natural_language_description": "Security cameras are prohibited in dorm rooms, restrooms, locker rooms, showers, changing areas, private offices, and physical/medical/psychological care spaces, except for legitimate investigations approved by counsel."
+      },
+      "ruleType": "hard_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus",
+            "university_housing",
+            "hospital_or_clinic"
+          ]
+        },
+        "space": {
+          "anyOf": [
+            "residential_room",
+            "bathroom",
+            "locker_room",
+            "shower_area",
+            "changing_area",
+            "private_office",
+            "clinical_space"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "purpose": [
+            "incident_investigation"
+          ],
+          "approved_by": "office_of_general_counsel"
+        },
+        "explanation": "Private-space camera flows are rejected unless a counsel-approved investigation exception applies."
+      }
+    },
+    {
+      "id": "lewis_clark_common_area_only",
+      "provenance": {
+        "source_name": "Lewis & Clark security camera policy",
+        "source_type": "venue_policy",
+        "url": "https://www.lclark.edu/live/profiles/4934-security-camera-policy",
+        "natural_language_description": "Cameras are allowed in entrances, residence-hall entryways/hallways/common areas, academic/administrative buildings, parking lots, and exterior spaces, but not restrooms, locker rooms, changing areas, or residence rooms/apartments."
+      },
+      "ruleType": "space_constraint",
+      "priority": "allow_if",
+      "match": {
+        "context": {
+          "anyOf": [
+            "university_campus",
+            "university_housing"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "indoor_camera",
+              "outdoor_camera"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "ALLOW_IF",
+        "requiredConditions": {
+          "space": [
+            "entrance",
+            "common_area",
+            "parking_lot",
+            "outdoor"
+          ]
+        },
+        "forbiddenConditions": {
+          "space": [
+            "bathroom",
+            "locker_room",
+            "changing_area",
+            "residential_room"
+          ]
+        },
+        "explanation": "Camera flows are limited to common/public spaces and forbidden in private residential/privacy spaces."
+      }
+    },
+    {
+      "id": "ferpa_student_video_education_record_classifier",
+      "provenance": {
+        "source_name": "U.S. Department of Education FERPA photos/videos guidance",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://studentprivacy.ed.gov/faq/faqs-photos-and-videos-under-ferpa",
+        "natural_language_description": "A student photo or video becomes an education record when it is directly related to a student and maintained by the school or a party acting for the school."
+      },
+      "ruleType": "classification_rule",
+      "priority": "classification",
+      "match": {
+        "context": {
+          "anyOf": [
+            "school_or_classroom",
+            "special_education_classroom"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "student"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content"
+            ]
+          }
+        },
+        "metadata": {
+          "anyOf": [
+            "directly_related_to_student",
+            "maintained_by_school_or_agent"
+          ]
+        }
+      },
+      "effect": {
+        "action": "CLASSIFY_AS",
+        "tags": [
+          "education_record_flow"
+        ],
+        "explanation": "This rule tags directly related, school-maintained student photo/video as an education-record flow."
+      }
+    },
+    {
+      "id": "ferpa_student_video_access_redaction",
+      "provenance": {
+        "source_name": "U.S. Department of Education FERPA photos/videos guidance",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://studentprivacy.ed.gov/faq/faqs-photos-and-videos-under-ferpa",
+        "natural_language_description": "The same surveillance video can be an education record for multiple students; parents/students generally have inspection rights when the video directly relates to them."
+      },
+      "ruleType": "access_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "school_or_classroom",
+            "special_education_classroom"
+          ]
+        },
+        "tags": {
+          "anyOf": [
+            "education_record_flow"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application",
+            "retained_artifact"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "recipient_limited",
+            "authorized_personnel_only",
+            "data_minimized"
+          ]
+        },
+        "bystanderHandling": "protect_or_redact_other_students_when_possible",
+        "explanation": "Student-video outputs and retained artifacts require recipient limitation and bystander protection."
+      }
+    },
+    {
+      "id": "texas_special_ed_camera_notice_required",
+      "provenance": {
+        "source_name": "Texas School Safety Center SB 507 summary",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://txssc.txstate.edu/tools/law-toolkit/updates/senate-bill/507",
+        "natural_language_description": "Schools must provide written notice to parents and staff before installing video-monitoring cameras in covered special-education settings."
+      },
+      "ruleType": "notice_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "special_education_classroom"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "microphone"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "written_notice_required",
+            "disclosed"
+          ]
+        },
+        "explanation": "Covered special-education camera/audio monitoring requires written notice."
+      }
+    },
+    {
+      "id": "texas_special_ed_parent_objection_blocks",
+      "provenance": {
+        "source_name": "Texas School Safety Center SB 507 summary",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://txssc.txstate.edu/tools/law-toolkit/updates/senate-bill/507",
+        "natural_language_description": "A school may not place a camera in a covered classroom or special-education setting if a parent submits a written objection within the notice period."
+      },
+      "ruleType": "consent_objection_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "special_education_classroom"
+          ]
+        },
+        "metadata": {
+          "anyOf": [
+            "parent_written_objection_submitted"
+          ]
+        },
+        "sensingDataMetadata": {
+          "sensingDevice": {
+            "anyOf": [
+              "cctv_camera",
+              "microphone"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input"
+        ],
+        "explanation": "The preprocessor cannot use the camera/audio source when a valid written objection blocks placement."
+      }
+    },
+    {
+      "id": "texas_special_ed_no_continual_monitoring",
+      "provenance": {
+        "source_name": "Texas School Safety Center SB 507 summary",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://txssc.txstate.edu/tools/law-toolkit/updates/senate-bill/507",
+        "natural_language_description": "Recordings must be kept for at least six months, and regular or continual monitoring of the recorded video is prohibited."
+      },
+      "ruleType": "retention_and_monitoring_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "special_education_classroom"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "retained_artifact"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content",
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "retention.min_months": 3
+        },
+        "forbiddenConditions": {
+          "purpose": [
+            "routine_monitoring"
+          ],
+          "transmissionPrinciple": [
+            "continuous_collection"
+          ]
+        },
+        "explanation": "Retention is required, but continual/routine monitoring is forbidden."
+      }
+    },
+    {
+      "id": "hhs_media_phi_authorization_required",
+      "provenance": {
+        "source_name": "HHS HIPAA media and film crew guidance",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://www.hhs.gov/sites/default/files/guidance-on-media-and-film-crews-access-to-phi.pdf",
+        "natural_language_description": "Covered health providers may not give media or film crews access to areas where patient PHI is accessible without prior written HIPAA authorization from each patient whose PHI would be accessible."
+      },
+      "ruleType": "authorization_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic"
+          ]
+        },
+        "recipient": {
+          "anyOf": [
+            "media_or_film_crew",
+            "public_release",
+            "third_party"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "patient"
+          ]
+        },
+        "informationType": {
+          "inferredInformationType": {
+            "anyOf": [
+              "identity",
+              "health_status"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "transmissionPrinciple": [
+            "written_authorization_required",
+            "explicit_consent"
+          ]
+        },
+        "explanation": "Media/third-party patient flows are rejected unless written HIPAA authorization is present."
+      }
+    },
+    {
+      "id": "hhs_blur_not_sufficient_without_authorization",
+      "provenance": {
+        "source_name": "HHS HIPAA media and film crew guidance",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://www.hhs.gov/sites/default/files/guidance-on-media-and-film-crews-access-to-phi.pdf",
+        "natural_language_description": "Blurring, pixelation, or voice alteration after filming is not enough; prior express patient authorization is still required."
+      },
+      "ruleType": "transformation_insufficient_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic"
+          ]
+        },
+        "recipient": {
+          "anyOf": [
+            "media_or_film_crew",
+            "public_release",
+            "third_party"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "patient"
+          ]
+        },
+        "transmissionPrinciple": {
+          "anyOf": [
+            "face_blurred",
+            "body_blurred",
+            "speech_content_removed"
+          ]
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "transmissionPrinciple": [
+            "written_authorization_required",
+            "explicit_consent"
+          ]
+        },
+        "explanation": "For media/public disclosure in clinical contexts, transformation alone is insufficient without authorization."
+      }
+    },
+    {
+      "id": "hhs_filming_safeguards_required",
+      "provenance": {
+        "source_name": "HHS HIPAA media and film crew guidance",
+        "source_type": "law_or_regulatory_guidance",
+        "url": "https://www.hhs.gov/sites/default/files/guidance-on-media-and-film-crews-access-to-phi.pdf",
+        "natural_language_description": "Even when filming is authorized, providers must use safeguards such as privacy screens or opaque barriers to prevent unauthorized PHI exposure."
+      },
+      "ruleType": "safeguard_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic"
+          ]
+        },
+        "recipient": {
+          "anyOf": [
+            "media_or_film_crew",
+            "third_party"
+          ]
+        },
+        "transmissionPrinciple": {
+          "anyOf": [
+            "written_authorization_required",
+            "explicit_consent"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "field_of_view_minimized",
+            "data_minimized"
+          ],
+          "safeguards": [
+            "privacy_screens_or_opaque_barriers"
+          ]
+        },
+        "explanation": "Authorized filming still requires safeguards against exposing other PHI."
+      }
+    },
+    {
+      "id": "yale_identifiable_recording_non_tpo_authorization",
+      "provenance": {
+        "source_name": "Yale HIPAA audio/visual recording guidance",
+        "source_type": "institutional_policy",
+        "url": "https://hipaa.yale.edu/sites/default/files/files/Guidance%20Audio%20Visual%20Recording.pdf",
+        "natural_language_description": "Patient-identifying recordings or recordings containing PHI used or disclosed outside treatment, payment, or healthcare operations require written HIPAA authorization."
+      },
+      "ruleType": "purpose_authorization_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "patient"
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            "marketing",
+            "publicity",
+            "external_training",
+            "research",
+            "commercial_use"
+          ]
+        },
+        "informationType": {
+          "inferredInformationType": {
+            "anyOf": [
+              "identity",
+              "health_status"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "transmissionPrinciple": [
+            "written_authorization_required"
+          ]
+        },
+        "explanation": "Identifiable patient recording outputs outside TPO require written authorization."
+      }
+    },
+    {
+      "id": "yale_family_friend_recording_conditions",
+      "provenance": {
+        "source_name": "Yale HIPAA audio/visual recording guidance",
+        "source_type": "institutional_policy",
+        "url": "https://hipaa.yale.edu/sites/default/files/files/Guidance%20Audio%20Visual%20Recording.pdf",
+        "natural_language_description": "Family/friend recordings are allowed only if they do not interfere with care, do not capture other patients or PHI, and permission is obtained from any workforce member recorded."
+      },
+      "ruleType": "conditional_allowance",
+      "priority": "allow_if",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic"
+          ]
+        },
+        "sender": {
+          "anyOf": [
+            "patient_or_family_device"
+          ]
+        },
+        "recipient": {
+          "anyOf": [
+            "patient",
+            "caregiver"
+          ]
+        }
+      },
+      "effect": {
+        "action": "ALLOW_IF",
+        "requiredConditions": {
+          "metadata": [
+            "does_not_interfere_with_care",
+            "workforce_member_permission_if_recorded"
+          ]
+        },
+        "forbiddenConditions": {
+          "metadata": [
+            "captures_other_patients",
+            "captures_other_patient_phi"
+          ]
+        },
+        "explanation": "Patient/family recording is allowed only under narrow bystander and care constraints."
+      }
+    },
+    {
+      "id": "nih_recording_all_participants_consent",
+      "provenance": {
+        "source_name": "NIH Clinical Center recording notice",
+        "source_type": "institutional_policy",
+        "url": "https://www.cc.nih.gov/news/2021/summer/story-02",
+        "natural_language_description": "No audio, video, or photography recording of patients, visitors, or NIH staff should occur without the knowledge and consent of all involved participants."
+      },
+      "ruleType": "consent_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic",
+            "research_living_lab"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "patient",
+            "visitor",
+            "employee"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content",
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "transmissionPrinciple": [
+            "disclosed",
+            "explicit_consent"
+          ]
+        },
+        "explanation": "Recording flows require knowledge and consent of all involved participants."
+      }
+    },
+    {
+      "id": "ama_recording_notice_fields",
+      "provenance": {
+        "source_name": "AMA Code of Medical Ethics on recording patients",
+        "source_type": "professional_guidance",
+        "url": "https://code-medical-ethics.ama-assn.org/ethics-opinions/audio-or-visual-recording-patients-education-health-care",
+        "natural_language_description": "Patients should be informed of the recording purpose, intended audience, expected distribution, privacy/confidentiality risks, voluntary nature, withdrawal rights, and what happens to the recording after withdrawal."
+      },
+      "ruleType": "notice_and_consent_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "patient"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content",
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "disclosed",
+            "explicit_consent",
+            "withdrawal_available"
+          ],
+          "notice_fields": [
+            "purpose",
+            "recipient",
+            "distribution",
+            "privacy_risks",
+            "voluntariness",
+            "withdrawal_effect"
+          ]
+        },
+        "explanation": "Patient recording requires rich notice/consent fields."
+      }
+    },
+    {
+      "id": "ama_educational_recording_audience_limited",
+      "provenance": {
+        "source_name": "AMA Code of Medical Ethics on recording patients",
+        "source_type": "professional_guidance",
+        "url": "https://code-medical-ethics.ama-assn.org/ethics-opinions/audio-or-visual-recording-patients-education-health-care",
+        "natural_language_description": "Educational recordings should be limited to health-care education audiences unless the patient specifically permits broader use; recordings should be securely stored and properly destroyed like medical records."
+      },
+      "ruleType": "recipient_retention_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "hospital_or_clinic"
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            "education"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "patient"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application",
+            "retained_artifact"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "recipient": [
+            "clinician",
+            "teacher_or_school_official"
+          ],
+          "transmissionPrinciple": [
+            "recipient_limited",
+            "secure_storage",
+            "limited_retention"
+          ]
+        },
+        "unless": {
+          "transmissionPrinciple": [
+            "explicit_consent"
+          ],
+          "metadata": [
+            "broader_audience_permitted"
+          ]
+        },
+        "explanation": "Educational patient recordings require limited audience, secure storage, and proper destruction."
+      }
+    },
+    {
+      "id": "uoregon_research_recording_explicit_consent",
+      "provenance": {
+        "source_name": "University of Oregon human-subjects audio/video/photo guidance",
+        "source_type": "institutional_policy",
+        "url": "https://research.uoregon.edu/manage/integrity-compliance/human-subjects-research/guidance-library/audio-video-photography",
+        "natural_language_description": "Researchers must obtain explicit consent for audio/video recording or photography; passive or opt-out consent is generally not legally valid unless informed consent is waived."
+      },
+      "ruleType": "research_consent_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "research_living_lab"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content",
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "raw_input",
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "transmissionPrinciple": [
+            "explicit_consent"
+          ],
+          "metadata": [
+            "irb_waiver_of_informed_consent"
+          ]
+        },
+        "explanation": "Research recording flows require explicit consent or an IRB waiver."
+      }
+    },
+    {
+      "id": "uoregon_future_use_requires_consent",
+      "provenance": {
+        "source_name": "University of Oregon human-subjects audio/video/photo guidance",
+        "source_type": "institutional_policy",
+        "url": "https://research.uoregon.edu/manage/integrity-compliance/human-subjects-research/guidance-library/audio-video-photography",
+        "natural_language_description": "Future use of recordings or photographs, including future research, education, or training, requires participant consent and must be clearly explained."
+      },
+      "ruleType": "secondary_use_constraint",
+      "priority": "hard_deny",
+      "match": {
+        "context": {
+          "anyOf": [
+            "research_living_lab"
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            "research",
+            "education",
+            "training"
+          ]
+        },
+        "metadata": {
+          "anyOf": [
+            "future_use"
+          ]
+        }
+      },
+      "effect": {
+        "action": "DENY_FLOW",
+        "appliesToPipelineStages": [
+          "output_to_application",
+          "retained_artifact"
+        ],
+        "unless": {
+          "transmissionPrinciple": [
+            "explicit_consent",
+            "purpose_limited"
+          ],
+          "notice_fields": [
+            "future_use_purpose"
+          ]
+        },
+        "explanation": "Future/secondary use of recordings is rejected without specific consent and explanation."
+      }
+    },
+    {
+      "id": "uoregon_bystander_and_nonface_identifiers",
+      "provenance": {
+        "source_name": "University of Oregon human-subjects audio/video/photo guidance",
+        "source_type": "institutional_policy",
+        "url": "https://research.uoregon.edu/manage/integrity-compliance/human-subjects-research/guidance-library/audio-video-photography",
+        "natural_language_description": "Researchers should account for non-face identifiers such as bodies, homes, workplaces, and background audio; group recordings should respect or exclude non-consenting people."
+      },
+      "ruleType": "bystander_identifier_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "research_living_lab"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            "bystander",
+            "research_participant"
+          ]
+        },
+        "sensingDataMetadata": {
+          "contentType": {
+            "anyOf": [
+              "image_content",
+              "video_content",
+              "audio_content"
+            ]
+          }
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_TRANSFORMATION",
+        "requiredTransformations": [
+          "identity_removed",
+          "field_of_view_minimized",
+          "speech_content_removed"
+        ],
+        "bystanderHandling": "exclude_nonconsenting_people_or_obtain_consent",
+        "explanation": "Research recordings should handle non-face identifiers and bystanders, not just faces."
+      }
+    },
+    {
+      "id": "uoregon_protocol_metadata_required",
+      "provenance": {
+        "source_name": "University of Oregon human-subjects audio/video/photo guidance",
+        "source_type": "institutional_policy",
+        "url": "https://research.uoregon.edu/manage/integrity-compliance/human-subjects-research/guidance-library/audio-video-photography",
+        "natural_language_description": "Protocols and consent should explain the recording purpose, technology, identifiable information captured or retained, and how data will be stored, secured, used, and destroyed."
+      },
+      "ruleType": "provenance_notice_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "context": {
+          "anyOf": [
+            "research_living_lab"
+          ]
+        },
+        "sender": {
+          "anyOf": [
+            "research_sensor_system"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "notice_fields": [
+            "purpose",
+            "technology",
+            "identifiable_information",
+            "retention",
+            "storage",
+            "security",
+            "use",
+            "destruction"
+          ],
+          "transmissionPrinciple": [
+            "disclosed",
+            "purpose_limited",
+            "secure_storage",
+            "limited_retention"
+          ]
+        },
+        "explanation": "Research sensing requires protocol/consent metadata covering purpose, technology, identifiable data, storage, security, use, and destruction."
+      }
+    },
+    {
+      "id": "template_low_stakes_automation_minimized_output",
+      "provenance": {
+        "source_name": "Created norm template",
+        "source_type": "created_template",
+        "url": "created://norm-template/low-stakes-automation",
+        "natural_language_description": "For low-stakes automation, prefer binary occupancy or aggregate counts and prohibit identity, speech content, and individual trajectories."
+      },
+      "ruleType": "preference_rule",
+      "priority": "soft_preference",
+      "match": {
+        "purpose": {
+          "anyOf": [
+            "energy_management"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application"
+          ]
+        }
+      },
+      "effect": {
+        "action": "PREFER",
+        "preferredConditions": {
+          "informationType.interpretedObservation": [
+            "room_occupied",
+            "occupancy_count"
+          ],
+          "transmissionPrinciple": [
+            "aggregate_only",
+            "data_minimized",
+            "local_processing"
+          ]
+        },
+        "avoidConditions": {
+          "informationType.inferredInformationType": [
+            "identity",
+            "trajectory"
+          ],
+          "informationType.sensorPrimitive": [
+            "speech_audio",
+            "audio_waveform",
+            "video_stream"
+          ]
+        },
+        "explanation": "Rank minimized occupancy outputs above revealing raw or individual-level outputs for low-stakes automation."
+      }
+    },
+    {
+      "id": "template_safety_pose_event_local_limited",
+      "provenance": {
+        "source_name": "Created norm template",
+        "source_type": "created_template",
+        "url": "created://norm-template/safety-monitoring",
+        "natural_language_description": "For safety monitoring, allow pose or event labels under local processing and limited retention."
+      },
+      "ruleType": "conditional_allowance",
+      "priority": "allow_if",
+      "match": {
+        "purpose": {
+          "anyOf": [
+            "safety_monitoring",
+            "fall_detection"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application"
+          ]
+        }
+      },
+      "effect": {
+        "action": "ALLOW_IF",
+        "requiredConditions": {
+          "informationType.interpretedObservation": [
+            "pose_keypoints",
+            "activity_label"
+          ],
+          "informationType.inferredInformationType": [
+            "fall_event"
+          ],
+          "transmissionPrinciple": [
+            "local_processing",
+            "limited_retention",
+            "data_minimized"
+          ]
+        },
+        "forbiddenConditions": {
+          "informationType.inferredInformationType": [
+            "identity"
+          ],
+          "informationType.sensorPrimitive": [
+            "video_stream",
+            "audio_waveform",
+            "speech_audio"
+          ]
+        },
+        "explanation": "Safety-monitoring outputs should be pose/event-level, local, minimized, and retention-limited."
+      }
+    },
+    {
+      "id": "smartpriv_semantic_minimized_output_classifier",
+      "provenance": {
+        "source_name": "SmartPriv flexible-output vocabulary",
+        "source_type": "system_design",
+        "natural_language_description": "Semantic outputs without raw image/audio payload should be tagged as minimized semantic flows for downstream preferences and reporting."
+      },
+      "ruleType": "classification_rule",
+      "priority": "classification",
+      "match": {
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application"
+          ]
+        },
+        "transmissionPrinciple": {
+          "anyOf": [
+            "semantic_minimization",
+            "raw_pixels_removed",
+            "raw_audio_removed",
+            "no_image_payload",
+            "no_audio_payload",
+            "aggregate_only"
+          ]
+        }
+      },
+      "effect": {
+        "action": "CLASSIFY_AS",
+        "tags": [
+          "semantic_minimized_flow"
+        ],
+        "explanation": "Tags flexible semantic outputs so the selector can distinguish them from raw/media-like outputs."
+      }
+    },
+    {
+      "id": "smartpriv_final_task_decision_requires_explicit_contract",
+      "provenance": {
+        "source_name": "SmartPriv flexible-output vocabulary",
+        "source_type": "system_design",
+        "natural_language_description": "Outputs that are final or near-final application decisions should only be emitted when the app explicitly accepts that boundary."
+      },
+      "ruleType": "boundary_constraint",
+      "priority": "required_obligation",
+      "match": {
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application"
+          ]
+        },
+        "transmissionPrinciple": {
+          "anyOf": [
+            "final_task_decision"
+          ]
+        }
+      },
+      "effect": {
+        "action": "REQUIRE_CONDITION",
+        "requiredConditions": {
+          "transmissionPrinciple": [
+            "explicit_app_contract",
+            "utility_validated"
+          ]
+        },
+        "explanation": "Prevents the hub from silently becoming the downstream application unless this representation is explicitly contracted and validated."
+      }
+    },
+    {
+      "id": "smartpriv_semantic_outputs_prefer_limited_retention",
+      "provenance": {
+        "source_name": "SmartPriv flexible-output vocabulary",
+        "source_type": "system_design",
+        "natural_language_description": "Even minimized semantic outputs may reveal routines when retained, so prefer limited retention and recipient limits."
+      },
+      "ruleType": "soft_constraint",
+      "priority": "soft_preference",
+      "match": {
+        "tags": {
+          "anyOf": [
+            "semantic_minimized_flow"
+          ]
+        },
+        "pipelineStage": {
+          "anyOf": [
+            "output_to_application",
+            "retained_artifact"
+          ]
+        }
+      },
+      "effect": {
+        "action": "PREFER",
+        "preferredConditions": {
+          "transmissionPrinciple": [
+            "limited_retention",
+            "recipient_limited",
+            "purpose_limited"
+          ]
+        },
+        "explanation": "Semantic minimization should still be paired with bounded retention and recipients."
+      }
+    }
+  ]
+}

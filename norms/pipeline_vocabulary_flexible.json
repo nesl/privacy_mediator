@@ -1,0 +1,2173 @@
+{
+  "schema_version": "application_pipeline_vocab_v1_flexible_outputs",
+  "created_for": "privacy_preprocessing_hub_application_pipelines",
+  "design_notes": [
+    "This vocabulary is separate from the CI policy vocabulary. It describes executable/typed preprocessing pipelines, operator interfaces, data schemas, and metadata needed for composition.",
+    "The core abstraction is a dataflow graph with typed ports. Ports advertise caps: media caps for stream-like data, semantic caps for derived observations/events, and policy/control caps for non-payload decisions.",
+    "The design borrows GStreamer-style caps/ports for internal compatibility, WoT-style properties/actions/events for application-facing affordances, SOSA/SSN-style sensor/observation terms for sensing records, DPV terms for privacy/processing measures, ODRL-like terms for permissions/prohibitions/duties, and Peekaboo-style fixed chainable operators/manifests.",
+    "Each operator declares input caps, output caps, parameters, transformation effects, residual disclosure effects, and utility capabilities. Pipeline composition is valid only when each downstream input cap is compatible with an upstream output cap or an explicit adapter exists.",
+    "Residual disclosure annotations are defaults/prior metadata; they should be calibrated by empirical leakage probes when data is available.",
+    "This revision adds synchronized AV-sample caps and component-wise AV transforms for fixed-interface multimodal downstream applications such as YouHome ADL.",
+    "Flexible-output revision: adds canonical cap aliases, representation roles, abstraction levels, adapter semantics, and additional primitive cap families for multi-output app contracts."
+  ],
+  "source_registry": {
+    "gstreamer": {
+      "description": "Used as inspiration for dataflow elements, pads/ports, media caps, and caps negotiation.",
+      "examples": [
+        "Element",
+        "Pad",
+        "Caps",
+        "video/x-raw",
+        "audio/x-raw",
+        "application/x-*"
+      ],
+      "url": "https://gstreamer.freedesktop.org/documentation/"
+    },
+    "wot": {
+      "description": "Used as inspiration for app-facing affordances: properties, actions, events, forms, and data schemas.",
+      "examples": [
+        "Thing",
+        "PropertyAffordance",
+        "ActionAffordance",
+        "EventAffordance",
+        "forms"
+      ],
+      "url": "https://www.w3.org/TR/wot-thing-description11/"
+    },
+    "sosa_ssn": {
+      "description": "Used as inspiration for sensors, observations, observable properties, and procedures.",
+      "examples": [
+        "Sensor",
+        "Observation",
+        "ObservableProperty",
+        "Procedure",
+        "Result"
+      ],
+      "url": "https://www.w3.org/TR/vocab-ssn/"
+    },
+    "dpv": {
+      "description": "Used as inspiration for privacy processing, personal data categories, technical/organizational measures, aggregation, redaction, de-identification, and processing context.",
+      "examples": [
+        "PersonalData",
+        "Processing",
+        "DataRedaction",
+        "Deidentification",
+        "Aggregation"
+      ],
+      "url": "https://w3id.org/dpv/"
+    },
+    "odrl": {
+      "description": "Used as inspiration for policy effects over data assets: permissions, prohibitions, and duties/obligations.",
+      "examples": [
+        "Policy",
+        "Permission",
+        "Prohibition",
+        "Duty",
+        "Action"
+      ],
+      "url": "https://www.w3.org/TR/odrl-model/"
+    },
+    "peekaboo": {
+      "description": "Used as inspiration for fixed, chainable hub operators and application manifests declaring data collection and preprocessing behavior.",
+      "examples": [
+        "chainable operators",
+        "application manifest",
+        "preprocessing hub"
+      ],
+      "url": "https://arxiv.org/abs/2204.04540"
+    },
+    "smartpriv": {
+      "description": "Created extension terms for this smart-space privacy hub when no direct standard term exists."
+    }
+  },
+  "core_model_terms": {
+    "pipeline": {
+      "source": "gstreamer + peekaboo + smartpriv",
+      "meaning": "A directed dataflow graph of operators from sensor sources to application-facing outputs."
+    },
+    "operator": {
+      "source": "gstreamer + peekaboo",
+      "meaning": "A reusable processing element with typed input/output ports and metadata effects."
+    },
+    "port": {
+      "source": "gstreamer",
+      "meaning": "A named input or output boundary of an operator. Similar to a GStreamer pad."
+    },
+    "caps": {
+      "source": "gstreamer",
+      "meaning": "A machine-readable description of what kind of data can travel through a port."
+    },
+    "capsNegotiation": {
+      "source": "gstreamer",
+      "meaning": "Compatibility check that determines whether an upstream output cap can satisfy a downstream input cap."
+    },
+    "affordance": {
+      "source": "wot",
+      "meaning": "Application-facing capability exposed as a property, action, or event."
+    },
+    "observation": {
+      "source": "sosa_ssn",
+      "meaning": "A result of sensing or derivation about an observable property."
+    },
+    "policyEffect": {
+      "source": "odrl + smartpriv",
+      "meaning": "An allow, deny, duty, or review outcome that constrains whether a flow may be executed or exported."
+    }
+  },
+  "capability_namespaces": {
+    "media": {
+      "source": "gstreamer",
+      "description": "Stream-like raw or transformed media caps.",
+      "terms": [
+        {
+          "cap": "video/x-raw",
+          "source": "gstreamer",
+          "meaning": "Uncompressed video frames."
+        },
+        {
+          "cap": "audio/x-raw",
+          "source": "gstreamer",
+          "meaning": "Uncompressed audio samples."
+        },
+        {
+          "cap": "image/x-frame",
+          "source": "smartpriv + gstreamer-style",
+          "meaning": "Single image frame as a bounded item."
+        },
+        {
+          "cap": "video/x-redacted",
+          "source": "smartpriv + gstreamer-style",
+          "meaning": "Video-like output with redaction metadata such as face_blurred or screen_masked."
+        },
+        {
+          "cap": "audio/x-filtered",
+          "source": "smartpriv + gstreamer-style",
+          "meaning": "Audio-like output after filtering/removal of selected content."
+        },
+        {
+          "cap": "video/x-silhouette",
+          "source": "smartpriv + gstreamer-style",
+          "meaning": "Video-like silhouette/mask stream with raw texture, face, and clothing detail removed.",
+          "aliases": [
+            "application/x-silhouette-video"
+          ],
+          "representationRole": "format_preserving_redaction",
+          "abstraction_level": 1
+        },
+        {
+          "cap": "image/x-silhouette",
+          "source": "smartpriv + gstreamer-style",
+          "meaning": "Single silhouette/mask frame with raw texture removed.",
+          "aliases": [
+            "application/x-silhouette-frame"
+          ],
+          "representationRole": "format_preserving_redaction",
+          "abstraction_level": 1
+        }
+      ]
+    },
+    "semantic": {
+      "source": "wot + sosa_ssn + smartpriv",
+      "description": "Derived observations, events, and semantic representations.",
+      "terms": [
+        {
+          "cap": "application/x-detections",
+          "source": "smartpriv",
+          "meaning": "Detected objects/persons/faces/screens as classes, scores, and regions."
+        },
+        {
+          "cap": "application/x-region-set",
+          "source": "smartpriv",
+          "meaning": "Regions of interest or regions to suppress."
+        },
+        {
+          "cap": "application/x-pose-keypoints",
+          "source": "smartpriv",
+          "meaning": "Human skeletal keypoints and confidence scores."
+        },
+        {
+          "cap": "application/x-visible-text-regions",
+          "source": "smartpriv",
+          "meaning": "OCR/screen/document regions and optional recognized text.",
+          "aliases": [
+            "application/x-text-regions"
+          ],
+          "representationRole": "semantic_primitive",
+          "abstraction_level": 2
+        },
+        {
+          "cap": "application/x-decibel-level",
+          "source": "smartpriv + policy",
+          "meaning": "Sound pressure or noise level over a window, without waveform content."
+        },
+        {
+          "cap": "application/x-sound-event",
+          "source": "smartpriv",
+          "meaning": "Audio event label such as alarm, glass_break, baby_cry, knock, speech_present.",
+          "aliases": [
+            "application/x-sound-event-label"
+          ],
+          "representationRole": "semantic_primitive",
+          "abstraction_level": 2
+        },
+        {
+          "cap": "application/x-command-intent",
+          "source": "wot + smartpriv",
+          "meaning": "Narrow voice-command intent or keyword flag."
+        },
+        {
+          "cap": "application/x-occupancy",
+          "source": "wot + smartpriv",
+          "meaning": "Binary occupancy or room-level count.",
+          "aliases": [
+            "application/x-occupancy-count",
+            "application/x-binary-occupancy",
+            "application/x-count"
+          ],
+          "representationRole": "semantic_primitive",
+          "abstraction_level": 3
+        },
+        {
+          "cap": "application/x-activity-event",
+          "source": "smartpriv",
+          "meaning": "Activity or safety/security event label such as fall_event or person_at_door.",
+          "aliases": [
+            "application/x-activity-label",
+            "application/x-safety-event",
+            "application/x-security-event"
+          ],
+          "representationRole": "semantic_primitive_or_final_decision",
+          "abstraction_level": 4
+        },
+        {
+          "cap": "application/x-aggregate",
+          "source": "dpv + smartpriv",
+          "meaning": "Spatial/temporal/category aggregate derived from lower-level observations."
+        },
+        {
+          "cap": "application/x-youhome-av-sample",
+          "source": "smartpriv + gstreamer-style",
+          "meaning": "A synchronized audio/video sample or manifest item containing image/video frames and audio waveform references for a fixed-interface AV downstream model."
+        },
+        {
+          "cap": "application/x-motion-features",
+          "source": "smartpriv",
+          "meaning": "Low-dimensional motion features derived from pose, silhouettes, or frame differences.",
+          "aliases": [
+            "application/x-pose-motion-features",
+            "application/x-normalized-motion-features"
+          ],
+          "representationRole": "semantic_primitive",
+          "abstraction_level": 2
+        },
+        {
+          "cap": "application/x-multimodal-primitives",
+          "source": "smartpriv",
+          "meaning": "Fused reusable primitives from pose, detections, occupancy, and/or sound events, excluding final ADL/safety decisions unless explicitly marked.",
+          "aliases": [
+            "application/x-adl-primitives",
+            "application/x-fused-primitives"
+          ],
+          "representationRole": "semantic_primitive",
+          "abstraction_level": 3
+        },
+        {
+          "cap": "application/x-adapter-output",
+          "source": "smartpriv + wot",
+          "meaning": "App-facing payload produced by a declared adapter with traceable source representation and utility validation metadata.",
+          "aliases": [
+            "application-defined"
+          ],
+          "representationRole": "adapter_packaged_output"
+        }
+      ]
+    },
+    "control": {
+      "source": "odrl + smartpriv",
+      "description": "Non-payload caps used by policy gates and decision operators.",
+      "terms": [
+        {
+          "cap": "application/x-policy-decision",
+          "source": "odrl + smartpriv",
+          "meaning": "allow, deny, require_condition, require_review, or no_compromise decision."
+        },
+        {
+          "cap": "application/x-obligation-set",
+          "source": "odrl + smartpriv",
+          "meaning": "Required conditions such as disclosed, local_processing, limited_retention, or authorized_personnel_only."
+        },
+        {
+          "cap": "application/x-audit-record",
+          "source": "dpv + odrl + smartpriv",
+          "meaning": "Decision trace for audit/explanation."
+        },
+        {
+          "cap": "application/x-utility-validation",
+          "source": "smartpriv",
+          "meaning": "Metadata stating how a representation satisfies an app utility contract."
+        },
+        {
+          "cap": "application/x-representation-frontier",
+          "source": "smartpriv",
+          "meaning": "Frontier record describing candidate utility/privacy tradeoffs."
+        }
+      ]
+    }
+  },
+  "cap_fields": {
+    "common": {
+      "source": "gstreamer + smartpriv",
+      "fields": [
+        {
+          "name": "media_type",
+          "meaning": "Primary cap string, e.g. video/x-raw or application/x-occupancy."
+        },
+        {
+          "name": "schema",
+          "meaning": "JSON schema or named schema for semantic outputs."
+        },
+        {
+          "name": "unit",
+          "meaning": "Measurement unit such as people, dB, confidence, seconds."
+        },
+        {
+          "name": "timestamped",
+          "meaning": "Whether items carry timestamps."
+        },
+        {
+          "name": "spatial_scope",
+          "meaning": "frame, region, room, zone, home, building, outdoor_area."
+        },
+        {
+          "name": "temporal_scope",
+          "meaning": "instant, window, event, aggregate."
+        },
+        {
+          "name": "subject_granularity",
+          "meaning": "individual, group, aggregate, none."
+        },
+        {
+          "name": "retains_raw_payload",
+          "meaning": "Whether raw pixel/audio/text payload remains."
+        },
+        {
+          "name": "canonical_cap",
+          "meaning": "Canonical cap after alias normalization."
+        },
+        {
+          "name": "cap_aliases",
+          "meaning": "Alternative caps/schemas that should normalize to the same canonical representation."
+        },
+        {
+          "name": "representationRole",
+          "meaning": "raw_payload, format_preserving_redaction, semantic_primitive, aggregate_summary, adapter_packaged_output, or final_task_decision_boundary."
+        },
+        {
+          "name": "abstraction_level",
+          "meaning": "Integer or named level in representation_lattice."
+        },
+        {
+          "name": "retains_image_payload",
+          "meaning": "Whether image/video pixels remain exportable."
+        },
+        {
+          "name": "retains_audio_payload",
+          "meaning": "Whether replayable audio waveform remains exportable."
+        },
+        {
+          "name": "is_final_task_decision",
+          "meaning": "Whether the output is near the app final answer rather than a reusable primitive."
+        },
+        {
+          "name": "utility_validation",
+          "meaning": "Declared or measured evidence that this representation satisfies an app request."
+        },
+        {
+          "name": "adapter_required",
+          "meaning": "Whether the app contract requires a schema adapter to consume this output."
+        }
+      ]
+    },
+    "video": {
+      "source": "gstreamer",
+      "fields": [
+        {
+          "name": "format",
+          "examples": [
+            "RGB",
+            "BGR",
+            "GRAY8"
+          ]
+        },
+        {
+          "name": "width"
+        },
+        {
+          "name": "height"
+        },
+        {
+          "name": "framerate"
+        },
+        {
+          "name": "colorimetry"
+        },
+        {
+          "name": "interlace_mode"
+        }
+      ]
+    },
+    "audio": {
+      "source": "gstreamer",
+      "fields": [
+        {
+          "name": "format",
+          "examples": [
+            "S16LE",
+            "F32LE"
+          ]
+        },
+        {
+          "name": "rate"
+        },
+        {
+          "name": "channels"
+        },
+        {
+          "name": "layout"
+        }
+      ]
+    },
+    "privacy_annotations": {
+      "source": "dpv + smartpriv",
+      "fields": [
+        {
+          "name": "transformations_applied",
+          "examples": [
+            "face_blur",
+            "screen_mask",
+            "speech_content_removal",
+            "aggregate"
+          ]
+        },
+        {
+          "name": "residual_attributes",
+          "examples": [
+            "identity",
+            "face",
+            "body_shape",
+            "clothing",
+            "gait",
+            "speech_content",
+            "speaker_identity",
+            "activity",
+            "location",
+            "trajectory",
+            "co_presence",
+            "visible_text",
+            "aggregate_presence"
+          ]
+        },
+        {
+          "name": "disclosure_delta",
+          "examples": [
+            "remove",
+            "reduce",
+            "preserve",
+            "create",
+            "abstract"
+          ]
+        },
+        {
+          "name": "probe_evidence",
+          "meaning": "Leakage probes used to calibrate disclosure estimate."
+        }
+      ]
+    }
+  },
+  "operator_interface_schema": {
+    "required_fields": [
+      "operator_id",
+      "operator_class",
+      "display_name",
+      "source_basis",
+      "input_ports",
+      "output_ports",
+      "parameters",
+      "utility_capabilities",
+      "transformation_effects",
+      "residual_disclosure_effects"
+    ],
+    "field_definitions": {
+      "operator_id": "Stable identifier.",
+      "operator_class": "One of the operator_classes terms below.",
+      "display_name": "Human readable name.",
+      "source_basis": "Where the interface idea comes from.",
+      "input_ports": "List of typed input ports with accepted caps.",
+      "output_ports": "List of typed output ports with produced caps.",
+      "parameters": "Operator-specific parameter names and types.",
+      "utility_capabilities": "Application capabilities this operator may support.",
+      "transformation_effects": "Semantic processing/transformation tags applied by this operator.",
+      "residual_disclosure_effects": "Default residual disclosure deltas over privacy attributes.",
+      "composition_notes": "How to combine this operator with others.",
+      "probe_hooks": "Empirical leakage/utility probes relevant to validating the operator."
+    }
+  },
+  "operator_classes": [
+    {
+      "operator_class": "source",
+      "category": "dataflow_utility",
+      "source": "sosa_ssn + gstreamer + peekaboo",
+      "display_name": "Source",
+      "description": "Introduces a sensor/device/application stream into the pipeline.",
+      "input_caps": [],
+      "output_caps": [
+        "video/x-raw",
+        "audio/x-raw",
+        "application/x-observation"
+      ],
+      "parameters": [
+        "sensor_id",
+        "sensingDevice",
+        "space",
+        "context",
+        "collection_mode"
+      ],
+      "utility_capabilities": [
+        "sensing_input"
+      ],
+      "transformation_effects": [],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "identity",
+          "face",
+          "body_shape",
+          "clothing",
+          "gait",
+          "speech_content",
+          "speaker_identity",
+          "activity",
+          "location",
+          "trajectory",
+          "co_presence",
+          "visible_text",
+          "aggregate_presence"
+        ]
+      },
+      "source_notes": "SOSA/SSN provides Sensor/Observation terms; GStreamer provides source elements; Peekaboo uses provider-like inputs."
+    },
+    {
+      "operator_class": "sample",
+      "category": "dataflow_utility",
+      "source": "gstreamer + peekaboo + smartpriv",
+      "display_name": "Sample",
+      "description": "Reduces continuous streams into periodic items.",
+      "input_caps": [
+        "video/x-raw",
+        "audio/x-raw",
+        "application/x-observation"
+      ],
+      "output_caps": [
+        "image/x-frame",
+        "audio/x-raw",
+        "application/x-observation"
+      ],
+      "parameters": [
+        "sample_period_ms",
+        "max_rate_hz",
+        "jitter_policy"
+      ],
+      "utility_capabilities": [
+        "periodic_monitoring",
+        "low_rate_observation"
+      ],
+      "transformation_effects": [
+        "temporal_downsampling"
+      ],
+      "default_residual_disclosure_effects": {
+        "reduce": [
+          "trajectory",
+          "activity",
+          "speech_content",
+          "co_presence"
+        ],
+        "preserve": [
+          "identity",
+          "face",
+          "body_shape",
+          "speaker_identity",
+          "visible_text",
+          "location"
+        ]
+      },
+      "probe_hooks": [
+        "routine_inference_probe",
+        "trajectory_reconstruction_probe"
+      ]
+    },
+    {
+      "operator_class": "window",
+      "category": "dataflow_utility",
+      "source": "gstreamer + smartpriv",
+      "display_name": "Window",
+      "description": "Groups stream items into bounded time windows.",
+      "input_caps": [
+        "video/x-raw",
+        "audio/x-raw",
+        "image/x-frame",
+        "application/x-observation"
+      ],
+      "output_caps": [
+        "video/x-raw",
+        "audio/x-raw",
+        "application/x-windowed-observation"
+      ],
+      "parameters": [
+        "window_ms",
+        "stride_ms",
+        "aggregation_policy"
+      ],
+      "utility_capabilities": [
+        "event_detection",
+        "audio_classification",
+        "activity_detection"
+      ],
+      "transformation_effects": [
+        "temporal_bounding"
+      ],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "activity",
+          "speech_content",
+          "speaker_identity",
+          "trajectory"
+        ],
+        "reduce": []
+      }
+    },
+    {
+      "operator_class": "trigger_gate",
+      "category": "dataflow_utility",
+      "source": "odrl + gstreamer + smartpriv",
+      "display_name": "Trigger/Gate",
+      "description": "Passes data only when a condition is true.",
+      "input_caps": [
+        "*"
+      ],
+      "output_caps": [
+        "same_as_input"
+      ],
+      "parameters": [
+        "condition",
+        "pre_event_buffer_ms",
+        "post_event_buffer_ms",
+        "drop_on_false"
+      ],
+      "utility_capabilities": [
+        "event_triggered_collection",
+        "policy_enforcement"
+      ],
+      "transformation_effects": [
+        "conditional_release"
+      ],
+      "default_residual_disclosure_effects": {
+        "reduce": [
+          "trajectory",
+          "co_presence",
+          "household_routine"
+        ],
+        "preserve": [
+          "attributes_of_passed_items"
+        ]
+      },
+      "probe_hooks": [
+        "trigger_false_positive_rate",
+        "trigger_false_negative_rate"
+      ]
+    },
+    {
+      "operator_class": "join_fuse",
+      "category": "dataflow_utility",
+      "source": "peekaboo + gstreamer + smartpriv",
+      "display_name": "Join/Fuse",
+      "description": "Combines multiple streams/events into a fused record or event.",
+      "input_caps": [
+        "application/x-observation",
+        "application/x-detections",
+        "application/x-sound-event",
+        "application/x-occupancy"
+      ],
+      "output_caps": [
+        "application/x-activity-event",
+        "application/x-aggregate"
+      ],
+      "parameters": [
+        "join_type",
+        "time_tolerance_ms",
+        "spatial_tolerance",
+        "required_inputs"
+      ],
+      "utility_capabilities": [
+        "multisensor_event_detection",
+        "confidence_improvement"
+      ],
+      "transformation_effects": [
+        "fusion"
+      ],
+      "default_residual_disclosure_effects": {
+        "create": [
+          "co_presence",
+          "activity"
+        ],
+        "preserve": [
+          "location"
+        ],
+        "reduce": []
+      }
+    },
+    {
+      "operator_class": "route_publish",
+      "category": "dataflow_utility",
+      "source": "wot + gstreamer + peekaboo",
+      "display_name": "Route/Publish",
+      "description": "Exports selected output to an application endpoint or app-facing affordance.",
+      "input_caps": [
+        "*"
+      ],
+      "output_caps": [
+        "external_endpoint"
+      ],
+      "parameters": [
+        "recipient",
+        "endpoint",
+        "protocol",
+        "affordance_type",
+        "security"
+      ],
+      "utility_capabilities": [
+        "application_delivery"
+      ],
+      "transformation_effects": [
+        "export"
+      ],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "all_input_residual_attributes"
+        ]
+      },
+      "composition_notes": "Final output must preserve the selected candidate cap metadata so app-contract and CI output checks see the actual representation, not only external_endpoint."
+    },
+    {
+      "operator_class": "schema_adapter",
+      "category": "dataflow_utility",
+      "source": "gstreamer + wot + smartpriv",
+      "display_name": "Schema Adapter",
+      "description": "Converts between semantically equivalent schemas or packages an internal output as an app-facing property/action/event payload.",
+      "input_caps": [
+        "application/x-*",
+        "application/x-activity-event",
+        "application/x-motion-features",
+        "application/x-multimodal-primitives",
+        "application/x-occupancy",
+        "application/x-sound-event",
+        "audio/x-filtered",
+        "video/x-redacted"
+      ],
+      "output_caps": [
+        "application/x-*",
+        "application/x-adapter-output",
+        "wot/action-output",
+        "wot/event",
+        "wot/property"
+      ],
+      "parameters": [
+        "target_schema",
+        "loss_policy",
+        "unit_conversion",
+        "confidence_threshold"
+      ],
+      "utility_capabilities": [
+        "application_compatibility"
+      ],
+      "transformation_effects": [
+        "schema_conversion"
+      ],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "all_input_residual_attributes"
+        ],
+        "abstract": []
+      },
+      "composition_notes": "Adapters are allowed only for declared app-contract conversions and must not conceal a final-task-decision boundary."
+    },
+    {
+      "operator_class": "person_object_detector",
+      "category": "vision_inference",
+      "source": "smartpriv + sosa_ssn",
+      "display_name": "Person/Object Detector",
+      "description": "Produces object/person/face/screen/document detections.",
+      "input_caps": [
+        "image/x-frame",
+        "video/x-raw",
+        "video/x-redacted"
+      ],
+      "output_caps": [
+        "application/x-detections",
+        "application/x-region-set"
+      ],
+      "parameters": [
+        "classes",
+        "confidence_threshold",
+        "model_id",
+        "region_policy"
+      ],
+      "utility_capabilities": [
+        "occupancy",
+        "security_monitoring",
+        "region_redaction",
+        "object_detection"
+      ],
+      "transformation_effects": [
+        "detect"
+      ],
+      "default_residual_disclosure_effects": {
+        "create": [
+          "presence",
+          "location"
+        ],
+        "preserve": [
+          "co_presence"
+        ],
+        "reduce": [
+          "face",
+          "visible_text",
+          "speech_content"
+        ]
+      },
+      "probe_hooks": [
+        "object_detection_accuracy",
+        "face_detection_probe"
+      ]
+    },
+    {
+      "operator_class": "pose_extractor",
+      "category": "vision_inference",
+      "source": "smartpriv",
+      "display_name": "Pose Extractor",
+      "description": "Converts visual people into skeletal keypoints.",
+      "input_caps": [
+        "image/x-frame",
+        "video/x-raw",
+        "video/x-redacted"
+      ],
+      "output_caps": [
+        "application/x-pose-keypoints"
+      ],
+      "parameters": [
+        "skeleton_schema",
+        "confidence_threshold",
+        "tracking_enabled"
+      ],
+      "utility_capabilities": [
+        "fall_detection",
+        "activity_detection",
+        "movement_analysis"
+      ],
+      "transformation_effects": [
+        "extract_pose",
+        "appearance_removal"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "face",
+          "clothing",
+          "visible_text"
+        ],
+        "reduce": [
+          "identity",
+          "body_shape"
+        ],
+        "preserve": [
+          "gait",
+          "activity",
+          "location",
+          "trajectory",
+          "co_presence"
+        ]
+      },
+      "probe_hooks": [
+        "gait_reidentification_probe",
+        "action_recognition_probe"
+      ]
+    },
+    {
+      "operator_class": "ocr_screen_detector",
+      "category": "vision_inference",
+      "source": "smartpriv + dpv",
+      "display_name": "OCR/Screen Detector",
+      "description": "Detects visible text, screens, documents, whiteboards, and display regions.",
+      "input_caps": [
+        "image/x-frame",
+        "video/x-raw",
+        "video/x-redacted"
+      ],
+      "output_caps": [
+        "application/x-visible-text-regions",
+        "application/x-region-set"
+      ],
+      "parameters": [
+        "detect_text",
+        "detect_screens",
+        "return_text",
+        "confidence_threshold"
+      ],
+      "utility_capabilities": [
+        "screen_redaction",
+        "document_redaction",
+        "workspace_minimization"
+      ],
+      "transformation_effects": [
+        "detect_visible_text",
+        "detect_screen_content"
+      ],
+      "default_residual_disclosure_effects": {
+        "create": [
+          "visible_text"
+        ],
+        "preserve": [
+          "location"
+        ]
+      },
+      "probe_hooks": [
+        "ocr_leakage_probe"
+      ]
+    },
+    {
+      "operator_class": "audio_level_extractor",
+      "category": "audio_inference",
+      "source": "smartpriv + policy + sosa_ssn",
+      "display_name": "Audio Level Extractor",
+      "description": "Computes decibel level and duration without exporting waveform.",
+      "input_caps": [
+        "audio/x-raw"
+      ],
+      "output_caps": [
+        "application/x-decibel-level"
+      ],
+      "parameters": [
+        "window_ms",
+        "weighting",
+        "statistic"
+      ],
+      "utility_capabilities": [
+        "noise_monitoring"
+      ],
+      "transformation_effects": [
+        "extract_level",
+        "remove_waveform"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "speech_content",
+          "speaker_identity"
+        ],
+        "reduce": [
+          "activity",
+          "co_presence"
+        ],
+        "preserve": [
+          "aggregate_presence"
+        ]
+      },
+      "probe_hooks": [
+        "asr_probe",
+        "speaker_id_probe"
+      ]
+    },
+    {
+      "operator_class": "speech_sound_classifier",
+      "category": "audio_inference",
+      "source": "smartpriv",
+      "display_name": "Speech/Sound Classifier",
+      "description": "Classifies audio windows as speech present or as sound-event categories.",
+      "input_caps": [
+        "audio/x-raw",
+        "audio/x-filtered"
+      ],
+      "output_caps": [
+        "application/x-sound-event"
+      ],
+      "parameters": [
+        "classes",
+        "confidence_threshold",
+        "model_id"
+      ],
+      "utility_capabilities": [
+        "audio_safety_monitoring",
+        "speech_presence_detection",
+        "sound_event_detection"
+      ],
+      "transformation_effects": [
+        "classify_sound"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "speech_content",
+          "speaker_identity"
+        ],
+        "preserve": [
+          "activity",
+          "aggregate_presence"
+        ],
+        "create": [
+          "co_presence"
+        ]
+      },
+      "probe_hooks": [
+        "sound_event_f1",
+        "asr_probe",
+        "speaker_id_probe"
+      ]
+    },
+    {
+      "operator_class": "keyword_intent_extractor",
+      "category": "audio_inference",
+      "source": "wot + smartpriv",
+      "display_name": "Keyword/Intent Extractor",
+      "description": "Maps speech to a narrow command intent or keyword flag.",
+      "input_caps": [
+        "audio/x-raw",
+        "application/x-transcript"
+      ],
+      "output_caps": [
+        "application/x-command-intent"
+      ],
+      "parameters": [
+        "intent_schema",
+        "wake_words",
+        "confidence_threshold",
+        "transcript_retained"
+      ],
+      "utility_capabilities": [
+        "voice_command"
+      ],
+      "transformation_effects": [
+        "intent_extraction",
+        "semantic_minimization"
+      ],
+      "default_residual_disclosure_effects": {
+        "reduce": [
+          "speech_content",
+          "speaker_identity"
+        ],
+        "preserve": [
+          "activity"
+        ],
+        "create": [
+          "aggregate_presence"
+        ]
+      },
+      "probe_hooks": [
+        "command_intent_accuracy",
+        "asr_probe"
+      ]
+    },
+    {
+      "operator_class": "region_select_crop",
+      "category": "privacy_transformation",
+      "source": "gstreamer + dpv + peekaboo + smartpriv",
+      "display_name": "Region Select/Crop",
+      "description": "Keeps only selected regions or masks everything outside selected regions.",
+      "input_caps": [
+        "image/x-frame",
+        "video/x-raw",
+        "application/x-region-set"
+      ],
+      "output_caps": [
+        "image/x-frame",
+        "video/x-redacted"
+      ],
+      "parameters": [
+        "selection_policy",
+        "padding_px",
+        "coordinate_space"
+      ],
+      "utility_capabilities": [
+        "field_of_view_minimization",
+        "region_specific_monitoring"
+      ],
+      "transformation_effects": [
+        "field_of_view_minimized",
+        "spatial_minimization"
+      ],
+      "default_residual_disclosure_effects": {
+        "reduce": [
+          "location",
+          "co_presence",
+          "visible_text",
+          "activity"
+        ],
+        "preserve": [
+          "attributes_inside_selected_region"
+        ]
+      },
+      "probe_hooks": [
+        "background_leakage_probe",
+        "object_detection_probe"
+      ]
+    },
+    {
+      "operator_class": "region_mask_blur",
+      "category": "privacy_transformation",
+      "source": "gstreamer + dpv + smartpriv",
+      "display_name": "Region Mask/Blur",
+      "description": "Applies blur, pixelation, masking, or removal to selected regions.",
+      "input_caps": [
+        "image/x-frame",
+        "video/x-raw",
+        "application/x-region-set"
+      ],
+      "output_caps": [
+        "image/x-frame",
+        "video/x-redacted"
+      ],
+      "parameters": [
+        "mask_policy",
+        "blur_radius",
+        "fill_mode",
+        "target_regions"
+      ],
+      "utility_capabilities": [
+        "identity_redaction",
+        "screen_redaction",
+        "bystander_redaction",
+        "format_preserving_privacy"
+      ],
+      "transformation_effects": [
+        "face_blurred",
+        "body_blurred",
+        "screen_content_removed",
+        "identity_removed"
+      ],
+      "default_residual_disclosure_effects": {
+        "reduce": [
+          "face",
+          "identity",
+          "visible_text",
+          "body_shape"
+        ],
+        "preserve": [
+          "clothing",
+          "gait",
+          "activity",
+          "location",
+          "trajectory",
+          "co_presence"
+        ]
+      },
+      "probe_hooks": [
+        "face_recognition_probe",
+        "ocr_leakage_probe",
+        "person_reid_probe"
+      ]
+    },
+    {
+      "operator_class": "speech_content_removal",
+      "category": "privacy_transformation",
+      "source": "dpv + smartpriv",
+      "display_name": "Speech Content Removal",
+      "description": "Removes or suppresses intelligible speech from audio or transcript outputs.",
+      "input_caps": [
+        "audio/x-raw",
+        "application/x-transcript"
+      ],
+      "output_caps": [
+        "audio/x-filtered",
+        "application/x-command-intent",
+        "application/x-redacted-transcript"
+      ],
+      "parameters": [
+        "mode",
+        "redaction_policy",
+        "retain_keywords",
+        "retain_intent_only"
+      ],
+      "utility_capabilities": [
+        "voice_command",
+        "sound_event_detection",
+        "speech_minimization"
+      ],
+      "transformation_effects": [
+        "speech_content_removed",
+        "semantic_minimization"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "speech_content"
+        ],
+        "reduce": [
+          "speaker_identity"
+        ],
+        "preserve": [
+          "activity",
+          "aggregate_presence"
+        ]
+      },
+      "probe_hooks": [
+        "asr_probe",
+        "speaker_id_probe"
+      ]
+    },
+    {
+      "operator_class": "occupancy_deriver",
+      "category": "derived_representation",
+      "source": "wot + smartpriv",
+      "display_name": "Occupancy Deriver",
+      "description": "Converts detections, motion, or fused observations into occupancy count or binary occupancy.",
+      "input_caps": [
+        "application/x-detections",
+        "application/x-observation",
+        "application/x-aggregate"
+      ],
+      "output_caps": [
+        "application/x-occupancy"
+      ],
+      "parameters": [
+        "output_mode",
+        "spatial_scope",
+        "count_confidence_threshold"
+      ],
+      "utility_capabilities": [
+        "energy_management",
+        "occupancy_automation"
+      ],
+      "transformation_effects": [
+        "derive_occupancy",
+        "data_minimized",
+        "aggregate_only"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "face",
+          "identity",
+          "body_shape",
+          "clothing",
+          "gait",
+          "speech_content",
+          "speaker_identity",
+          "visible_text"
+        ],
+        "reduce": [
+          "trajectory",
+          "activity",
+          "co_presence"
+        ],
+        "preserve": [
+          "aggregate_presence",
+          "location"
+        ]
+      },
+      "probe_hooks": [
+        "occupancy_count_mae",
+        "home_away_inference_probe"
+      ]
+    },
+    {
+      "operator_class": "activity_event_classifier",
+      "category": "derived_representation",
+      "source": "smartpriv + sosa_ssn",
+      "display_name": "Activity/Event Classifier",
+      "description": "Produces high-level event labels from video/audio/pose/detections.",
+      "input_caps": [
+        "application/x-pose-keypoints",
+        "application/x-detections",
+        "application/x-sound-event",
+        "video/x-redacted",
+        "audio/x-filtered"
+      ],
+      "output_caps": [
+        "application/x-activity-event"
+      ],
+      "parameters": [
+        "event_schema",
+        "confidence_threshold",
+        "model_id"
+      ],
+      "utility_capabilities": [
+        "fall_detection",
+        "intrusion_detection",
+        "safety_monitoring",
+        "security_monitoring"
+      ],
+      "transformation_effects": [
+        "event_abstraction"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "face",
+          "speech_content",
+          "visible_text"
+        ],
+        "reduce": [
+          "identity",
+          "trajectory",
+          "speaker_identity"
+        ],
+        "preserve": [
+          "activity",
+          "location",
+          "aggregate_presence"
+        ]
+      },
+      "probe_hooks": [
+        "event_f1",
+        "activity_inference_probe"
+      ]
+    },
+    {
+      "operator_class": "aggregate_generalize",
+      "category": "minimization",
+      "source": "dpv + peekaboo + smartpriv",
+      "display_name": "Aggregate/Generalize",
+      "description": "Aggregates over time, space, subject, or category.",
+      "input_caps": [
+        "application/x-detections",
+        "application/x-occupancy",
+        "application/x-activity-event",
+        "application/x-decibel-level",
+        "application/x-sound-event"
+      ],
+      "output_caps": [
+        "application/x-aggregate",
+        "application/x-occupancy"
+      ],
+      "parameters": [
+        "aggregation_axis",
+        "window_ms",
+        "spatial_scope",
+        "category_mapping",
+        "thresholds"
+      ],
+      "utility_capabilities": [
+        "analytics",
+        "automation",
+        "low_stakes_monitoring"
+      ],
+      "transformation_effects": [
+        "aggregate_only",
+        "data_minimized",
+        "temporal_generalization",
+        "spatial_generalization"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "identity",
+          "face",
+          "body_shape",
+          "clothing",
+          "gait",
+          "speech_content",
+          "speaker_identity",
+          "visible_text"
+        ],
+        "reduce": [
+          "activity",
+          "location",
+          "trajectory",
+          "co_presence"
+        ],
+        "preserve": [
+          "aggregate_presence"
+        ]
+      },
+      "probe_hooks": [
+        "routine_inference_probe",
+        "membership_inference_probe"
+      ]
+    },
+    {
+      "operator_class": "drop_discard",
+      "category": "minimization",
+      "source": "dpv + smartpriv",
+      "display_name": "Drop/Discard",
+      "description": "Explicitly discards a payload or intermediate artifact after producing a derived output.",
+      "input_caps": [
+        "*"
+      ],
+      "output_caps": [
+        "application/x-discarded"
+      ],
+      "parameters": [
+        "discard_timing",
+        "log_discard",
+        "preserve_metadata_only"
+      ],
+      "utility_capabilities": [
+        "no_raw_data_retention",
+        "ephemeral_processing"
+      ],
+      "transformation_effects": [
+        "discard",
+        "no_raw_data_retention"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "all_payload_attributes"
+        ],
+        "preserve": [
+          "metadata_if_retained"
+        ]
+      }
+    },
+    {
+      "operator_class": "policy_gate",
+      "category": "policy_control",
+      "source": "odrl + smartpriv",
+      "display_name": "Policy Gate",
+      "description": "Allows, blocks, or flags a staged flow based on policy and context metadata.",
+      "input_caps": [
+        "*"
+      ],
+      "output_caps": [
+        "same_as_input",
+        "application/x-policy-decision"
+      ],
+      "parameters": [
+        "ruleset_id",
+        "stage",
+        "unknown_handling",
+        "decision_mode"
+      ],
+      "utility_capabilities": [
+        "policy_enforcement"
+      ],
+      "transformation_effects": [
+        "allow",
+        "deny",
+        "require_review"
+      ],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "all_input_residual_attributes"
+        ]
+      },
+      "composition_notes": "Not a privacy transformation; controls whether payload proceeds."
+    },
+    {
+      "operator_class": "obligation_annotator",
+      "category": "policy_control",
+      "source": "odrl + dpv + smartpriv",
+      "display_name": "Obligation Annotator",
+      "description": "Attaches required conditions and obligations to a flow or output.",
+      "input_caps": [
+        "*"
+      ],
+      "output_caps": [
+        "same_as_input",
+        "application/x-obligation-set"
+      ],
+      "parameters": [
+        "obligations",
+        "scope",
+        "enforcement_point"
+      ],
+      "utility_capabilities": [
+        "auditability",
+        "policy_compliance"
+      ],
+      "transformation_effects": [
+        "annotate_obligation"
+      ],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "all_input_residual_attributes"
+        ]
+      }
+    },
+    {
+      "operator_class": "no_compromise_resolver",
+      "category": "policy_control",
+      "source": "smartpriv + odrl",
+      "display_name": "No-Compromise Resolver",
+      "description": "Returns a structured denial, degradation, consent-required, or insufficient-evidence decision when no feasible pipeline exists.",
+      "input_caps": [
+        "application/x-policy-decision",
+        "application/x-candidate-set"
+      ],
+      "output_caps": [
+        "application/x-policy-decision"
+      ],
+      "parameters": [
+        "resolution_policy",
+        "explanation_level"
+      ],
+      "utility_capabilities": [
+        "safe_failure",
+        "human_escalation"
+      ],
+      "transformation_effects": [
+        "deny",
+        "degrade",
+        "request_consent",
+        "require_review"
+      ],
+      "default_residual_disclosure_effects": {}
+    },
+    {
+      "operator_class": "youhome_av_adapter",
+      "category": "dataflow_utility",
+      "source": "gstreamer + wot + smartpriv",
+      "display_name": "YouHome AV Adapter",
+      "description": "Normalizes a synchronized image/audio manifest or sample to the application/x-youhome-av-sample interface expected by a YouHome-style AV model.",
+      "input_caps": [
+        "application/x-youhome-av-sample",
+        "application/x-sensor-reading"
+      ],
+      "output_caps": [
+        "application/x-youhome-av-sample"
+      ],
+      "parameters": [
+        "preserve_alignment",
+        "target_schema"
+      ],
+      "utility_capabilities": [
+        "youhome_av_compatibility",
+        "format_preserving_av",
+        "adl_recognition"
+      ],
+      "transformation_effects": [
+        "synchronized_av_window",
+        "schema_normalization"
+      ],
+      "default_residual_disclosure_effects": {
+        "preserve": [
+          "all_input_residual_attributes"
+        ]
+      }
+    },
+    {
+      "operator_class": "av_component_transformer",
+      "category": "multimodal_minimization",
+      "source": "gstreamer + dpv + smartpriv",
+      "display_name": "AV Component Transformer",
+      "description": "Applies privacy transformations to one component of a synchronized AV sample while preserving the downstream AV interface.",
+      "input_caps": [
+        "application/x-youhome-av-sample"
+      ],
+      "output_caps": [
+        "application/x-youhome-av-sample"
+      ],
+      "parameters": [
+        "target_component",
+        "method",
+        "preserve_shape"
+      ],
+      "utility_capabilities": [
+        "format_preserving_av",
+        "youhome_av_compatibility"
+      ],
+      "transformation_effects": [
+        "face_blurred",
+        "speech_content_removed",
+        "modality_suppressed"
+      ],
+      "default_residual_disclosure_effects": {
+        "reduce": [
+          "identity",
+          "face",
+          "speech_content",
+          "speaker_identity"
+        ],
+        "preserve": [
+          "activity",
+          "temporal_alignment"
+        ]
+      }
+    },
+    {
+      "operator_class": "silhouette_extractor",
+      "category": "minimization",
+      "source": "smartpriv + gstreamer-style",
+      "display_name": "Silhouette Extractor",
+      "description": "Converts raw or redacted visual frames into silhouette/mask streams with raw texture removed.",
+      "input_caps": [
+        "video/x-raw",
+        "image/x-raw",
+        "video/x-redacted",
+        "image/x-redacted"
+      ],
+      "output_caps": [
+        "video/x-silhouette",
+        "image/x-silhouette"
+      ],
+      "parameters": [
+        "segmentation_model",
+        "mask_smoothing",
+        "preserve_scale",
+        "background_policy"
+      ],
+      "utility_capabilities": [
+        "fall_detection_support",
+        "activity_detection_support",
+        "occupancy_support"
+      ],
+      "transformation_effects": [
+        "raw_pixels_removed",
+        "identity_reduction",
+        "semantic_minimization"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "face",
+          "clothing",
+          "visible_text"
+        ],
+        "reduce": [
+          "identity",
+          "body_shape",
+          "location"
+        ],
+        "preserve": [
+          "activity",
+          "gait",
+          "aggregate_presence"
+        ]
+      },
+      "probe_hooks": [
+        "face_detection_probe",
+        "reid_probe",
+        "pose_utility_probe"
+      ]
+    },
+    {
+      "operator_class": "motion_feature_extractor",
+      "category": "derived_representation",
+      "source": "smartpriv",
+      "display_name": "Motion Feature Extractor",
+      "description": "Computes low-dimensional temporal motion features from pose, silhouettes, or frame differences.",
+      "input_caps": [
+        "application/x-pose-keypoints",
+        "video/x-silhouette",
+        "image/x-silhouette",
+        "video/x-redacted"
+      ],
+      "output_caps": [
+        "application/x-motion-features"
+      ],
+      "parameters": [
+        "feature_set",
+        "window_ms",
+        "normalization",
+        "coordinate_frame"
+      ],
+      "utility_capabilities": [
+        "fall_detection_support",
+        "activity_detection_support",
+        "motion_analysis"
+      ],
+      "transformation_effects": [
+        "raw_pixels_removed",
+        "feature_abstraction",
+        "semantic_minimization"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "face",
+          "clothing",
+          "visible_text",
+          "speech_content",
+          "speaker_identity"
+        ],
+        "reduce": [
+          "identity",
+          "body_shape",
+          "location",
+          "trajectory"
+        ],
+        "preserve": [
+          "activity",
+          "gait"
+        ]
+      },
+      "probe_hooks": [
+        "fall_f1",
+        "activity_f1",
+        "gait_reid_probe"
+      ]
+    },
+    {
+      "operator_class": "multimodal_primitive_fuser",
+      "category": "derived_representation",
+      "source": "smartpriv",
+      "display_name": "Multimodal Primitive Fuser",
+      "description": "Fuses pose/detection/occupancy/sound primitives into reusable multimodal primitive records without emitting final ADL labels unless explicitly configured.",
+      "input_caps": [
+        "application/x-pose-keypoints",
+        "application/x-detections",
+        "application/x-occupancy",
+        "application/x-sound-event",
+        "application/x-motion-features"
+      ],
+      "output_caps": [
+        "application/x-multimodal-primitives"
+      ],
+      "parameters": [
+        "fusion_window_ms",
+        "allowed_modalities",
+        "emit_final_label"
+      ],
+      "utility_capabilities": [
+        "adl_recognition_support",
+        "safety_monitoring_support",
+        "contextual_event_support"
+      ],
+      "transformation_effects": [
+        "fusion",
+        "semantic_minimization"
+      ],
+      "default_residual_disclosure_effects": {
+        "remove": [
+          "face",
+          "speech_content",
+          "visible_text"
+        ],
+        "reduce": [
+          "identity",
+          "speaker_identity",
+          "trajectory"
+        ],
+        "preserve": [
+          "activity",
+          "co_presence",
+          "aggregate_presence"
+        ]
+      },
+      "composition_notes": "If emit_final_label=true, output should instead be marked application/x-activity-event with final_task_decision_boundary."
+    }
+  ],
+  "application_contract_terms": {
+    "source": "wot + openapi-style + smartpriv",
+    "description": "Terms used by downstream applications to declare utility and compatibility.",
+    "fields": [
+      {
+        "name": "requested_capability",
+        "examples": [
+          "occupancy",
+          "fall_detection",
+          "voice_command",
+          "security_event",
+          "noise_monitoring"
+        ]
+      },
+      {
+        "name": "purpose",
+        "examples": [
+          "energy_management",
+          "safety_monitoring",
+          "security_monitoring",
+          "communication"
+        ]
+      },
+      {
+        "name": "accepted_output_caps",
+        "examples": [
+          "application/x-occupancy",
+          "application/x-activity-event",
+          "video/x-redacted"
+        ]
+      },
+      {
+        "name": "quality_constraints",
+        "examples": [
+          "max_latency_ms",
+          "min_f1",
+          "max_count_mae",
+          "min_recall"
+        ]
+      },
+      {
+        "name": "recipient",
+        "examples": [
+          "hvac_controller",
+          "caregiver_app",
+          "security_app"
+        ]
+      },
+      {
+        "name": "retention_request",
+        "examples": [
+          "none",
+          "ephemeral",
+          "event_clip_only"
+        ]
+      },
+      {
+        "name": "affordance_type",
+        "source": "wot",
+        "examples": [
+          "property",
+          "action",
+          "event"
+        ]
+      },
+      {
+        "name": "acceptable_output_alternatives",
+        "meaning": "List of accepted caps/schemas, each with utility floor and optional adapter.",
+        "examples": [
+          "raw_or_redacted_frame",
+          "pose_keypoints",
+          "occupancy_count",
+          "sound_event_label"
+        ]
+      },
+      {
+        "name": "utility_capability_equivalents",
+        "meaning": "Capabilities considered sufficient for the requested task, e.g., visitor_presence can be satisfied by person_detection or occupancy_count under validation."
+      },
+      {
+        "name": "accepted_ci_term_sets",
+        "meaning": "Per-output OR clauses of required CI terms; avoids one global CI requirement for all flexible outputs."
+      },
+      {
+        "name": "representation_role",
+        "meaning": "Whether the output is a reusable primitive, aggregate, adapter output, or final task decision."
+      },
+      {
+        "name": "execution_boundary",
+        "meaning": "Whether the hub is only preprocessing, adapting, or crossing into final app decision execution."
+      },
+      {
+        "name": "adapter",
+        "meaning": "Named adapter that converts a representation into an app-facing affordance without increasing disclosure."
+      },
+      {
+        "name": "utility_validation_required",
+        "meaning": "Whether empirical validation is required before selecting this output."
+      },
+      {
+        "name": "fallback_policy",
+        "meaning": "What to do if a lower-disclosure representation fails validation or CI."
+      }
+    ]
+  },
+  "residual_disclosure_attributes": {
+    "source": "smartpriv + dpv-pd",
+    "scoring": {
+      "scale": "0.0 to 1.0 or ordinal {none, low, medium, high}",
+      "combination_default": "conservative_max(meta, probe) unless deployment validation justifies lowering",
+      "not_a_total_order": true
+    },
+    "attributes": [
+      {
+        "term": "identity",
+        "source": "dpv-pd + smartpriv"
+      },
+      {
+        "term": "face",
+        "source": "dpv-pd + smartpriv"
+      },
+      {
+        "term": "body_shape",
+        "source": "smartpriv"
+      },
+      {
+        "term": "clothing",
+        "source": "smartpriv"
+      },
+      {
+        "term": "gait",
+        "source": "smartpriv"
+      },
+      {
+        "term": "speech_content",
+        "source": "dpv-pd + smartpriv"
+      },
+      {
+        "term": "speaker_identity",
+        "source": "dpv-pd + smartpriv"
+      },
+      {
+        "term": "activity",
+        "source": "dpv-pd + smartpriv"
+      },
+      {
+        "term": "location",
+        "source": "dpv-pd + smartpriv"
+      },
+      {
+        "term": "trajectory",
+        "source": "dpv-pd + smartpriv"
+      },
+      {
+        "term": "co_presence",
+        "source": "smartpriv"
+      },
+      {
+        "term": "visible_text",
+        "source": "smartpriv"
+      },
+      {
+        "term": "aggregate_presence",
+        "source": "smartpriv"
+      }
+    ],
+    "delta_terms": [
+      {
+        "term": "remove",
+        "meaning": "Attribute should no longer be inferable from output under normal probes."
+      },
+      {
+        "term": "reduce",
+        "meaning": "Attribute remains inferable at lower confidence/granularity."
+      },
+      {
+        "term": "preserve",
+        "meaning": "Attribute remains substantially inferable."
+      },
+      {
+        "term": "create",
+        "meaning": "Operator creates or makes explicit a new derived attribute."
+      },
+      {
+        "term": "abstract",
+        "meaning": "Fine-grained attribute replaced by a coarser semantic representation."
+      }
+    ]
+  },
+  "composition_semantics": {
+    "validity": [
+      "A pipeline edge is valid if upstream.output_caps intersects downstream.input_caps.",
+      "same_as_input means the operator preserves the upstream cap unless parameters specify otherwise.",
+      "A schema_adapter may bridge caps only if its adapter rule explicitly maps source cap to target cap.",
+      "policy_gate and obligation_annotator do not reduce residual disclosure unless paired with transformation operators."
+    ],
+    "residual_disclosure_composition": [
+      "Start with source residual attributes implied by raw media or sensor primitive.",
+      "For each operator in topological order, apply residual_disclosure_effects as a prior update.",
+      "If empirical probe scores exist for a pipeline output, combine D_meta and D_probe using conservative_max by default.",
+      "The final output cap plus residual disclosure vector becomes the candidate flow attribute for CI evaluation."
+    ],
+    "utility_composition": [
+      "Each operator declares utility_capabilities it may support.",
+      "A candidate pipeline satisfies an application only if final output cap is in accepted_output_caps and quality constraints are met by benchmark, validation, or deployment evidence.",
+      "If the final cap is incompatible with the application and no adapter exists, the pipeline is infeasible even if it is privacy-preserving."
+    ]
+  },
+  "example_operator_instance": {
+    "operator_id": "blur_faces_v1",
+    "operator_class": "region_mask_blur",
+    "display_name": "Blur detected faces",
+    "source_basis": [
+      "gstreamer",
+      "dpv",
+      "smartpriv"
+    ],
+    "input_ports": [
+      {
+        "name": "media_in",
+        "caps": [
+          {
+            "media_type": "video/x-raw",
+            "format": "RGB"
+          }
+        ]
+      },
+      {
+        "name": "regions_in",
+        "caps": [
+          {
+            "media_type": "application/x-region-set",
+            "region_kind": "face"
+          }
+        ]
+      }
+    ],
+    "output_ports": [
+      {
+        "name": "media_out",
+        "caps": [
+          {
+            "media_type": "video/x-redacted",
+            "transformations_applied": [
+              "face_blur"
+            ],
+            "retains_raw_payload": true
+          }
+        ]
+      }
+    ],
+    "parameters": {
+      "blur_radius": {
+        "type": "integer",
+        "default": 25
+      }
+    },
+    "utility_capabilities": [
+      "format_preserving_privacy",
+      "activity_detection",
+      "security_monitoring"
+    ],
+    "transformation_effects": [
+      "face_blurred"
+    ],
+    "residual_disclosure_effects": {
+      "reduce": [
+        "face",
+        "identity"
+      ],
+      "preserve": [
+        "body_shape",
+        "clothing",
+        "gait",
+        "activity",
+        "location",
+        "trajectory",
+        "co_presence",
+        "visible_text"
+      ]
+    },
+    "probe_hooks": [
+      "face_recognition_probe",
+      "person_reid_probe",
+      "ocr_leakage_probe"
+    ]
+  },
+  "example_pipeline": {
+    "pipeline_id": "hvac_occupancy_count_v1",
+    "application_contract": {
+      "requested_capability": "occupancy",
+      "purpose": "energy_management",
+      "accepted_output_caps": [
+        "application/x-occupancy"
+      ],
+      "quality_constraints": {
+        "max_latency_ms": 300000,
+        "max_count_mae": 2
+      },
+      "affordance_type": "property"
+    },
+    "operators": [
+      {
+        "id": "cam0",
+        "operator_class": "source",
+        "output": "video/x-raw"
+      },
+      {
+        "id": "sample0",
+        "operator_class": "sample",
+        "output": "image/x-frame"
+      },
+      {
+        "id": "detect0",
+        "operator_class": "person_object_detector",
+        "output": "application/x-detections"
+      },
+      {
+        "id": "count0",
+        "operator_class": "occupancy_deriver",
+        "output": "application/x-occupancy"
+      },
+      {
+        "id": "agg0",
+        "operator_class": "aggregate_generalize",
+        "output": "application/x-occupancy"
+      },
+      {
+        "id": "adapter0",
+        "operator_class": "schema_adapter",
+        "output": "wot/property"
+      },
+      {
+        "id": "publish0",
+        "operator_class": "route_publish",
+        "output": "external_endpoint"
+      }
+    ],
+    "final_output_metadata": {
+      "cap": "application/x-occupancy",
+      "informationType": "occupancy_count",
+      "residual_attributes": [
+        "aggregate_presence",
+        "room_level_location"
+      ],
+      "transformations_applied": [
+        "temporal_downsampling",
+        "derive_occupancy",
+        "aggregate_only",
+        "data_minimized"
+      ]
+    }
+  },
+  "cap_aliases": {
+    "application/x-sound-event-label": "application/x-sound-event",
+    "application/x-occupancy-count": "application/x-occupancy",
+    "application/x-binary-occupancy": "application/x-occupancy",
+    "application/x-count": "application/x-occupancy",
+    "application/x-activity-label": "application/x-activity-event",
+    "application/x-safety-event": "application/x-activity-event",
+    "application/x-security-event": "application/x-activity-event",
+    "application/x-text-regions": "application/x-visible-text-regions",
+    "application/x-silhouette-video": "video/x-silhouette",
+    "application/x-silhouette-frame": "image/x-silhouette",
+    "application/x-pose-motion-features": "application/x-motion-features",
+    "application/x-normalized-motion-features": "application/x-motion-features",
+    "application/x-adl-primitives": "application/x-multimodal-primitives",
+    "application-defined": "application/x-adapter-output"
+  },
+  "representation_lattice": {
+    "description": "Partial order used to create richer candidate pipelines. It is not a universal privacy ordering; it is a search scaffold refined by CI constraints, residual risk weights, and utility validation.",
+    "levels": [
+      {
+        "level": 0,
+        "name": "raw_payload",
+        "examples": [
+          "video/x-raw",
+          "audio/x-raw",
+          "image/x-raw"
+        ]
+      },
+      {
+        "level": 1,
+        "name": "redacted_payload",
+        "examples": [
+          "image/x-redacted",
+          "video/x-redacted",
+          "audio/x-filtered",
+          "video/x-silhouette"
+        ]
+      },
+      {
+        "level": 2,
+        "name": "structured_detection",
+        "examples": [
+          "application/x-detections",
+          "application/x-pose-keypoints",
+          "application/x-sound-event",
+          "application/x-motion-features"
+        ]
+      },
+      {
+        "level": 3,
+        "name": "count_or_state",
+        "examples": [
+          "application/x-occupancy",
+          "application/x-decibel-level"
+        ]
+      },
+      {
+        "level": 4,
+        "name": "event_or_activity",
+        "examples": [
+          "application/x-activity-event"
+        ]
+      },
+      {
+        "level": 5,
+        "name": "aggregate_report",
+        "examples": [
+          "application/x-aggregate"
+        ]
+      }
+    ],
+    "boundary_rule": "Outputs marked final_task_decision_boundary should be evaluated separately from reusable preprocessing primitives because they may amount to running the downstream application on the hub."
+  }
+}

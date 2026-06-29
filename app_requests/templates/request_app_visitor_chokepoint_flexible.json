@@ -1,0 +1,488 @@
+{
+  "schema_version": "smartpriv_application_request_v1_flexible",
+  "description": "Flexible downstream-application compatibility request. This file declares several utility-sufficient output representations, not a single fixed raw/downstream tensor interface.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_app_visitor_chokepoint_flexible",
+    "scenario_id": "app_visitor_chokepoint_flexible",
+    "application_name": "ChokePoint Visitor Presence Inference App",
+    "application_category": "visitor_presence_detection",
+    "natural_language_request": "Provide the least-revealing representation sufficient for visitor presence: frames, detections, counts, or binary presence.",
+    "requester": "downstream_application",
+    "request_family": "flexible_multi_output_app_request",
+    "not_a_context_study_case": true,
+    "interface_model": "multi_representation_utility_contract",
+    "flexible_tag": true
+  },
+  "ci_context": {
+    "context": [],
+    "space": [],
+    "sender": [],
+    "subject": [],
+    "recipient": [
+      "downstream_application"
+    ],
+    "purpose": [],
+    "transmissionPrinciple_assumed": [],
+    "social_context_tags": []
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "outdoor_camera",
+      "indoor_camera",
+      "cctv_camera"
+    ],
+    "allowed_content_types": [
+      "image_content",
+      "video_content"
+    ],
+    "allowed_modalities": [
+      "visual"
+    ],
+    "forbidden_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "forbidden_content_types": [
+      "audio_content"
+    ],
+    "notes": "The flexible app can consume visual media or semantic visitor-presence primitives. Semantic outputs require the listed adapter/evaluator instead of the legacy YOLO-only entrypoint."
+  },
+  "utility_contract": {
+    "requested_capability": "visitor_presence_inference",
+    "task_description": "Flexible visitor-presence app over image/video, detections, counts, or binary presence primitives.",
+    "quality_requirements": {
+      "latency_ms_max": 5000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.85,
+      "minimum_precision": null,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": null
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "chokepoint_raw_or_redacted_image_frame",
+        "media_type": "image/x-raw",
+        "schema": "raw_image_frame",
+        "affordance": "manifest.image_path_or_frame_dir",
+        "priority": 1,
+        "required_informationType": {
+          "sensorPrimitive": [
+            "image_frame"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited"
+        ],
+        "utility_capability_equivalents": [
+          "visitor_presence_inference",
+          "person_detection"
+        ],
+        "utility_notes": "Legacy-compatible image/frame input. The downstream YOLO path performs detection itself.",
+        "downstream_expected_fields": [
+          "frame_dir",
+          "image_path",
+          "video_path"
+        ],
+        "payload_requirements": {
+          "image_array_or_path": true,
+          "preserve_person_visual_evidence": true
+        },
+        "disclosure_tier": "high",
+        "boundary_role": "fixed_downstream_input"
+      },
+      {
+        "cap_id": "chokepoint_redacted_image_frame",
+        "media_type": "image/x-redacted",
+        "schema": "redacted_image_frame",
+        "affordance": "manifest.image_path_or_frame_dir",
+        "priority": 2,
+        "required_informationType": {
+          "sensorPrimitive": [
+            "image_frame"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized"
+        ],
+        "utility_capability_equivalents": [
+          "visitor_presence_inference",
+          "person_detection",
+          "identity_reduction"
+        ],
+        "utility_notes": "Format-like frame interface with redaction/cropping. Valid when detector utility on redacted/cropped frames is calibrated.",
+        "downstream_expected_fields": [
+          "frame_dir",
+          "image_path"
+        ],
+        "payload_requirements": {
+          "image_array_or_path": true,
+          "preserve_person_visual_evidence": true,
+          "redaction_metadata": true
+        },
+        "disclosure_tier": "medium",
+        "boundary_role": "fixed_downstream_input"
+      },
+      {
+        "cap_id": "chokepoint_person_detections",
+        "semantic_type": "application/x-detections",
+        "schema": "object_detections",
+        "affordance": "stream.person_detections",
+        "priority": 3,
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "person_detected"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "raw_media_removed"
+        ],
+        "utility_capability_equivalents": [
+          "visitor_presence_inference",
+          "person_detection",
+          "security_support",
+          "occupancy_support"
+        ],
+        "utility_notes": "The hub emits detected persons/regions and the app maps detections to visitor presence/counts without receiving pixels.",
+        "downstream_expected_fields": [
+          "timestamp",
+          "class_label",
+          "confidence",
+          "bbox_or_region",
+          "track_id_optional"
+        ],
+        "adapter": "detections_to_presence_count_adapter",
+        "execution_mode": "app_side_adapter",
+        "disclosure_tier": "low_medium",
+        "boundary_role": "reusable_perceptual_primitive",
+        "validation": {
+          "metric": "presence_f2_or_recall",
+          "minimum_recall": 0.85
+        }
+      },
+      {
+        "cap_id": "chokepoint_person_count_timeseries",
+        "semantic_type": "application/x-occupancy-count",
+        "schema": "occupancy_count",
+        "affordance": "property.person_count",
+        "priority": 4,
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "occupancy_count"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "aggregate_only",
+          "raw_media_removed"
+        ],
+        "utility_capability_equivalents": [
+          "visitor_presence_inference",
+          "occupancy_estimation",
+          "person_detection"
+        ],
+        "utility_notes": "The app consumes per-window person counts; identity-bearing pixels and boxes are not exported.",
+        "downstream_expected_fields": [
+          "timestamp",
+          "spatial_scope",
+          "count",
+          "confidence_optional"
+        ],
+        "adapter": "count_to_visitor_presence_adapter",
+        "execution_mode": "app_side_adapter",
+        "disclosure_tier": "low",
+        "boundary_role": "aggregate_primitive",
+        "validation": {
+          "metric": "presence_f2_or_count_mae",
+          "minimum_recall": 0.8,
+          "count_mae_max": 0.35
+        }
+      },
+      {
+        "cap_id": "chokepoint_binary_presence",
+        "semantic_type": "application/x-binary-occupancy",
+        "schema": "room_occupied",
+        "affordance": "event.visitor_present",
+        "priority": 5,
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "room_occupied"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "aggregate_only",
+          "raw_media_removed"
+        ],
+        "utility_capability_equivalents": [
+          "visitor_presence_inference",
+          "occupancy_estimation"
+        ],
+        "utility_notes": "The app only needs a binary presence signal; this is the least revealing visitor-presence interface.",
+        "downstream_expected_fields": [
+          "timestamp",
+          "occupied_or_present",
+          "confidence_optional"
+        ],
+        "adapter": "binary_occupancy_to_visitor_presence_adapter",
+        "execution_mode": "app_side_adapter",
+        "disclosure_tier": "very_low",
+        "boundary_role": "coarse_event_primitive",
+        "validation": {
+          "metric": "presence_recall_or_f2",
+          "minimum_recall": 0.78
+        }
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "media_type": "audio/x-raw",
+        "reason": "Audio is not a modality for visual visitor-presence monitoring."
+      },
+      {
+        "semantic_type": "application/x-transcript",
+        "reason": "Speech/transcript information is unrelated to visitor visual presence and creates unnecessary disclosure."
+      },
+      {
+        "semantic_type": "application/x-command-intent",
+        "reason": "Voice command intent is not a visitor-presence input."
+      }
+    ],
+    "downstream_program": {
+      "name": "visitor_presence_flexible_app",
+      "input_kind": "one of frame/video media, person detections, person counts, or binary presence events",
+      "model_role": "The application estimates visitor/person presence; detection may run either in the downstream app or as a reusable hub primitive with an app-side adapter.",
+      "compatible_preprocessed_outputs": [
+        "chokepoint_raw_or_redacted_image_frame",
+        "chokepoint_redacted_image_frame",
+        "chokepoint_person_detections",
+        "chokepoint_person_count_timeseries",
+        "chokepoint_binary_presence"
+      ],
+      "legacy_entrypoint": "infer_chokepoint.py consumes frame/video caps only; semantic caps require the listed adapter/evaluator."
+    },
+    "compatibility_notes": [
+      "Media caps use the legacy ChokePoint evaluator.",
+      "Detection/count/presence caps require adapters that map primitive outputs to the same presence/count metrics."
+    ],
+    "interface_policy": {
+      "contract_type": "multi_output_flexible",
+      "selection_goal": "Select the least-revealing output representation that satisfies CI constraints and has sufficient utility evidence for this application family.",
+      "hub_boundary_rule": "The hub may output reusable perceptual primitives, minimized media, or coarse events declared here. Outputs marked final_task_decision_boundary should be used only when the deployment intentionally treats the hub as a trusted edge inference component.",
+      "utility_evidence_required": true,
+      "acceptable_execution_modes": [
+        "fixed_downstream_input",
+        "app_side_adapter",
+        "hub_side_adapter",
+        "reusable_perceptual_primitive",
+        "guarded_edge_event"
+      ]
+    },
+    "capability_equivalences": {
+      "visitor_presence_inference": [
+        "identity_reduction",
+        "occupancy_estimation",
+        "occupancy_support",
+        "person_detection",
+        "security_support",
+        "visitor_presence_inference"
+      ]
+    }
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry by media_type or semantic_type plus schema when provided",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability, a declared utility_capability_equivalent, or an adapter listed on the matched accepted cap",
+    "adapter_allowed": true,
+    "semantic_outputs_allowed": true,
+    "adapter_rules": [
+      "Adapters may repackage or map candidate outputs only when the matched accepted cap explicitly lists the adapter or execution_mode.",
+      "Semantic outputs are utility-compatible only when the application contract lists a schema-level adapter and validation metric for that representation.",
+      "Do not treat final application decisions as ordinary preprocessing unless the matched cap is marked final_task_decision_boundary or guarded_edge_event.",
+      "When multiple caps pass utility and CI checks, selection should prefer lower disclosure_tier and lower residual risk, not lower latency alone."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "accepted_ci_term_sets": [
+      {
+        "cap_id": "chokepoint_raw_or_redacted_image_frame",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "image_frame"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited"
+        ]
+      },
+      {
+        "cap_id": "chokepoint_redacted_image_frame",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "image_frame"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized"
+        ]
+      },
+      {
+        "cap_id": "chokepoint_person_detections",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "person_detected"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "raw_media_removed"
+        ]
+      },
+      {
+        "cap_id": "chokepoint_person_count_timeseries",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "occupancy_count"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "aggregate_only",
+          "raw_media_removed"
+        ]
+      },
+      {
+        "cap_id": "chokepoint_binary_presence",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "room_occupied"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "aggregate_only",
+          "raw_media_removed"
+        ]
+      }
+    ],
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "required_transformations_if_media_output": [],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "purpose_limited",
+        "limited_retention",
+        "data_minimized",
+        "aggregate_only",
+        "raw_media_removed",
+        "speech_content_removed"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "unknown",
+      "face": "unknown",
+      "body_shape": "unknown",
+      "clothing": "unknown",
+      "gait": "unknown",
+      "speech_content": "unknown",
+      "speaker_identity": "unknown",
+      "activity": "unknown",
+      "location": "unknown",
+      "trajectory": "unknown",
+      "co_presence": "unknown",
+      "visible_text": "unknown",
+      "aggregate_presence": "unknown"
+    },
+    "hard_forbidden_attributes": [],
+    "allowed_high_attributes": [],
+    "comparison_rule": "This flexible app request does not globally forbid a representation by residual disclosure; context-specific CI rules and least-revealing selection decide. Per-cap disclosure_tier is used for ranking among utility-feasible outputs.",
+    "per_cap_residual_expectations": [
+      {
+        "cap_id": "chokepoint_raw_or_redacted_image_frame",
+        "disclosure_tier": "high",
+        "boundary_role": "fixed_downstream_input"
+      },
+      {
+        "cap_id": "chokepoint_redacted_image_frame",
+        "disclosure_tier": "medium",
+        "boundary_role": "fixed_downstream_input"
+      },
+      {
+        "cap_id": "chokepoint_person_detections",
+        "disclosure_tier": "low_medium",
+        "boundary_role": "reusable_perceptual_primitive"
+      },
+      {
+        "cap_id": "chokepoint_person_count_timeseries",
+        "disclosure_tier": "low",
+        "boundary_role": "aggregate_primitive"
+      },
+      {
+        "cap_id": "chokepoint_binary_presence",
+        "disclosure_tier": "very_low",
+        "boundary_role": "coarse_event_primitive"
+      }
+    ]
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline matches any accepted output cap and satisfies context-specific CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if an output cap/schema is accepted by this contract but no benchmark, calibration, adapter, or app-provided validation exists for that representation.",
+    "Prefer lower-disclosure semantic or aggregate outputs only when their declared utility evidence meets the task threshold; otherwise fall back to a higher-disclosure compatible representation or return no_compromise.",
+    "Do not silently convert a fixed-interface legacy model into a final hub-side decision; final-decision-like outputs must be explicitly accepted and marked by boundary_role."
+  ]
+}
