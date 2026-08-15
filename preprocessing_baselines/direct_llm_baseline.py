@@ -414,6 +414,13 @@ When several pipelines could satisfy the downstream format, choose a balanced op
 
 You are NOT allowed to invent operators. Choose only operator ids from the catalog. Use op.source at the beginning and op.route_publish at the end if available.
 
+The operator sequence and final_output_cap must describe the SAME application-boundary representation:
+- If final_output_cap is redacted video/image/audio, the last payload-producing operator must be the redaction/filtering operator; do not add pose_extractor, detector, occupancy_deriver, or classifier after that boundary.
+- If you include op.pose_extractor, the final_output_cap must be application/x-pose-keypoints, not video/x-redacted.
+- If you include op.person_object_detector and then op.occupancy_deriver, the final_output_cap must be an occupancy/count representation, not detections.
+- If final_output_cap is a semantic output such as occupancy, detections, pose, sound event, or activity event, the operator sequence must include the corresponding extractor/deriver/classifier before op.route_publish.
+- Do not declare a semantic or redacted final_output_cap with only op.source -> op.route_publish.
+
 Return exactly one valid JSON object with these keys. Do not include Markdown fences or text outside the JSON object.
 {{
   "decision": "select_pipeline",
@@ -730,6 +737,208 @@ def make_non_selection_diagnostics(llm_choice: Dict[str, Any], normalized_decisi
         "full_candidate_enumeration_used": False,
     }
 
+
+def catalog_operator_by_id(operator_catalog: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    return {
+        str(op.get("id")): op
+        for op in operator_catalog.get("operators", []) or []
+        if op.get("id")
+    }
+
+
+def _strip_null_cap_fields(cap: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in (cap or {}).items():
+        if v is None:
+            continue
+        if isinstance(v, dict):
+            vv = {str(kk): copy.deepcopy(vv) for kk, vv in v.items() if vv is not None}
+            if vv:
+                out[k] = vv
+        elif v != "":
+            out[k] = copy.deepcopy(v)
+    return out
+
+
+def cap_equivalent_enough(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    """Strict-ish equality for an LLM-declared boundary vs. a catalog boundary.
+
+    This is intentionally stricter than app accepted-cap compatibility.  It is
+    used to catch malformed direct-LLM records such as a chain ending in
+    op.pose_extractor while declaring video/x-redacted as the final output.
+    """
+    if not a or not b:
+        return False
+    a_t = cap_type(a)
+    b_t = cap_type(b)
+    if a_t != b_t:
+        return False
+    a_s = cap_schema(a)
+    b_s = cap_schema(b)
+    if a_s and b_s and a_s != b_s:
+        return False
+    return True
+
+
+def _cap_is_raw_source_passthrough(cap: Optional[Dict[str, Any]]) -> bool:
+    """Return True for caps that plausibly can be emitted by source->route_publish."""
+    t = cap_type(cap)
+    s = cap_schema(cap)
+    if t in {"image/x-raw", "video/x-raw", "audio/x-raw", "application/x-sensor-reading", "application/x-youhome-av-sample"}:
+        return True
+    if s in {"raw_image_frame", "raw_video_stream", "raw_audio_waveform", "youhome_av_manifest_or_sample"}:
+        return True
+    return False
+
+
+def _choose_output_cap_for_operator(
+    op: Dict[str, Any],
+    *,
+    desired_final_cap: Optional[Dict[str, Any]] = None,
+    current_cap: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Choose the symbolic output cap for one catalog operator.
+
+    The direct-LLM baseline does not run full BFS, but it can still use the
+    catalog's declared output caps to sanity-check the LLM's chosen chain.
+    """
+    outputs = [copy.deepcopy(c) for c in (op.get("output_caps", []) or []) if isinstance(c, dict)]
+    if not outputs:
+        return None
+
+    # Prefer an output that exactly matches the LLM-declared final cap.  This
+    # prevents false positives for multi-output transforms such as image/video
+    # redaction or count/binary occupancy derivation.
+    if desired_final_cap:
+        for cap in outputs:
+            if cap_equivalent_enough(cap, desired_final_cap):
+                return _strip_null_cap_fields(cap)
+        for cap in outputs:
+            if cap_matches_goal(cap, desired_final_cap):
+                return _strip_null_cap_fields(cap)
+
+    # Prefer preserving the media family when the previous cap is known.
+    cur_t = cap_type(current_cap)
+    if cur_t.startswith("image/"):
+        for cap in outputs:
+            if cap_type(cap).startswith("image/"):
+                return _strip_null_cap_fields(cap)
+    if cur_t.startswith("video/"):
+        for cap in outputs:
+            if cap_type(cap).startswith("video/"):
+                return _strip_null_cap_fields(cap)
+    if cur_t.startswith("audio/"):
+        for cap in outputs:
+            if cap_type(cap).startswith("audio/"):
+                return _strip_null_cap_fields(cap)
+
+    return _strip_null_cap_fields(outputs[0])
+
+
+def infer_catalog_terminal_payload_cap(
+    operator_catalog: Dict[str, Any],
+    op_ids: Sequence[str],
+    final_cap: Optional[Dict[str, Any]],
+    params: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Dict[str, Any]], List[str], Dict[str, Optional[Dict[str, Any]]]]:
+    """Infer the last payload representation implied by the operator sequence.
+
+    op.route_publish marks the output boundary and is not itself the payload
+    representation.  This lightweight pass catches direct-LLM chains whose
+    declared final_output_cap disagrees with the final payload-producing operator.
+    """
+    by_id = catalog_operator_by_id(operator_catalog)
+    params = params if isinstance(params, dict) else {}
+    current_cap: Optional[Dict[str, Any]] = None
+    terminal_cap: Optional[Dict[str, Any]] = None
+    issues: List[str] = []
+    inferred_by_op: Dict[str, Optional[Dict[str, Any]]] = {}
+
+    payload_ops = [op for op in op_ids if op not in {"op.source", "op.route_publish"}]
+
+    for op_id in op_ids:
+        if op_id == "op.source":
+            inferred_by_op[op_id] = current_cap
+            continue
+        if op_id == "op.route_publish":
+            inferred_by_op[op_id] = terminal_cap
+            continue
+
+        if op_id == "op.schema_adapter":
+            p = parameters_for_operator(op_id, params)
+            adapter_cap = {
+                "semantic_type": p.get("target_semantic_type") if str(p.get("target_semantic_type") or "").startswith("application/") else None,
+                "media_type": p.get("target_semantic_type") if str(p.get("target_semantic_type") or "").startswith(("image/", "video/", "audio/")) else None,
+                "schema": p.get("target_schema"),
+            }
+            adapter_cap = _strip_null_cap_fields(adapter_cap)
+            if adapter_cap:
+                current_cap = adapter_cap
+            elif final_cap:
+                current_cap = _strip_null_cap_fields(copy.deepcopy(final_cap))
+            terminal_cap = current_cap
+            inferred_by_op[op_id] = current_cap
+            continue
+
+        op = by_id.get(op_id)
+        if not op:
+            issues.append(f"Unknown operator id in sequence: {op_id}")
+            inferred_by_op[op_id] = None
+            continue
+
+        out_cap = _choose_output_cap_for_operator(op, desired_final_cap=final_cap, current_cap=current_cap)
+        if out_cap is None:
+            issues.append(f"Catalog operator {op_id} has no declared output_caps.")
+            inferred_by_op[op_id] = None
+            continue
+        current_cap = out_cap
+        terminal_cap = out_cap
+        inferred_by_op[op_id] = out_cap
+
+    if not payload_ops and final_cap and not _cap_is_raw_source_passthrough(final_cap):
+        issues.append(
+            "LLM declared a transformed or semantic final_output_cap but provided only "
+            "op.source -> op.route_publish; no payload-producing operator creates that cap."
+        )
+
+    return terminal_cap, issues, inferred_by_op
+
+
+def validate_chain_output_consistency(
+    operator_catalog: Dict[str, Any],
+    op_ids: Sequence[str],
+    final_cap: Dict[str, Any],
+    params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    terminal_cap, issues, inferred_by_op = infer_catalog_terminal_payload_cap(
+        operator_catalog,
+        op_ids,
+        final_cap=final_cap,
+        params=params,
+    )
+
+    compatible = True
+    reason = "Operator sequence terminal cap is consistent with the declared final_output_cap."
+    if terminal_cap and final_cap and not cap_equivalent_enough(terminal_cap, final_cap):
+        compatible = False
+        reason = (
+            "Operator sequence terminal cap does not match the LLM-declared final_output_cap. "
+            "This usually means the LLM mixed two application boundaries, e.g. declaring "
+            "redacted video while placing pose_extractor after the redaction step."
+        )
+    elif issues:
+        compatible = False
+        reason = "; ".join(issues)
+
+    return {
+        "chain_output_compatible_with_declared_final": compatible,
+        "chain_output_validation_reason": reason,
+        "chain_inferred_terminal_cap": terminal_cap,
+        "chain_inferred_output_caps_by_operator": inferred_by_op,
+        "chain_output_issues": issues,
+    }
+
+
 def make_llm_candidate(
     operator_catalog: Dict[str, Any],
     request: Dict[str, Any],
@@ -742,6 +951,7 @@ def make_llm_candidate(
         return None, {
             "validation_status": "invalid",
             "reason": "LLM did not return operator_ids as a list.",
+            "llm_normalized_decision": normalized_decision,
         }
 
     op_ids = canonicalize_operator_sequence(llm_choice.get("operator_ids", []))
@@ -753,11 +963,81 @@ def make_llm_candidate(
     final_cap = copy.deepcopy(llm_choice.get("final_output_cap") if isinstance(llm_choice.get("final_output_cap"), dict) else {})
     if not final_cap and matched_cap:
         final_cap = copy.deepcopy(matched_cap)
+    final_cap = _strip_null_cap_fields(final_cap)
 
     params = llm_choice.get("operator_parameters") if isinstance(llm_choice.get("operator_parameters"), dict) else {}
+    chain_diag = validate_chain_output_consistency(operator_catalog, op_ids, final_cap, params=params)
+
+    # Treat boundary inconsistencies as invalid direct-LLM outputs rather than
+    # repairing them.  This avoids hybrid records such as:
+    #   final_output_cap = video/x-redacted
+    #   operators = ... -> op.pose_extractor -> op.route_publish
+    # which corrupt utility evaluation by mixing two different output boundaries.
+    if unknown_ops:
+        return None, {
+            "validation_status": "invalid_operator_ids",
+            "validation_reason": "LLM used operators not present in the catalog.",
+            "llm_normalized_decision": normalized_decision,
+            "llm_operator_ids": op_ids,
+            "unknown_operator_ids": unknown_ops,
+            "operator_sequence_issues": sequence_issues,
+            "matched_accepted_output_cap": matched_cap,
+            **output_diag,
+            **chain_diag,
+            "full_candidate_enumeration_used": False,
+        }
+
+    if not chain_diag.get("chain_output_compatible_with_declared_final", True):
+        return None, {
+            "validation_status": "operator_chain_output_inconsistent",
+            "validation_reason": chain_diag.get("chain_output_validation_reason"),
+            "llm_normalized_decision": normalized_decision,
+            "llm_operator_ids": op_ids,
+            "unknown_operator_ids": unknown_ops,
+            "operator_sequence_issues": sequence_issues,
+            "matched_accepted_output_cap": matched_cap,
+            **output_diag,
+            **chain_diag,
+            "full_candidate_enumeration_used": False,
+        }
+
+    repeated_schema_adapters = op_ids.count("op.schema_adapter") > 1
+    if repeated_schema_adapters:
+        return None, {
+            "validation_status": "repeated_schema_adapter",
+            "validation_reason": "LLM used repeated generic schema_adapter steps, which are not allowed in the stricter flexible compatibility model.",
+            "llm_normalized_decision": normalized_decision,
+            "llm_operator_ids": op_ids,
+            "unknown_operator_ids": unknown_ops,
+            "operator_sequence_issues": sequence_issues,
+            "repeated_schema_adapters": repeated_schema_adapters,
+            "matched_accepted_output_cap": matched_cap,
+            **output_diag,
+            **chain_diag,
+            "full_candidate_enumeration_used": False,
+        }
+
+    if not output_diag.get("declared_output_compatibility"):
+        return None, {
+            "validation_status": "declared_output_incompatible_or_unknown",
+            "validation_reason": str(output_diag.get("declared_output_compatibility_reason")),
+            "llm_normalized_decision": normalized_decision,
+            "llm_operator_ids": op_ids,
+            "unknown_operator_ids": unknown_ops,
+            "operator_sequence_issues": sequence_issues,
+            "matched_accepted_output_cap": matched_cap,
+            **output_diag,
+            **chain_diag,
+            "full_candidate_enumeration_used": False,
+        }
+
     operators: List[Dict[str, Any]] = []
+    inferred_caps_by_operator = chain_diag.get("chain_inferred_output_caps_by_operator") or {}
     for op_id in op_ids:
-        output_cap = final_cap if op_id == op_ids[-1] or op_id == "op.route_publish" else {}
+        if op_id == "op.route_publish":
+            output_cap = final_cap
+        else:
+            output_cap = copy.deepcopy(inferred_caps_by_operator.get(op_id) or {})
         operators.append({
             "operator": op_id,
             "variant": "llm_direct_choice",
@@ -767,6 +1047,21 @@ def make_llm_candidate(
 
     requested_capability = (request.get("utility_contract", {}) or {}).get("requested_capability")
     ci_terms = ci_terms_from_request_and_output(request, matched_cap, final_cap)
+
+    schema_adapter_inference_warning = False
+    if "op.schema_adapter" in op_ids:
+        out_t = cap_type(final_cap)
+        out_schema = cap_schema(final_cap)
+        # The direct baseline is allowed to make mistakes, but we flag cases
+        # where the LLM appears to rely on a generic adapter to emit a semantic
+        # task output.  The full symbolic generator enforces this more strictly.
+        schema_adapter_inference_warning = out_t.startswith("application/x-") and out_schema not in {"", "occupancy_count", "room_occupied", "object_detections", "pose_keypoints", "sound_event_label", "aggregate_summary"}
+
+    validation_status = "ok"
+    validation_reason = "LLM returned a single declared pipeline whose operator chain and final output cap are consistent."
+    if schema_adapter_inference_warning:
+        validation_status = "schema_adapter_may_be_doing_inference"
+        validation_reason = "LLM used a generic schema_adapter before a semantic task output; this is flagged as questionable rather than repaired."
 
     candidate = {
         "pipeline_id": "baseline_direct_llm_" + stable_hash({
@@ -786,14 +1081,14 @@ def make_llm_candidate(
         "transforms": [],
         "residual_disclosure": conservative_unknown_residual(),
         "residual_score": 999,
-        "executable_under_catalog": not unknown_ops,
+        "executable_under_catalog": not (unknown_ops or sequence_issues),
         "operator_ids_exist_in_catalog": not unknown_ops,
         "unknown_operator_ids": unknown_ops,
         "operator_sequence_issues": sequence_issues,
         "baseline_notes": [
             "Direct LLM baseline selected one pipeline directly; no full candidate enumeration was used.",
             "The prompt required the LLM to respect downstream accepted_output_caps.",
-            "Only lightweight validation was performed: operator ids and declared output-cap compatibility.",
+            "Post-hoc validation checked operator ids, declared output-cap compatibility, and consistency between the operator chain's catalog-derived terminal cap and final_output_cap.",
             "If the chain is not actually executable or fails utility at runtime, that is recorded as a baseline failure rather than repaired.",
         ],
         "llm_choice": {k: v for k, v in llm_choice.items() if k != "raw_response"},
@@ -801,35 +1096,10 @@ def make_llm_candidate(
         "privacy_rationale": llm_choice.get("privacy_rationale"),
     }
 
-    repeated_schema_adapters = op_ids.count("op.schema_adapter") > 1
-    schema_adapter_inference_warning = False
-    if "op.schema_adapter" in op_ids:
-        out_t = cap_type(final_cap)
-        out_schema = cap_schema(final_cap)
-        # The direct baseline is allowed to make mistakes, but we flag cases
-        # where the LLM appears to rely on a generic adapter to emit a semantic
-        # task output.  The full symbolic generator enforces this more strictly.
-        schema_adapter_inference_warning = out_t.startswith("application/x-") and out_schema not in {"", "occupancy_count", "room_occupied", "object_detections", "pose_keypoints", "sound_event_label", "aggregate_summary"}
-
-    validation_status = "ok"
-    validation_reason = "LLM returned a single declared pipeline."
-    if unknown_ops:
-        validation_status = "invalid_operator_ids"
-        validation_reason = "LLM used operators not present in the catalog."
-    elif repeated_schema_adapters:
-        validation_status = "repeated_schema_adapter"
-        validation_reason = "LLM used repeated generic schema_adapter steps, which are not allowed in the stricter flexible compatibility model."
-    elif not output_diag.get("declared_output_compatibility"):
-        # Keep the selected baseline result, but mark compatibility as questionable.
-        validation_status = "declared_output_incompatible_or_unknown"
-        validation_reason = str(output_diag.get("declared_output_compatibility_reason"))
-    elif schema_adapter_inference_warning:
-        validation_status = "schema_adapter_may_be_doing_inference"
-        validation_reason = "LLM used a generic schema_adapter before a semantic task output; this is flagged as questionable rather than repaired."
-
     diagnostics = {
         "validation_status": validation_status,
         "validation_reason": validation_reason,
+        "llm_normalized_decision": normalized_decision,
         "llm_operator_ids": op_ids,
         "unknown_operator_ids": unknown_ops,
         "operator_sequence_issues": sequence_issues,
@@ -837,6 +1107,7 @@ def make_llm_candidate(
         "schema_adapter_inference_warning": schema_adapter_inference_warning,
         "matched_accepted_output_cap": matched_cap,
         **output_diag,
+        **chain_diag,
         "full_candidate_enumeration_used": False,
     }
     return candidate, diagnostics

@@ -25,7 +25,7 @@ Outputs:
 """
 from __future__ import annotations
 
-import argparse, csv, hashlib, json, mimetypes, os, random, sqlite3, time, uuid
+import argparse, csv, hashlib, html, json, mimetypes, os, random, sqlite3, time, uuid
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -232,6 +232,11 @@ class Config:
     include_no_output_variants: bool
     survey_output_scope: str
     supplemental_output_schemas: Tuple[str, ...]
+    study_contact_name: str
+    study_contact_email: str
+    rights_contact_name: str
+    rights_contact_email: str
+    rights_contact_phone: str
 
 
 def load_json(path: Path) -> Dict[str, Any]:
@@ -3715,8 +3720,21 @@ def make_handler(state: SurveyState):
         def serve_file(self, path: Path, content_type: Optional[str] = None) -> None:
             if not path.exists() or not path.is_file():
                 return json_response(self, {"error": "file not found"}, 404)
-            data = path.read_bytes()
             ctype = content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+            if path == ROOT / "templates" / "index.html":
+                template = path.read_text(encoding="utf-8")
+                replacements = {
+                    "{{STUDY_CONTACT_NAME}}": state.config.study_contact_name,
+                    "{{STUDY_CONTACT_EMAIL}}": state.config.study_contact_email,
+                    "{{RIGHTS_CONTACT_NAME}}": state.config.rights_contact_name,
+                    "{{RIGHTS_CONTACT_EMAIL}}": state.config.rights_contact_email,
+                    "{{RIGHTS_CONTACT_PHONE}}": state.config.rights_contact_phone,
+                }
+                for token, value in replacements.items():
+                    template = template.replace(token, html.escape(str(value)))
+                data = template.encode("utf-8")
+            else:
+                data = path.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -3772,6 +3790,11 @@ def main() -> int:
     p.add_argument("--supplemental-output-schemas", default="", help="Optional comma-separated override for output schemas to include in new_flexible_only mode. Normally omit; default excludes old media concepts such as redacted_video_stream.")
     p.add_argument("--no-pipeline-outputs", action="store_true", help="Fall back to context-only survey items.")
     p.add_argument("--include-no-output-variants", action="store_true", help="Also create survey cases for baselines that deny or produce no selected output.")
+    p.add_argument("--study-contact-name", default="[add name]", help="Name displayed as the study contact; defaults to a non-identifying placeholder.")
+    p.add_argument("--study-contact-email", default="[add email]", help="Email displayed for the study contact; defaults to a non-identifying placeholder.")
+    p.add_argument("--rights-contact-name", default="[add office or contact]", help="Name displayed for participant-rights questions.")
+    p.add_argument("--rights-contact-email", default="[add email]", help="Email displayed for participant-rights questions.")
+    p.add_argument("--rights-contact-phone", default="[add phone]", help="Phone number displayed for participant-rights questions.")
     p.add_argument(
         "--write-question-preview-json",
         default=None,
@@ -3806,6 +3829,11 @@ def main() -> int:
         include_no_output_variants=args.include_no_output_variants,
         survey_output_scope=args.survey_output_scope,
         supplemental_output_schemas=_parse_csv_terms(args.supplemental_output_schemas),
+        study_contact_name=args.study_contact_name,
+        study_contact_email=args.study_contact_email,
+        rights_contact_name=args.rights_contact_name,
+        rights_contact_email=args.rights_contact_email,
+        rights_contact_phone=args.rights_contact_phone,
     ))
     if args.write_question_preview_json:
         preview_path = Path(args.write_question_preview_json)

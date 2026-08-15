@@ -1,0 +1,25 @@
+{
+  "created_files": [
+    "request_app_visitor_chokepoint_flexible.json",
+    "request_app_fall_le2i_flexible.json",
+    "request_app_domestic_audio_chimehome_flexible.json",
+    "request_app_adl_youhome_av_flexible.json"
+  ],
+  "purpose": "Flexible multi-output app request templates that allow the mediator to synthesize and select among media, redacted media, semantic primitives, events, and aggregate outputs.",
+  "use_with_generate_pipelines_for_all_contexts": {
+    "explicit_flags": {
+      "--visitor-request": "/mnt/data/flexible_app_requests/request_app_visitor_chokepoint_flexible.json",
+      "--fall-request": "/mnt/data/flexible_app_requests/request_app_fall_le2i_flexible.json",
+      "--adl-request": "/mnt/data/flexible_app_requests/request_app_adl_youhome_av_flexible.json",
+      "--audio-request": "/mnt/data/flexible_app_requests/request_app_domestic_audio_chimehome_flexible.json"
+    },
+    "note": "The current generator mapping points at the old downstream_compatible filenames unless explicit request flags are used or TASK_TO_REQUEST_FILENAME is updated."
+  },
+  "vocabulary_updates_recommended": [
+    "Normalize semantic cap names between pipeline_vocabulary and operator_contracts: application/x-sound-event vs application/x-sound-event-label; application/x-occupancy vs application/x-occupancy-count/application/x-binary-occupancy; application/x-activity-event vs application/x-activity-label/application/x-safety-event.",
+    "Add explicit adapter metadata to app requests and generator matching: adapter_id, execution_mode, utility_validation_metric, and boundary_role.",
+    "Add OR-style accepted_ci_term_sets to ci_output_constraints so different output representations can require different informationType/transmissionPrinciple terms.",
+    "Move global residual caps out of app requests and into context-specific CI/risk selection, otherwise flexible contracts collapse back to one globally safest representation.",
+    "Add motion_feature/silhouette/fused_primitive caps and corresponding operators if you want more non-final alternatives for fall and ADL without exporting pixels."
+  ]
+}

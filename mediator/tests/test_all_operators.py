@@ -121,11 +121,13 @@ def test_person_object_detector_returns_detection_record_even_on_blank_image():
     assert "count_by_label" in out.data
 
 
-def test_pose_extractor_returns_pose_schema_with_or_without_mediapipe():
+def test_pose_extractor_returns_downstream_compatible_yolo_pose_schema():
     item = DataItem(caps={"media_type": "image/x-raw"}, data=_image())
     out = make_operator("op.pose_extractor")(item)
     assert out is not None
-    assert out.caps["schema"] == "pose_keypoints"
+    assert out.caps["semantic_type"] == "application/x-pose-keypoints"
+    assert out.caps["schema"] == "yolo_coco17_pose_sequence"
+    assert out.caps["properties"]["skeleton"] == "coco17"
     assert "poses" in out.data
 
 
@@ -215,7 +217,10 @@ def test_activity_event_classifier_detects_audio_safety_event():
     )
     out = make_operator("op.activity_event_classifier")(item)
     assert out is not None
-    assert out.caps["semantic_type"] == "application/x-safety-event"
+    # Flexible contracts canonicalize activity and safety decisions to the
+    # application/x-activity-event family while retaining the safety schema.
+    assert out.caps["semantic_type"] == "application/x-activity-event"
+    assert out.caps["schema"] == "fall_or_safety_event"
     assert out.data["event_type"] == "glass_break_or_alarm"
 
 

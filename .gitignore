@@ -1,8 +1,34 @@
+# Local datasets and generated experiment artifacts.
 data/
 outputs/
-venv/
-yolo*
 runs/
-survey/outputs
+survey/outputs/
+survey_old/outputs/
+
+# Survey scenario definitions are inputs, not participant results. Keep these
+# JSON files versioned even though the general data/ rule above is recursive.
+!survey/data/
+!survey/data/*.json
+
+# Python environments, caches, and test/tool caches.
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Downloaded model weights and local secrets.
+yolo*
+*.pt
+*.pth
+*.ckpt
+.env
+.env.*
+!.env.example
+
+# Logs and desktop trash directories.
 *.out
 *.log
+.Trash-*/

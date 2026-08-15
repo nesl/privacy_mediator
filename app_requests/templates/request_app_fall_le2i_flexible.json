@@ -1,0 +1,437 @@
+{
+  "schema_version": "smartpriv_application_request_v1_flexible",
+  "description": "Flexible downstream-application compatibility request. This file declares several utility-sufficient output representations, not a single fixed raw/downstream tensor interface.",
+  "vocabulary_dependencies": {
+    "ci_vocabulary": "ci_pipeline_vocab_v2",
+    "operator_contracts": "smartpriv_operator_contracts_v1",
+    "pipeline_vocabulary": "application_pipeline_vocabulary.json"
+  },
+  "request_identity": {
+    "request_id": "req_app_fall_le2i_flexible",
+    "scenario_id": "app_fall_le2i_flexible",
+    "application_name": "LE2I Pose Fall Inference App",
+    "application_category": "fall_detection",
+    "natural_language_request": "Provide a least-revealing visual or motion representation sufficient for fall detection: redacted video, pose, activity primitives, or a guarded safety event.",
+    "requester": "downstream_application",
+    "request_family": "flexible_multi_output_app_request",
+    "not_a_context_study_case": true,
+    "interface_model": "multi_representation_utility_contract",
+    "flexible_tag": true
+  },
+  "ci_context": {
+    "context": [],
+    "space": [],
+    "sender": [],
+    "subject": [],
+    "recipient": [
+      "downstream_application"
+    ],
+    "purpose": [],
+    "transmissionPrinciple_assumed": [],
+    "social_context_tags": []
+  },
+  "source_requirements": {
+    "allowed_sensing_devices": [
+      "indoor_camera",
+      "motion_sensor"
+    ],
+    "allowed_content_types": [
+      "image_content",
+      "video_content",
+      "input_data"
+    ],
+    "allowed_modalities": [
+      "visual",
+      "motion"
+    ],
+    "forbidden_sensing_devices": [
+      "microphone",
+      "smart_speaker"
+    ],
+    "forbidden_content_types": [
+      "audio_content"
+    ],
+    "notes": "The flexible app accepts motion/visual representations. Audio and speech outputs remain out of scope."
+  },
+  "utility_contract": {
+    "requested_capability": "fall_detection",
+    "task_description": "Flexible fall-detection app over redacted video, pose sequences, activity primitives, or guarded safety-event outputs.",
+    "quality_requirements": {
+      "latency_ms_max": 10000,
+      "update_period_ms_max": null,
+      "minimum_recall": 0.88,
+      "minimum_precision": null,
+      "minimum_accuracy": null,
+      "count_mae_max": null,
+      "confidence_min": 0.7
+    },
+    "accepted_output_caps": [
+      {
+        "cap_id": "le2i_redacted_video_for_pose_extraction",
+        "media_type": "video/x-redacted",
+        "schema": "redacted_video_stream",
+        "affordance": "manifest.video_path_or_frame_dir",
+        "priority": 1,
+        "required_informationType": {
+          "sensorPrimitive": [
+            "video_stream"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized"
+        ],
+        "utility_capability_equivalents": [
+          "fall_detection",
+          "fall_detection_support",
+          "motion_analysis"
+        ],
+        "utility_notes": "A redacted/silhouette-like video stream can be consumed by a pose extractor before the fall classifier if pose utility remains adequate.",
+        "downstream_expected_fields": [
+          "video_path",
+          "frame_dir"
+        ],
+        "adapter": "redacted_video_to_pose_sequence_adapter",
+        "execution_mode": "hub_side_adapter",
+        "disclosure_tier": "medium",
+        "boundary_role": "fixed_downstream_input_with_hub_or_app_pose_extractor",
+        "validation": {
+          "metric": "fall_macro_f1_or_recall",
+          "minimum_recall": 0.9
+        }
+      },
+      {
+        "cap_id": "le2i_pose_sequence_for_fall_model",
+        "semantic_type": "application/x-pose-keypoints",
+        "schema": "pose_keypoints",
+        "affordance": "manifest.pose_sequence",
+        "priority": 2,
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "pose_keypoints"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "data_minimized",
+          "raw_pixels_removed",
+          "purpose_limited"
+        ],
+        "utility_capability_equivalents": [
+          "fall_detection",
+          "fall_detection_support",
+          "motion_analysis",
+          "activity_detection_support"
+        ],
+        "utility_notes": "Current pose-GRU compatible interface. Pixels are removed; keypoints remain reusable for other motion tasks.",
+        "downstream_expected_fields": [
+          "manifest",
+          "data_root",
+          "pose_sequence_or_pose_file"
+        ],
+        "payload_requirements": {
+          "sequence_len": "from checkpoint metadata, default 64",
+          "input_dim": "from checkpoint metadata, default 17*3",
+          "skeleton": "must match training/checkpoint format or be adapted before output"
+        },
+        "execution_mode": "fixed_downstream_input",
+        "disclosure_tier": "low_medium",
+        "boundary_role": "reusable_perceptual_primitive"
+      },
+      {
+        "cap_id": "le2i_activity_label_for_fall_adapter",
+        "semantic_type": "application/x-activity-label",
+        "schema": "activity_label",
+        "affordance": "event.activity_label",
+        "priority": 3,
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "activity_label"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "raw_media_removed"
+        ],
+        "utility_capability_equivalents": [
+          "fall_detection",
+          "activity_detection",
+          "safety_monitoring"
+        ],
+        "utility_notes": "Coarse activity labels can be mapped to fall/nonfall only when the model/evaluator treats labels as reusable activity primitives, not hidden raw video.",
+        "downstream_expected_fields": [
+          "timestamp",
+          "activity_label",
+          "confidence"
+        ],
+        "adapter": "activity_label_to_fall_score_adapter",
+        "execution_mode": "app_side_adapter",
+        "disclosure_tier": "low",
+        "boundary_role": "coarse_motion_primitive",
+        "validation": {
+          "metric": "fall_recall_or_macro_f1",
+          "minimum_recall": 0.88
+        }
+      },
+      {
+        "cap_id": "le2i_guarded_fall_safety_event",
+        "semantic_type": "application/x-safety-event",
+        "schema": "fall_or_safety_event",
+        "affordance": "event.fall_candidate",
+        "priority": 4,
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [],
+          "inferredInformationType": [
+            "fall_event"
+          ]
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "raw_media_removed",
+          "event_triggered_collection",
+          "final_task_decision",
+          "explicit_app_contract"
+        ],
+        "utility_capability_equivalents": [
+          "fall_detection",
+          "safety_monitoring"
+        ],
+        "utility_notes": "This is intentionally marked as a guarded edge-event because it approaches the final application decision. Use to evaluate the architectural boundary, not as the default preprocessing interface.",
+        "downstream_expected_fields": [
+          "timestamp",
+          "fall_candidate",
+          "confidence",
+          "window_id_optional"
+        ],
+        "adapter": "safety_event_to_downstream_alert_adapter",
+        "execution_mode": "guarded_edge_event",
+        "disclosure_tier": "very_low_payload_high_semantic",
+        "boundary_role": "final_task_decision_boundary",
+        "validation": {
+          "metric": "fall_recall_or_macro_f1",
+          "minimum_recall": 0.9
+        },
+        "validation_status": "requires_runtime_or_benchmark_validation"
+      }
+    ],
+    "explicitly_rejected_output_caps": [
+      {
+        "media_type": "audio/x-raw",
+        "reason": "The LE2I fall app family is visual/motion based, not audio based."
+      },
+      {
+        "semantic_type": "application/x-transcript",
+        "reason": "Speech content is unrelated to fall detection and should not be used."
+      },
+      {
+        "semantic_type": "application/x-command-intent",
+        "reason": "Command intent is not a fall-detection input."
+      }
+    ],
+    "downstream_program": {
+      "name": "fall_detection_flexible_app",
+      "input_kind": "redacted/silhouette video, pose keypoints, coarse activity labels, or guarded fall-candidate events",
+      "model_role": "The application detects falls. Preferred preprocessing boundary is pose or motion primitives; guarded safety events are explicitly labeled as near-final decisions.",
+      "compatible_preprocessed_outputs": [
+        "le2i_redacted_video_for_pose_extraction",
+        "le2i_pose_sequence_for_fall_model",
+        "le2i_activity_label_for_fall_adapter",
+        "le2i_guarded_fall_safety_event"
+      ],
+      "legacy_entrypoint": "infer_fall.py consumes pose caps directly; media/event caps require the listed adapter/evaluator."
+    },
+    "compatibility_notes": [
+      "Pose caps use the existing LE2I pose-GRU evaluator.",
+      "Redacted-video caps require pose extraction validation.",
+      "Safety-event caps are intentionally marked as final-decision-boundary outputs."
+    ],
+    "interface_policy": {
+      "contract_type": "multi_output_flexible",
+      "selection_goal": "Select the least-revealing output representation that satisfies CI constraints and has sufficient utility evidence for this application family.",
+      "hub_boundary_rule": "The hub may output reusable perceptual primitives, minimized media, or coarse events declared here. Outputs marked final_task_decision_boundary should be used only when the deployment intentionally treats the hub as a trusted edge inference component.",
+      "utility_evidence_required": true,
+      "acceptable_execution_modes": [
+        "fixed_downstream_input",
+        "app_side_adapter",
+        "hub_side_adapter",
+        "reusable_perceptual_primitive",
+        "guarded_edge_event"
+      ]
+    },
+    "capability_equivalences": {
+      "fall_detection": [
+        "activity_detection",
+        "activity_detection_support",
+        "fall_detection",
+        "fall_detection_support",
+        "motion_analysis",
+        "safety_monitoring"
+      ]
+    }
+  },
+  "compatibility_constraints": {
+    "output_pipeline_stage_must_be": "output_to_application",
+    "accepted_schema_match": "candidate output caps must match at least one accepted_output_caps entry by media_type or semantic_type plus schema when provided",
+    "required_capability_match": "candidate utility_capabilities must include requested_capability, a declared utility_capability_equivalent, or an adapter listed on the matched accepted cap",
+    "adapter_allowed": true,
+    "semantic_outputs_allowed": true,
+    "adapter_rules": [
+      "Adapters may repackage or map candidate outputs only when the matched accepted cap explicitly lists the adapter or execution_mode.",
+      "Semantic outputs are utility-compatible only when the application contract lists a schema-level adapter and validation metric for that representation.",
+      "Do not treat final application decisions as ordinary preprocessing unless the matched cap is marked final_task_decision_boundary or guarded_edge_event.",
+      "When multiple caps pass utility and CI checks, selection should prefer lower disclosure_tier and lower residual risk, not lower latency alone."
+    ]
+  },
+  "ci_output_constraints": {
+    "required_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "accepted_ci_term_sets": [
+      {
+        "cap_id": "le2i_redacted_video_for_pose_extraction",
+        "required_informationType": {
+          "sensorPrimitive": [
+            "video_stream"
+          ],
+          "interpretedObservation": [],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized"
+        ]
+      },
+      {
+        "cap_id": "le2i_pose_sequence_for_fall_model",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "pose_keypoints"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "data_minimized",
+          "raw_pixels_removed",
+          "purpose_limited"
+        ]
+      },
+      {
+        "cap_id": "le2i_activity_label_for_fall_adapter",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [
+            "activity_label"
+          ],
+          "inferredInformationType": []
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "raw_media_removed"
+        ]
+      },
+      {
+        "cap_id": "le2i_guarded_fall_safety_event",
+        "required_informationType": {
+          "sensorPrimitive": [],
+          "interpretedObservation": [],
+          "inferredInformationType": [
+            "fall_event"
+          ]
+        },
+        "required_transmissionPrinciple": [
+          "purpose_limited",
+          "data_minimized",
+          "raw_media_removed",
+          "event_triggered_collection"
+        ]
+      }
+    ],
+    "forbidden_ci_terms": {
+      "informationType.sensorPrimitive": [],
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": []
+    },
+    "required_transformations_if_media_output": [],
+    "preferred_ci_terms": {
+      "informationType.interpretedObservation": [],
+      "informationType.inferredInformationType": [],
+      "transmissionPrinciple": [
+        "purpose_limited",
+        "limited_retention",
+        "data_minimized",
+        "aggregate_only",
+        "raw_media_removed",
+        "speech_content_removed"
+      ]
+    }
+  },
+  "residual_disclosure_constraints": {
+    "risk_order": {
+      "none": 0,
+      "low": 1,
+      "medium": 2,
+      "high": 3,
+      "unknown": 4
+    },
+    "max_allowed": {
+      "identity": "unknown",
+      "face": "unknown",
+      "body_shape": "unknown",
+      "clothing": "unknown",
+      "gait": "unknown",
+      "speech_content": "unknown",
+      "speaker_identity": "unknown",
+      "activity": "unknown",
+      "location": "unknown",
+      "trajectory": "unknown",
+      "co_presence": "unknown",
+      "visible_text": "unknown",
+      "aggregate_presence": "unknown"
+    },
+    "hard_forbidden_attributes": [],
+    "allowed_high_attributes": [],
+    "comparison_rule": "This flexible app request does not globally forbid a representation by residual disclosure; context-specific CI rules and least-revealing selection decide. Per-cap disclosure_tier is used for ranking among utility-feasible outputs.",
+    "per_cap_residual_expectations": [
+      {
+        "cap_id": "le2i_redacted_video_for_pose_extraction",
+        "disclosure_tier": "medium",
+        "boundary_role": "fixed_downstream_input_with_hub_or_app_pose_extractor"
+      },
+      {
+        "cap_id": "le2i_pose_sequence_for_fall_model",
+        "disclosure_tier": "low_medium",
+        "boundary_role": "reusable_perceptual_primitive"
+      },
+      {
+        "cap_id": "le2i_activity_label_for_fall_adapter",
+        "disclosure_tier": "low",
+        "boundary_role": "coarse_motion_primitive"
+      },
+      {
+        "cap_id": "le2i_guarded_fall_safety_event",
+        "disclosure_tier": "very_low_payload_high_semantic",
+        "boundary_role": "final_task_decision_boundary"
+      }
+    ]
+  },
+  "no_compromise_conditions": [
+    "Return no_compromise if no candidate pipeline matches any accepted output cap and satisfies context-specific CI/residual-disclosure constraints.",
+    "Return insufficient_utility_evidence if an output cap/schema is accepted by this contract but no benchmark, calibration, adapter, or app-provided validation exists for that representation.",
+    "Prefer lower-disclosure semantic or aggregate outputs only when their declared utility evidence meets the task threshold; otherwise fall back to a higher-disclosure compatible representation or return no_compromise.",
+    "Do not silently convert a fixed-interface legacy model into a final hub-side decision; final-decision-like outputs must be explicitly accepted and marked by boundary_role."
+  ]
+}

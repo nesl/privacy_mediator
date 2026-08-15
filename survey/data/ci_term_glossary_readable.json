@@ -1,0 +1,516 @@
+{
+  "schema_version": "ci_user_study_readable_glossary_v12_output_audio_video_updated",
+  "description": "Readable labels and guidance for smart-space survey fields, revised for participant-friendly wording, explicit Prolific-style attention checks, two scenario comprehension checks, and Changed labels only when a row differs from the previous page. Child and school/classroom scenarios are excluded from this survey version. Output-data vocabulary now includes synchronized video-with-sound variants used by generated ADL pipelines.",
+  "fields": {
+    "context": [
+      {
+        "term": "home",
+        "label": "private home",
+        "definition": "A resident’s own home or apartment.",
+        "example": "private home — house, apartment, entryway, kitchen, bedroom, living room, or shared common area."
+      },
+      {
+        "term": "hospital_or_clinic",
+        "label": "hospital or clinic",
+        "definition": "A healthcare setting where medical care is provided.",
+        "example": "hospital or clinic — patient room."
+      },
+      {
+        "term": "long_term_care",
+        "label": "long-term care home",
+        "definition": "A residential care setting for older adults or people needing assistance.",
+        "example": "long-term care home — bedroom or living room."
+      },
+      {
+        "term": "public_space",
+        "label": "public area",
+        "definition": "A place generally open to the public.",
+        "example": "public area — park, sidewalk, plaza, transit stop, or outdoor entrance."
+      },
+      {
+        "term": "research_living_lab",
+        "label": "research smart-home lab",
+        "definition": "A living space used for research studies.",
+        "example": "research smart-home lab — a university smart apartment or living room used in a study."
+      },
+      {
+        "term": "short_term_rental",
+        "label": "short-term rental",
+        "definition": "A temporary rental property controlled by a host.",
+        "example": "short-term rental — Airbnb/Vrbo living room, bedroom, porch, driveway, or entrance area."
+      },
+      {
+        "term": "workplace",
+        "label": "workplace",
+        "definition": "A place where employees work.",
+        "example": "workplace — office, shop, company building, desk area, or shared workspace."
+      }
+    ],
+    "purpose": [
+      {
+        "term": "clinical_care",
+        "label": "clinical care support",
+        "definition": "Using the listed output to support clinical care, such as helping clinicians monitor patient safety, patient-room sounds or sound patterns, movement, room use, or daily activities relevant to care.",
+        "example": "Patient monitoring by clinicians in a hospital patient room."
+      },
+      {
+        "term": "communication",
+        "label": "audio-event or sound-cue support",
+        "definition": "Using the listed output to detect or respond to a relevant non-speech sound or audio cue, such as an alarm, loud sound, glass breaking, or footsteps, without sharing full speech content.",
+        "example": "Detecting that a relevant non-speech sound or sound cue occurred, without sharing the words someone said."
+      },
+      {
+        "term": "energy_management",
+        "label": "presence-based energy or lighting automation",
+        "definition": "Using presence or room-use information to adjust HVAC, lighting, or energy use, such as turning lights or HVAC on/off when people enter, leave, or occupy the area.",
+        "example": "Turning lights or HVAC on/off when people enter, leave, or occupy the area."
+      },
+      {
+        "term": "fall_detection",
+        "label": "fall detection",
+        "definition": "Detecting whether a person may have fallen and may need help, and sharing an alert or output for a fall-related response.",
+        "example": "Sending a possible-fall alert to a caregiver or clinician."
+      },
+      {
+        "term": "personalization",
+        "label": "personalization based on activity patterns",
+        "definition": "Adapting a service to a person’s routine or preferences, such as using room-use or daily-activity patterns for home automation.",
+        "example": "Learning room-use or daily-activity patterns for home automation."
+      },
+      {
+        "term": "research",
+        "label": "research study",
+        "definition": "Using the listed output for a research study, such as studying daily activities or sensor behavior with research participants under the study conditions described in the scenario.",
+        "example": "Studying activity in a smart-home lab with research participants."
+      },
+      {
+        "term": "routine_monitoring",
+        "label": "activity or environmental sound monitoring",
+        "definition": "Tracking daily activities or everyday sound patterns over time. For daily activity recognition, this may include cooking, sleeping, sitting, walking, resting, or moving around. For sound monitoring, this may include noise levels, alarms, footsteps, loud sounds, or other sound patterns.",
+        "example": "Daily activity recognition may track cooking, sleeping, sitting, walking, resting, or moving around; sound monitoring may track noise levels, alarms, footsteps, loud sounds, or other sound patterns."
+      },
+      {
+        "term": "safety_monitoring",
+        "label": "safety-event monitoring",
+        "definition": "Detecting safety-relevant events. In sound-monitoring scenarios, this means detecting concerning non-speech sounds or sound patterns, such as alarms, breaking glass, yelling, loud sounds, or other urgent cues.",
+        "example": "Detecting a possible fall, alarm, breaking glass, yelling, or other urgent safety event."
+      },
+      {
+        "term": "security_monitoring",
+        "label": "visitor/security monitoring",
+        "definition": "Detecting visitors, intrusions, or arrival events, such as someone approaching, entering, or being present near an entryway or protected area.",
+        "example": "Detecting someone arriving, entering, approaching, or being present in the area."
+      },
+      {
+        "term": "training",
+        "label": "training or supervision",
+        "definition": "Using the listed output for instruction, supervision, or oversight, such as school staff reviewing activity patterns or events for training or supervision.",
+        "example": "School staff reviewing school common-area behavior for a training or supervision purpose."
+      },
+      {
+        "term": "work_performance_monitoring",
+        "label": "employee activity or presence monitoring",
+        "definition": "Monitoring employee activity, presence, or work patterns, such as tracking whether employees are present, moving, or active in a main office floor.",
+        "example": "Tracking employee presence, movement, or activity in the main office floor."
+      }
+    ],
+    "recipient": [
+      {
+        "term": "authorized_personnel",
+        "label": "authorized staff",
+        "definition": "Staff who are officially allowed to access the listed output for this setting and purpose.",
+        "example": "Approved security staff, care staff, or designated workplace managers."
+      },
+      {
+        "term": "caregiver",
+        "label": "caregiver",
+        "definition": "A person responsible for helping or caring for the data subject in this setting.",
+        "example": "A family caregiver or care-home staff member receiving a fall or safety alert about a resident."
+      },
+      {
+        "term": "clinician",
+        "label": "clinician",
+        "definition": "A healthcare professional who receives the listed output for patient care in a hospital or clinic setting.",
+        "example": "A doctor, nurse, or care team member receiving patient-monitoring information."
+      },
+      {
+        "term": "downstream_application",
+        "label": "task-specific app",
+        "definition": "The app that receives the listed output in order to perform the scenario’s stated sensing task.",
+        "example": "A presence-detection app, fall-detection app, daily-activity recognition app, sound-monitoring app, or automation service."
+      },
+      {
+        "term": "homeowner",
+        "label": "home resident",
+        "definition": "The person who lives in the private home and receives the listed output for that home system.",
+        "example": "A resident receiving an entryway visitor alert or kitchen safety alert."
+      },
+      {
+        "term": "host",
+        "label": "rental host",
+        "definition": "The owner or manager of a short-term rental who receives the listed output about the rental property.",
+        "example": "An Airbnb/Vrbo host receiving information from a host-controlled device."
+      },
+      {
+        "term": "researcher",
+        "label": "researcher",
+        "definition": "A person conducting the study who receives the listed output for the research purpose described in the scenario.",
+        "example": "A university researcher analyzing data from a research living-lab participant."
+      }
+    ],
+    "sender": [
+      {
+        "term": "data_controller",
+        "label": "organization-operated system",
+        "definition": "A device, sensor system, or software system operated by the organization that controls the setting and decides how data there is collected and used.",
+        "example": "An employer-operated monitoring system in the workplace or an organization-run sensor in a public area."
+      },
+      {
+        "term": "hospital_monitoring_system",
+        "label": "hospital monitoring system",
+        "definition": "A device or sensor system operated by the hospital or clinic for a patient-care setting.",
+        "example": "A camera or sensor used by hospital staff in a hospital or clinic patient room."
+      },
+      {
+        "term": "host_controlled_device",
+        "label": "rental host’s device",
+        "definition": "A device in or around the short-term rental that is controlled by the rental host or property owner.",
+        "example": "A camera or sensor installed by an Airbnb/Vrbo host in the rental living room, bedroom, or outdoor area."
+      },
+      {
+        "term": "owner_controlled_device",
+        "label": "resident-owned device",
+        "definition": "A device controlled by the homeowner or resident, typically in or around their private home.",
+        "example": "A resident-owned smart doorbell, home camera, sensor, or home hub in the private home."
+      },
+      {
+        "term": "patient_or_family_device",
+        "label": "patient/family device",
+        "definition": "A device installed or managed by a patient, resident, or family member in a care-related setting.",
+        "example": "A fall detector installed by an older adult’s family in a long-term care bedroom or living room."
+      },
+      {
+        "term": "research_sensor_system",
+        "label": "research sensor system",
+        "definition": "A sensor system operated by researchers in the research living-lab setting.",
+        "example": "Sensors in a university smart-home lab used for a study with research participants."
+      }
+    ],
+    "space": [
+      {
+        "term": "bathroom",
+        "label": "bathroom",
+        "definition": "Bathroom or restroom area.",
+        "example": "Home bathroom restroom."
+      },
+      {
+        "term": "bedroom",
+        "label": "bedroom",
+        "definition": "Room used for sleeping or private activities.",
+        "example": "Adult bedroom."
+      },
+      {
+        "term": "common_area",
+        "label": "shared common area",
+        "definition": "Space used by multiple people.",
+        "example": "Hallway, lounge, or shared room."
+      },
+      {
+        "term": "entrance",
+        "label": "entryway",
+        "definition": "Doorway or entrance area.",
+        "example": "Front door or lobby entrance."
+      },
+      {
+        "term": "kitchen",
+        "label": "kitchen",
+        "definition": "Kitchen or food-preparation area.",
+        "example": "Home kitchen."
+      },
+      {
+        "term": "living_room",
+        "label": "living room",
+        "definition": "Shared indoor living area.",
+        "example": "Living room in a home or rental."
+      },
+      {
+        "term": "outdoor",
+        "label": "outdoor area",
+        "definition": "An exterior area outside the building.",
+        "example": "Porch, driveway, or outside entrance."
+      },
+      {
+        "term": "patient_room",
+        "label": "patient room",
+        "definition": "Private or semi-private room for clinical care.",
+        "example": "Hospital patient room."
+      },
+      {
+        "term": "workspace",
+        "label": "main office floor",
+        "definition": "Area where employees work, such as an office floor or shared workspace.",
+        "example": "Main office floor, office cubicle area, shared staff room, desk area, or shop floor."
+      }
+    ],
+    "subject": [
+      {
+        "term": "employee",
+        "label": "employee",
+        "definition": "A person working in the workplace whose activity, presence, or surroundings are represented by the data.",
+        "example": "An employee on the main office floor of a workplace."
+      },
+      {
+        "term": "guest",
+        "label": "guest",
+        "definition": "A temporary guest or short-term-rental guest whose presence, activity, or surroundings are represented by the data.",
+        "example": "A guest in a short-term rental living room, bedroom, or outdoor area."
+      },
+      {
+        "term": "patient",
+        "label": "patient",
+        "definition": "A person receiving medical care whose data is collected in a hospital or clinic setting.",
+        "example": "A patient in a hospital or clinic patient room."
+      },
+      {
+        "term": "research_participant",
+        "label": "research participant",
+        "definition": "A person enrolled in a research study whose data is collected in a research living-lab setting.",
+        "example": "A participant in a smart-home living-lab study."
+      },
+      {
+        "term": "resident",
+        "label": "resident",
+        "definition": "A person who lives in the private home or long-term care home and whose activity, presence, or surroundings are represented by the data.",
+        "example": "A resident in a private-home bathroom, kitchen, or living room, or in a long-term care bedroom."
+      },
+      {
+        "term": "roommate",
+        "label": "roommate",
+        "definition": "A co-resident sharing the private home whose activity, presence, or surroundings are represented by the data.",
+        "example": "A roommate in a shared apartment kitchen or living room."
+      },
+      {
+        "term": "visitor",
+        "label": "visitor",
+        "definition": "A person visiting or approaching the setting whose presence is represented by the data.",
+        "example": "Someone at a private-home entryway or in a public outdoor area."
+      }
+    ],
+    "transmission_principle": [
+      {
+        "term": "authorized_personnel_only",
+        "label": "only authorized staff can access the shared output",
+        "definition": "Access to the listed output is limited to the approved people for this setting and purpose.",
+        "example": "Only approved care staff, clinical staff, security staff, or designated managers can see the alert or output."
+      },
+      {
+        "term": "cloud_processing",
+        "label": "sensor data is sent to a cloud server for processing",
+        "definition": "The data is sent over the internet to a secure online server (cloud storage) for analysis, rather than staying on the device or a nearby device in the same home or building.",
+        "example": "Audio, video, or sensor data is sent to a secure online server before the listed output is produced or shared."
+      },
+      {
+        "term": "continuous_collection",
+        "label": "data collection continues without pause",
+        "definition": "The system keeps collecting sensor data in the setting on an ongoing basis, rather than waiting for a specific event before collecting or analyzing data.",
+        "example": "The sensor stays on throughout the day or night and keeps collecting data continuously."
+      },
+      {
+        "term": "disclosed",
+        "label": "people in the setting are told that data is being collected or shared",
+        "definition": "People nearby are told that the device is collecting data and/or that the listed output may be shared, such as through a sign, notice, or setup screen.",
+        "example": "A sign, notice, or setup screen explains that the sensor is active and what kind of output may be shared."
+      },
+      {
+        "term": "event_triggered_collection",
+        "label": "data is collected or shared only after a relevant event is detected",
+        "definition": "The monitoring device waits for a relevant event before collecting, analyzing, or sharing the listed output; examples depend on the scenario task, such as a visitor appearing, a possible fall, a daily-activity event, or a relevant sound event.",
+        "example": "The system sends an alert only when it detects a visitor/presence event, possible fall, daily-activity event, or relevant sound event."
+      },
+      {
+        "term": "explicit_consent",
+        "label": "the monitored person gives explicit consent for this collection and sharing",
+        "definition": "The person whose data is being collected has clearly agreed to this data collection and sharing for the stated purpose. For dependent adults, the relevant consent process may involve a legally authorized representative.",
+        "example": "A signed consent form or clear opt-in explains what data is collected, who receives it, and why."
+      },
+      {
+        "term": "hidden",
+        "label": "data collection and sharing are not disclosed to the monitored person",
+        "definition": "The person being monitored is not told that the device is collecting data or that the listed output may be shared.",
+        "example": "A hidden rental camera or sensor collects data without telling the guest."
+      },
+      {
+        "term": "listing_disclosure_required",
+        "label": "the rental listing discloses the device, coverage area, and data sharing",
+        "definition": "The short-term rental listing must describe the device, where it is located, what area it covers, and what kind of data or output may be shared.",
+        "example": "The listing says an outdoor camera covers the entrance and explains what information the host may receive."
+      },
+      {
+        "term": "local_processing",
+        "label": "processed on the device or nearby, not in a company cloud",
+        "definition": "Locally inside the home or building. The data is not sent over the internet for company analysis.",
+        "example": "The device handles the data in the home or building before any listed output is shared."
+      },
+      {
+        "term": "speech_content_removed",
+        "label": "spoken words are removed before any sound-monitoring output is shared",
+        "definition": "Speech-like parts of the audio are silenced before sharing, so words should not be understandable. Other sounds, sound labels, or sound levels may still remain.",
+        "example": "The shared output may identify an alarm, footsteps, a loud sound, or a sound level, but not the words someone said."
+      },
+      {
+        "term": "written_notice_required",
+        "label": "affected people receive written notice about collection and sharing",
+        "definition": "People affected by the monitoring receive written notice explaining that data is collected and that the listed output may be shared.",
+        "example": "A written workplace, workplace, care, or study notice explains the device, data collection, recipient, and purpose."
+      }
+    ],
+    "output_data": [
+      {
+        "term": "raw_image",
+        "label": "Camera images",
+        "definition": "Separate snapshots or low-frame-rate images from a camera. This is different from continuous video because it does not show continuous motion and does not include sound."
+      },
+      {
+        "term": "redacted_image",
+        "label": "Camera images with faces and identifying details blurred",
+        "definition": "Separate camera images where faces, tattoos, and readable personal text are blurred out. These are not continuous video and do not include sound."
+      },
+      {
+        "term": "raw_video",
+        "label": "Continuous camera video without sound",
+        "definition": "Moving video from a camera. This does not include audio unless the survey explicitly says video with sound."
+      },
+      {
+        "term": "redacted_video",
+        "label": "Continuous camera video without sound, with faces and identifying details blurred",
+        "definition": "Moving video from a camera where faces, tattoos, and readable personal text are blurred out. This does not include audio unless the survey explicitly says video with sound."
+      },
+      {
+        "term": "raw_audio_video",
+        "label": "Video with sound",
+        "definition": "Moving video with synchronized sound from the monitoring device. It may show people and the surrounding scene, and the sound may include speech or conversation if people are talking."
+      },
+      {
+        "term": "redacted_audio_video",
+        "label": "Video with sound, with faces and identifying details blurred",
+        "definition": "Moving video with synchronized sound where faces, tattoos, and readable personal text are blurred out. Clothing, posture, movement, room layout, and the audio may still remain."
+      },
+      {
+        "term": "speech_filtered_audio_video",
+        "label": "Video with sound, with spoken words removed",
+        "definition": "Moving video with synchronized sound where speech-like parts of the audio are silenced so words should not be understandable. The video itself is not blurred, and other sounds may still be heard."
+      },
+      {
+        "term": "redacted_filtered_audio_video",
+        "label": "Video with sound, with faces and identifying details blurred and spoken words removed",
+        "definition": "Moving video with synchronized sound where faces, tattoos, and readable personal text are blurred out, and speech-like parts of the audio are silenced so words should not be understandable. Clothing, posture, movement, room layout, and non-speech sounds may still remain."
+      },
+      {
+        "term": "pose_keypoints",
+        "label": "Stick-figure outline",
+        "definition": "A stick-figure outline showing body joint positions. It does not include the original photo or video."
+      },
+      {
+        "term": "filtered_audio",
+        "label": "Audio with spoken words removed",
+        "definition": "Audio recording from a microphone after speech is filtered out; background noises may remain."
+      },
+      {
+        "term": "raw_audio",
+        "label": "Audio recording from a microphone",
+        "definition": "Audio captured by a microphone or audio sensor in the space."
+      },
+      {
+        "term": "sound_label",
+        "label": "Sound-event label",
+        "definition": "A label describing the type of sound, such as alarm, glass breaking, footsteps, or another sound category; not the original audio."
+      },
+      {
+        "term": "occupancy",
+        "label": "Presence or people count",
+        "definition": "A yes/no presence estimate or count of people in the space, not the original sensor stream."
+      },
+      {
+        "term": "event_alert",
+        "label": "Task-specific event alert or label",
+        "definition": "A short alert or label saying that a scenario-relevant event occurred, such as a visitor/presence event, possible fall, daily activity, or relevant sound event."
+      },
+      {
+        "term": "no_output",
+        "label": "No data would be shared",
+        "definition": "The system would not send data or output to the stated recipient for this request."
+      }
+    ]
+  },
+  "field_label_overrides": {
+    "context": "What is the broad setting?",
+    "space": "What specific place is involved?",
+    "sender": "Who controls the monitoring device?",
+    "subject": "What is your role in this scenario?",
+    "recipient": "Who receives or uses the shared data?",
+    "purpose": "What is the scenario?",
+    "transmission_principle": "What rule or condition applies to the data?",
+    "output_data": "What data would be shared?",
+    "scenario_group": "What is the scenario?",
+    "scenario": "What is the scenario?"
+  },
+  "revision_notes": [
+    "Preserves normalized term keys for computational matching.",
+    "Removes dataset/product-specific sound-monitoring names from participant-facing text.",
+    "Frames sound scenarios as high-level environmental/everyday non-speech sound monitoring, including alarms, footsteps, glass breaking, loud sounds, noise levels, and other sound patterns.",
+    "Keeps scenario-detail examples removed because the examples were confusing in the web UI.",
+    "Keeps scenario overview wording that defines the system as a monitoring device.",
+    "Use full-sentence participant-facing values for fields instead of raw labels or lowercase fragments.",
+    "Distinguish camera images from continuous camera video without sound and video with sound.",
+    "Define visual redaction as blurring faces and visible personal identifiers; do not imply all contextual clues are removed.",
+    "Define speech removal as removing spoken words/conversation while noting that non-word human vocal sounds may remain unless only a label or level is shared.",
+    "For child scenarios, ask respondents to answer from the perspective of a parent, guardian, or responsible adult rather than asking them to choose between child and guardian perspectives.",
+    "Updated participant-facing web rows to use full question sentences rather than short labels such as “Your role” or “The scenario.”",
+    "Separated device, data receiver, and condition into their own question-style rows while preserving compact scenario wording.",
+    "Changed assignment ordering to favor adjacent variants from the same scenario so parameters change while the overall scenario usually stays stable.",
+    "Survey pages now distinguish the general scenario group from the specific version being rated. Participants are told to rate each version as a complete standalone situation, not as a comparison with the previous page.",
+    "Fixed visual emphasis so it is not always on the data row: rows are highlighted only when that row varies across versions in the assigned scenario block.",
+    "Avoid framing highlighted rows as a change from the previous page; describe them as details that may vary across versions.",
+    "Use plainer wording such as video with sound, audio recording, monitoring device, and camera images.",
+    "Use concept-specific condition labels for notice/permission, collection timing, processing location, access control, and audio filtering.",
+    "Do not repeat speech filtering in a separate condition row when the data-shared row already says speech is filtered out.",
+    "Clarify that the named receiver gets only the listed shared output unless another party is explicitly stated.",
+    "Added synchronized video-with-sound output terms for ADL pipelines: raw audio-video, visual-redacted audio-video, speech-filtered audio-video, and visual-redacted plus speech-filtered audio-video.",
+    "Do not describe visual redaction as removing all visual information: faces, tattoos, and readable personal text are blurred, while clothing, posture, movement, and room layout may remain.",
+    "Do not describe speech filtering as removing all audio: speech-like parts are silenced so words should not be understandable, while non-speech sounds may remain."
+  ],
+  "display_guidance": {
+    "situation_format": "Use plain text unless the frontend explicitly supports HTML. Recommended plain value: “private home — bathroom”. Also expose structured parts when possible: general_setting=private home, specific_place=bathroom. If the frontend supports HTML safely, render “<strong>private home</strong> — bathroom” from those parts instead of storing Markdown in the value.",
+    "scenario_overview_format": "Use natural setting introductions instead of noun fragments. For research smart-home labs, say that researchers are conducting a smart-home sensing study and then locate the participant in the relevant room.",
+    "actor_linking": "When showing sender, subject, or recipient, connect the actor to the setting where helpful, e.g., “resident-owned device in the private home” or “guest in the short-term rental.” Do not rely on Markdown for emphasis.",
+    "purpose_format": "Purpose values should describe the concrete task and include examples in the main value text. For example, use “daily activity monitoring, such as detecting cooking, sleeping, movement, or room-use patterns over time” rather than the generic value “daily activity or sound monitoring.”",
+    "downstream_application_format": "For downstream_application, replace generic “the app or software service” with a task-specific service. For sound-monitoring scenarios, use sound-monitoring app/software service rather than speech-command service.",
+    "local_processing_privacy_meaning": "Local processing means the data is processed entirely on the device or a nearby device in the same home or building, rather than being sent over the internet to a secure online server (cloud storage) for analysis. The named receiver may still receive the listed output.",
+    "scenario_detail_examples": "Do not show separate “Example:” helper text for Scenario overview, Sender, Person the data is about, Recipient, Purpose, or Transmission principle rows in the webpage. Put needed clarification in the main value or description instead.",
+    "system_wording": "Use monitoring device consistently in participant-facing text. Avoid switching between sensing system, system, and device in the same question.",
+    "output_data_format": "Render shared-output values as full sentences. Use camera images for image-frame outputs, continuous camera video without sound for camera-only video, audio recording from a microphone for raw audio, audio recording with spoken words removed for speech-filtered audio, and video with sound for synchronized audio-video outputs. For audio-video outputs, separately state whether faces/identifying visual details are blurred and whether spoken words are removed.",
+    "attention_checks": "Use at most two direct attention checks in a 25-question assignment. The check should explicitly tell the participant which Likert answer to select for that question.",
+    "visual_emphasis": "Lightly highlight only the parameter rows that vary across versions in the same assigned scenario block. Do not label the cue as a change from the previous page.",
+    "output_modality_distinctions": "Use camera images for image-frame outputs, continuous camera video without sound for camera-only video outputs, audio recording from a microphone for audio-only outputs, and video with sound when both synchronized video and audio are shared. Do not call audio-video output simply video, because participants may otherwise assume no sound is included.",
+    "child_perspective": "For child data subjects, ask adults to answer from the perspective of a parent, guardian, or responsible adult.",
+    "scenario_rows": "Use full question-sentence row labels in the web interface: “What is the scenario?”, “What is your role in this scenario?”, “What data would be shared?”, “Who controls the monitoring device?”, “Who receives or uses the shared data?”, and “What rule or condition applies to the data?”.",
+    "assignment_ordering": "Order assigned items in scenario blocks where the broad scenario stays mostly the same and the output/recipient/condition parameters change. This helps participants compare nearby cases without feeling that every screen is a completely new vignette.",
+    "changed_indicator": "Use an explicit Changed pill only on rows whose participant-visible value differs from the immediately previous survey page.",
+    "recipient_wording": "Avoid the word recipient in row headers for ordinary participants; use “Who receives or uses the shared data?” instead.",
+    "device_recipient_condition_rows": "Keep device ownership, who receives/uses the data, and the collection/processing/sharing condition as separate rows, each with a complete question-style header.",
+    "condition_labels": "Use concept-specific labels: notice/permission, collection timing, processing location, access control, or audio filtering. Avoid a single catch-all condition label when possible.",
+    "raw_data_assumption": "Tell participants to rate the listed shared output and assume only the named receiver gets that listed output unless the page explicitly says otherwise.",
+    "comprehension_checks": "Use at most two short scenario comprehension checks in a 25-question assignment. Save the selected answer and pass/fail result separately from attention-check pass/fail.",
+    "technical_process_wording": "Avoid participant-facing phrases such as preprocessing pipeline. Describe only the listed data that is shared, and tell participants to assume only the named receiver gets the listed data unless another party is explicitly stated.",
+    "device_modality_alignment": "If the shared data is camera-only images, pose, or continuous video without sound, describe the device as a camera only. Mention a microphone only when audio or video with sound is shared. For synchronized audio-video outputs, describe the device as a camera and microphone or monitoring device that captures video with sound.",
+    "app_recipient_disclaimer": "Use direct page-specific wording such as 'the app creator does not receive or store this data' rather than conditional legal-style clauses.",
+    "video_only_description": "For camera-only video outputs, use 'This is video only; audio is not included.'",
+    "audio_video_description": "For video-with-sound outputs, use one of four patterns: raw video with sound; video with sound where faces and identifying details are blurred; video with sound where spoken words are removed; or video with sound where both visual identifying details are blurred and spoken words are removed. Mention that non-speech sounds may remain after speech filtering."
+  },
+  "task_overviews": {
+    "visitor_presence_detection": "Presence detection means a monitoring device detects when people enter, leave, approach, or are present in the area.",
+    "fall_detection": "Fall detection means a monitoring device looks for signs that a person may have fallen and may need help.",
+    "adl_recognition": "Daily activity recognition means a monitoring device detects activity patterns such as cooking, sleeping, movement, sitting, lying down, or room use.",
+    "domestic_sound_monitoring": "sound monitoring means detecting or classifying home audio events such as alarms, glass breaking, footsteps, loud/noise levels, or other non-speech sound patterns."
+  }
+}

@@ -788,6 +788,22 @@ def parse_csv_list(value: Optional[str], default: Optional[Sequence[str]] = None
     return [x.strip() for x in text.split(",") if x.strip()]
 
 
+def _arg_was_explicit(argv: Optional[Sequence[str]], *names: str) -> bool:
+    """Return True if one of the option names appears in argv.
+
+    This lets convenience flags change defaults without overriding explicit user
+    choices such as --out-dir or --request-mode.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    for token in argv:
+        s = str(token)
+        for name in names:
+            if s == name or s.startswith(name + "="):
+                return True
+    return False
+
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -4002,6 +4018,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--scenario-ids", default="", help="Comma list such as S001,S002.")
     p.add_argument("--methods", default="", help="Comma list of method ids/baselines, e.g. raw,manual,full_mediator,ablation:utility_only. If provided, this exact method filter overrides the default ablation policy.")
     p.add_argument(
+        "--direct-llm-fall-only",
+        action="store_true",
+        help=(
+            "Convenience filter for the flexible Direct-LLM fall runs. Equivalent to "
+            "--request-mode flexible --tasks fall_detection --methods direct_llm --ablation-policy none, "
+            "without changing --scenario-ids or --max-samples."
+        ),
+    )
+    p.add_argument(
+        "--direct-llm-fall-smoke-scenario",
+        default=None,
+        metavar="SCENARIO_ID",
+        help=(
+            "Run one flexible Direct-LLM fall scenario as a smoke test, force recomputation, "
+            "disable utility caches/reuse, default --max-samples to 1 if unset, and print the metric result. "
+            "Example: --direct-llm-fall-smoke-scenario S007."
+        ),
+    )
+    p.add_argument(
+        "--print-metric-result",
+        action="store_true",
+        help="After evaluation, print a compact JSON metric snapshot for each evaluated row.",
+    )
+    p.add_argument(
         "--ablation-policy",
         choices=["meaningful", "all", "none"],
         default="meaningful",
@@ -5197,8 +5237,96 @@ def rebuild_existing_utility_summaries(args: argparse.Namespace) -> int:
     print(json.dumps(report, indent=2), flush=True)
     return 0
 
+def apply_direct_llm_smoke_flags(args: argparse.Namespace, argv: Optional[Sequence[str]] = None) -> None:
+    """Expand convenience flags for quick Direct-LLM fall utility checks."""
+    smoke_sid = str(getattr(args, "direct_llm_fall_smoke_scenario", "") or "").strip()
+    if not (getattr(args, "direct_llm_fall_only", False) or smoke_sid):
+        return
+
+    # These convenience modes are intended for the flexible-output Direct-LLM
+    # experiments. Do not override explicit request-mode/pipeline-root/out-dir
+    # choices, but make the common invocation safe with no extra flags.
+    if not _arg_was_explicit(argv, "--request-mode"):
+        args.request_mode = "flexible"
+    if not _arg_was_explicit(argv, "--tasks"):
+        args.tasks = "fall_detection"
+    if not _arg_was_explicit(argv, "--methods"):
+        args.methods = "direct_llm"
+    if not _arg_was_explicit(argv, "--ablation-policy"):
+        args.ablation_policy = "none"
+
+    if smoke_sid:
+        if not _arg_was_explicit(argv, "--scenario-ids"):
+            args.scenario_ids = smoke_sid
+        if not _arg_was_explicit(argv, "--max-samples") and args.max_samples is None:
+            args.max_samples = 1
+        if not _arg_was_explicit(argv, "--out-dir") and args.out_dir is None:
+            args.out_dir = "runs/utility_eval_flexible_smoke"
+        args.rerun_existing = True
+        args.no_cross_run_reuse = True
+        args.no_task_pipeline_cache = True
+        args.print_metric_result = True
+        args.yes = True
+
+
+def metric_snapshot_for_result(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a compact, publication/debug-friendly metric view for one row."""
+    metric_items = {
+        k: v for k, v in res.items()
+        if k.startswith("metric_") and isinstance(v, (int, float, str, bool))
+    }
+    preferred_order = [
+        "metric_video_level_macro_f1",
+        "metric_macro_f1",
+        "metric_f1",
+        "metric_sample_f1",
+        "metric_micro_f1",
+        "metric_accuracy",
+        "metric_video_level_accuracy",
+    ]
+    primary_key = next((k for k in preferred_order if k in metric_items), None)
+    primary_value = metric_items.get(primary_key) if primary_key else None
+    downstream = res.get("downstream") if isinstance(res.get("downstream"), dict) else {}
+    prep = res.get("preprocessing") if isinstance(res.get("preprocessing"), dict) else {}
+    keep_keys = [
+        "metric_status", "metric_level", "metric_n",
+        "metric_precision", "metric_recall", "metric_f1", "metric_f2", "metric_accuracy",
+        "metric_macro_f1", "metric_micro_f1", "metric_sample_f1",
+        "metric_video_level_accuracy", "metric_video_level_macro_f1",
+        "metric_video_level_f1", "metric_video_level_precision", "metric_video_level_recall",
+        "metric_tp", "metric_fp", "metric_fn", "metric_tn", "metric_error",
+    ]
+    compact_metrics = {k: metric_items[k] for k in keep_keys if k in metric_items}
+    # Include any other short scalar metric if it was not in the curated set.
+    for k, v in sorted(metric_items.items()):
+        if k not in compact_metrics and len(compact_metrics) < 40:
+            compact_metrics[k] = v
+    return {
+        "scenario_id": res.get("scenario_id"),
+        "task": res.get("task"),
+        "method_id": res.get("method_id"),
+        "status": res.get("status"),
+        "downstream_status": downstream.get("status"),
+        "preprocessing_status": prep.get("preprocessing_status") or prep.get("status"),
+        "final_output_type": res.get("final_output_type"),
+        "final_output_schema": res.get("final_output_schema"),
+        "primary_metric": {"key": primary_key, "value": primary_value},
+        "metrics": compact_metrics,
+        "utility_work_dir": res.get("utility_work_dir"),
+        "downstream_output_csv": downstream.get("output_csv"),
+        "downstream_metrics_json": downstream.get("metrics_json"),
+    }
+
+
+def print_metric_snapshots(results: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    snapshots = [metric_snapshot_for_result(r) for r in results]
+    print(json.dumps({"metric_results": snapshots}, indent=2), flush=True)
+    return snapshots
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    apply_direct_llm_smoke_flags(args, argv)
     set_progress_enabled(not args.no_progress)
     args.project_root = str(Path(args.project_root).resolve())
     set_runtime_config(args.project_root, args.runtime_package)
@@ -5441,6 +5569,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     metric_rows = [{c: row.get(c) for c in metric_cols} for row in flat_rows]
     write_csv_rows(metric_rows, out_dir / "utility_metrics_summary.csv", fieldnames=metric_cols)
 
+    printed_metric_snapshots: Optional[List[Dict[str, Any]]] = None
+    if getattr(args, "print_metric_result", False):
+        printed_metric_snapshots = print_metric_snapshots(results)
+
     print(json.dumps({
         "discovered_rows": len(rows),
         "evaluated_rows": len(results),
@@ -5452,6 +5584,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "summary_csv": str(out_dir / "utility_summary.csv"),
         "metrics_summary_csv": str(out_dir / "utility_metrics_summary.csv"),
         "results_json": str(out_dir / "utility_results.json"),
+        "printed_metric_results": printed_metric_snapshots,
     }, indent=2))
     return 0
 
